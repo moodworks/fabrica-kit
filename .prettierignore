@@ -1,0 +1,45 @@
+# Installed dependencies and generated build/test output
+node_modules/
+**/node_modules/
+.next/
+**/.next/
+dist/
+**/dist/
+build/
+**/build/
+coverage/
+**/coverage/
+.vitest/
+test-results/
+playwright-report/
+blob-report/
+*.tsbuildinfo
+**/generated/
+packages/db/drizzle/
+
+# Package-manager generated state
+pnpm-lock.yaml
+
+# Local databases, private object storage, and temporary files
+.local-data/
+.pgdata/
+postgres-data/
+storage/
+uploads/
+artifacts/
+tmp/
+temp/
+
+# Environment, agent, and editor state
+.env
+.env.*
+.idea/
+.junie/
+.codex/
+.DS_Store
+
+# Accepted Phase 0 source documents; changes require explicit architecture review
+docs/ai-saas-project-bootstrap.md
+docs/decisions/0001-banner-ai-validation-architecture.md
+docs/product/banner-scene-v1.md
+docs/implementation-plans/0001-provider-free-foundation.md

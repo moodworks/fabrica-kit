@@ -1,0 +1,191 @@
+{
+  "schemaVersion": 1,
+  "canvas": {
+    "width": 300,
+    "height": 250,
+    "background": {
+      "kind": "image",
+      "asset": {
+        "assetId": "asset_background_01",
+        "assetVersionId": "av_background_0001",
+        "sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+        "mediaType": "image/png",
+        "byteSize": 91240,
+        "pixelWidth": 300,
+        "pixelHeight": 250
+      },
+      "fit": "cover",
+      "positionX": 0.5,
+      "positionY": 0.5,
+      "opacity": 1
+    }
+  },
+  "sourceAsset": {
+    "assetId": "asset_source_01",
+    "assetVersionId": "av_source_0001",
+    "sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+    "mediaType": "image/png",
+    "byteSize": 148200,
+    "pixelWidth": 300,
+    "pixelHeight": 250
+  },
+  "layers": [
+    {
+      "id": "layer_body_01",
+      "name": "Angel body",
+      "order": 0,
+      "included": true,
+      "visible": true,
+      "opacity": 1,
+      "asset": {
+        "assetId": "asset_body_01",
+        "assetVersionId": "av_body_0001",
+        "sha256": "3333333333333333333333333333333333333333333333333333333333333333",
+        "mediaType": "image/png",
+        "byteSize": 73520,
+        "pixelWidth": 100,
+        "pixelHeight": 190
+      },
+      "frame": {
+        "x": 100,
+        "y": 45,
+        "width": 100,
+        "height": 190
+      },
+      "transform": {
+        "anchorX": 0.5,
+        "anchorY": 0.5,
+        "translateX": 0,
+        "translateY": 0,
+        "scaleX": 1,
+        "scaleY": 1,
+        "rotationDegrees": 0
+      }
+    },
+    {
+      "id": "layer_left_wing_01",
+      "name": "Left wing",
+      "order": 1,
+      "included": true,
+      "visible": true,
+      "opacity": 0.96,
+      "asset": {
+        "assetId": "asset_left_wing_01",
+        "assetVersionId": "av_left_wing_0001",
+        "sha256": "4444444444444444444444444444444444444444444444444444444444444444",
+        "mediaType": "image/png",
+        "byteSize": 52480,
+        "pixelWidth": 100,
+        "pixelHeight": 130
+      },
+      "frame": {
+        "x": 30,
+        "y": 50,
+        "width": 100,
+        "height": 130
+      },
+      "transform": {
+        "anchorX": 0.9,
+        "anchorY": 0.45,
+        "translateX": 0,
+        "translateY": 0,
+        "scaleX": 1,
+        "scaleY": 1,
+        "rotationDegrees": 0
+      }
+    },
+    {
+      "id": "layer_right_wing_01",
+      "name": "Right wing",
+      "order": 2,
+      "included": true,
+      "visible": true,
+      "opacity": 0.96,
+      "asset": {
+        "assetId": "asset_right_wing_01",
+        "assetVersionId": "av_right_wing_0001",
+        "sha256": "5555555555555555555555555555555555555555555555555555555555555555",
+        "mediaType": "image/png",
+        "byteSize": 51960,
+        "pixelWidth": 100,
+        "pixelHeight": 130
+      },
+      "frame": {
+        "x": 170,
+        "y": 50,
+        "width": 100,
+        "height": 130
+      },
+      "transform": {
+        "anchorX": 0.1,
+        "anchorY": 0.45,
+        "translateX": 0,
+        "translateY": 0,
+        "scaleX": 1,
+        "scaleY": 1,
+        "rotationDegrees": 0
+      }
+    }
+  ],
+  "timeline": [
+    {
+      "id": "track_body_float_01",
+      "targetLayerId": "layer_body_01",
+      "preset": {
+        "kind": "float",
+        "presetVersion": 1,
+        "axis": "y",
+        "distancePx": -6
+      },
+      "timing": {
+        "startMs": 0,
+        "durationMs": 5000,
+        "iterations": 3,
+        "iterationMode": "alternate",
+        "easing": "ease-in-out"
+      }
+    },
+    {
+      "id": "track_left_flutter_01",
+      "targetLayerId": "layer_left_wing_01",
+      "preset": {
+        "kind": "flutter",
+        "presetVersion": 1,
+        "fromDegrees": -4,
+        "toDegrees": 7
+      },
+      "timing": {
+        "startMs": 0,
+        "durationMs": 6000,
+        "iterations": 3,
+        "iterationMode": "alternate",
+        "easing": "ease-in-out"
+      }
+    },
+    {
+      "id": "track_right_flutter_01",
+      "targetLayerId": "layer_right_wing_01",
+      "preset": {
+        "kind": "flutter",
+        "presetVersion": 1,
+        "fromDegrees": 4,
+        "toDegrees": -7
+      },
+      "timing": {
+        "startMs": 0,
+        "durationMs": 6000,
+        "iterations": 3,
+        "iterationMode": "alternate",
+        "easing": "ease-in-out"
+      }
+    }
+  ],
+  "exportSettings": {
+    "kind": "regular-html",
+    "profileVersion": 1,
+    "interaction": {
+      "kind": "single-exit",
+      "destinationUrl": "https://example.com/campaign"
+    }
+  }
+}

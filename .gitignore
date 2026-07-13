@@ -1,0 +1,56 @@
+# Dependencies and package-manager state
+node_modules/
+**/node_modules/
+.pnpm-store/
+
+# Framework and compiler output
+.next/
+**/.next/
+dist/
+**/dist/
+build/
+**/build/
+*.tsbuildinfo
+
+# Test output
+coverage/
+**/coverage/
+.vitest/
+test-results/
+playwright-report/
+blob-report/
+
+# Local databases and private object storage
+/.local-data/
+/.pgdata/
+/postgres-data/
+/storage/
+/uploads/
+/artifacts/
+*.sqlite
+*.sqlite3
+*.db
+
+# Local environment and secrets
+.env
+.env.*
+!.env.example
+!.env.*.example
+/secrets/
+/credentials/
+*.pem
+*.key
+*.p12
+*.pfx
+
+# Temporary and diagnostic output
+tmp/
+temp/
+*.log
+npm-debug.log*
+pnpm-debug.log*
+
+# Local operating-system/editor residue
+.DS_Store
+.idea/
+.junie/

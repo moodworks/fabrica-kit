@@ -1,0 +1,10 @@
+packages:
+  - apps/*
+  - packages/*
+overrides:
+  '@esbuild-kit/core-utils@3.3.2>esbuild': '0.25.12'
+  'next@16.2.10>postcss': '8.5.10'
+allowBuilds:
+  esbuild: false
+  sharp: false
+  unrs-resolver: false
