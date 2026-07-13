@@ -8,6 +8,7 @@ import {
   GenerationJobLifecycleSchema,
   INITIAL_BANNER_ANALYZE_WORKFLOW_V1,
   ProviderFreeBannerAnalyzeService,
+  ProviderFreeAnalyzeCommitRaceError,
   canonicalizeJson,
   createStructuredJobError,
   createProviderFreeCompositionAnalysisFixturePort,
@@ -20,11 +21,19 @@ import {
   sha256Hex,
   transitionAttemptState,
   transitionJobState,
+  validateAtomicUsageReservationResult,
+  validateAttemptFailureCommitResult,
+  validateCancellationRequestResult,
+  validateProviderUsageFinalizationResult,
   verifyCheckpointReuse,
+  type AtomicUsageReservationResult,
   type AtomicSuccessCommitRequest,
   type AtomicUsageReservationCommand,
+  type AttemptFailureCommitResult,
   type AttemptFailureCommitRequest,
   type AuthoritativeWorkflowExecution,
+  type CancellationRequest,
+  type CancellationRequestResult,
   type CheckpointCommitRequest,
   type CheckpointMaterial,
   type ExistingUsageIdentity,
@@ -32,6 +41,7 @@ import {
   type LeaseAttemptCommand,
   type PersistedCheckpointIdentity,
   type ProviderUsageFinalizationCommand,
+  type ProviderUsageFinalizationResult,
 } from '../src/index.js';
 
 const workspaceId = '10000000-0000-4000-8000-000000000001';
@@ -44,7 +54,40 @@ const leaseToken = '70000000-0000-4000-8000-000000000001';
 const usageId = '80000000-0000-4000-8000-000000000001';
 const outputId = '90000000-0000-4000-8000-000000000001';
 const requestId = 'request.executor:0001';
+const cancellationActorId = '30000000-0000-4000-8000-000000000002';
+const cancellationRequestId = 'request.cancel:0002';
 const sourceSha256 = '1'.repeat(64);
+
+const mutatePersistenceResult = (
+  input: unknown,
+  mutations: readonly {
+    readonly path: readonly string[];
+    readonly value: unknown;
+  }[],
+): unknown => {
+  const result: unknown = structuredClone(input);
+  for (const mutation of mutations) {
+    let current = result;
+    const parentPath = mutation.path.slice(0, -1);
+    for (const segment of parentPath) {
+      if (typeof current !== 'object' || current === null || Array.isArray(current)) {
+        throw new TypeError('Persistence-result mutation path must resolve through objects.');
+      }
+      current = (current as Record<string, unknown>)[segment];
+    }
+    const field = mutation.path.at(-1);
+    if (
+      field === undefined ||
+      typeof current !== 'object' ||
+      current === null ||
+      Array.isArray(current)
+    ) {
+      throw new TypeError('Persistence-result mutation must target an object field.');
+    }
+    (current as Record<string, unknown>)[field] = mutation.value;
+  }
+  return result;
+};
 
 const command = {
   commandVersion: 1,
@@ -905,6 +948,475 @@ const buildHarness = (input?: {
   };
 };
 
+type AnalyzeTerminalHarnessMode =
+  | 'held-cancellation'
+  | 'operation-timeout'
+  | 'success-cancellation-race'
+  | 'checkpoint-cancellation';
+
+const buildAnalyzeTerminalHarness = (mode: AnalyzeTerminalHarnessMode) => {
+  const initialNowMs = mode === 'operation-timeout' ? 590_000 : 1_000;
+  const attemptNumber = mode === 'operation-timeout' ? 3 : 1;
+  const jobStartedAtMs = 1_000;
+  let nowMs = initialNowMs;
+  let job = GenerationJobLifecycleSchema.parse({
+    jobId,
+    workspaceId,
+    projectId,
+    initiatedByActorId: actorId,
+    requestId,
+    operation: 'banner.analyze',
+    workflowVersionId: INITIAL_BANNER_ANALYZE_WORKFLOW_V1.workflowVersionId,
+    requestSha256,
+    state: 'running',
+    progressBps: 1,
+    attemptCount: attemptNumber,
+    maxAttempts: 3,
+    providerCallCount: 0,
+    maxProviderCalls: 64,
+    attemptTimeoutMs: 120_000,
+    jobTimeoutMs: 600_000,
+    nextAttemptAtMs: null,
+    cancelRequestedAtMs: null,
+    startedAtMs: jobStartedAtMs,
+    deadlineAtMs: 601_000,
+    finishedAtMs: null,
+    terminalError: null,
+  });
+  let attempt = GenerationAttemptLifecycleSchema.parse({
+    attemptId,
+    workspaceId,
+    jobId,
+    attemptNumber,
+    state: 'running',
+    workerId: 'worker.executor:1',
+    leaseToken,
+    leaseExpiresAtMs: initialNowMs + 30_000,
+    heartbeatAtMs: initialNowMs,
+    startedAtMs: initialNowMs,
+    finishedAtMs: null,
+    error: null,
+  });
+  const originalJob = structuredClone(job);
+  const originalAttempt = structuredClone(attempt);
+  const events: string[] = [];
+  const progressValues: number[] = [];
+  const usageRows: ExistingUsageIdentity[] = [];
+  const cancellationRequests: CancellationRequest[] = [];
+  const cancellationResults: CancellationRequestResult[] = [];
+  const reservationRequests: AtomicUsageReservationCommand[] = [];
+  const reservationResults: AtomicUsageReservationResult[] = [];
+  const usageFinalizationRequests: ProviderUsageFinalizationCommand[] = [];
+  const usageFinalizationResults: ProviderUsageFinalizationResult[] = [];
+  const failureRequests: AttemptFailureCommitRequest[] = [];
+  const failureResults: AttemptFailureCommitResult[] = [];
+  let usageRow: ExistingUsageIdentity | null = null;
+  let committedCheckpoint: PersistedCheckpointIdentity | null = null;
+  let checkpointMaterial: CheckpointMaterial | null = null;
+  let committedFinalOutputs: readonly FinalOutputCommitIdentity[] = [];
+  let checkpointWrites = 0;
+  let dispatchesObserved = 0;
+  let locallyCancelled = false;
+
+  const analysisRequest = {
+    sourceAsset: source,
+    maxParts: 1,
+    includeBackground: false,
+  };
+  const fixture = createProviderFreeCompositionAnalysisFixturePort({
+    initialNowMs,
+    currency: 'USD',
+    fixtures: [
+      {
+        request: analysisRequest,
+        outcomes: [
+          {
+            kind: 'held-success',
+            gateKey: 'terminal-analysis-dispatch',
+            result: proposal,
+          },
+        ],
+      },
+    ],
+  });
+
+  const execution = (): AuthoritativeWorkflowExecution =>
+    AuthoritativeWorkflowExecutionSchema.parse({
+      workspaceId,
+      projectId,
+      initiatedByActorId: actorId,
+      requestId,
+      request,
+      requestSha256,
+      workflow: INITIAL_BANNER_ANALYZE_WORKFLOW_V1,
+      job,
+      attempt,
+      attemptDeadlineAtMs: attempt.startedAtMs + 120_000,
+    });
+
+  const requestCancellation = vi.fn(async (cancellation: CancellationRequest) => {
+    cancellationRequests.push(structuredClone(cancellation));
+    const firstCancellationAtMs = job.cancelRequestedAtMs ?? cancellation.requestedAtMs;
+    job = GenerationJobLifecycleSchema.parse({
+      ...job,
+      cancelRequestedAtMs: firstCancellationAtMs,
+    });
+    events.push('cancellation-persist');
+    const result: CancellationRequestResult = {
+      kind: 'cancellation-requested',
+      acknowledgedRequest: structuredClone(cancellation),
+      job,
+    };
+    cancellationResults.push(structuredClone(result));
+    return result;
+  });
+
+  const reserveUnderJobLock = vi.fn(async (reservation: AtomicUsageReservationCommand) => {
+    if (usageRow !== null) throw new Error('Terminal trace permits one usage reservation only.');
+    reservationRequests.push(structuredClone(reservation));
+    usageRow = ExistingUsageIdentitySchema.parse({
+      usageId,
+      workspaceId: reservation.workspaceId,
+      jobId: reservation.jobId,
+      attemptId: reservation.attemptId,
+      callKey: reservation.callKey,
+      capability: reservation.identity.capability,
+      providerKey: reservation.identity.providerKey,
+      modelKey: reservation.identity.modelKey,
+      workflowVersionId: reservation.workflowVersionId,
+      external: reservation.identity.external,
+      requestSha256: reservation.requestSha256,
+      estimatedCostMicros: reservation.identity.estimatedCostMicros,
+      currency: reservation.identity.currency,
+      status: 'started',
+    });
+    usageRows.push(usageRow);
+    job = GenerationJobLifecycleSchema.parse({
+      ...job,
+      providerCallCount: job.providerCallCount + 1,
+    });
+    events.push('reservation-commit');
+    const result: AtomicUsageReservationResult = {
+      kind: 'reserved',
+      usage: usageRow,
+      incrementProviderCallCount: true,
+      createUsageRow: true,
+      dispatch: 'after-transaction-commit',
+    };
+    reservationResults.push(structuredClone(result));
+    return result;
+  });
+
+  const finalizeUsage = vi.fn(async (finalization: ProviderUsageFinalizationCommand) => {
+    if (usageRow === null || usageRow.status !== 'started') {
+      throw new Error('Terminal trace usage must finalize once from started.');
+    }
+    usageFinalizationRequests.push(structuredClone(finalization));
+    usageRow = ExistingUsageIdentitySchema.parse({
+      ...usageRow,
+      status: finalization.status,
+    });
+    usageRows[0] = usageRow;
+    events.push('usage-finalize');
+    const result: ProviderUsageFinalizationResult = {
+      kind: 'finalize',
+      usage: usageRow,
+      finalization: {
+        status: finalization.status,
+        responseSha256: finalization.responseSha256,
+        usageMetrics: finalization.usageMetrics,
+        actualCostMicros: finalization.actualCostMicros,
+        error: finalization.error,
+        finishedAtMs: finalization.finishedAtMs,
+      },
+    };
+    usageFinalizationResults.push(structuredClone(result));
+    return result;
+  });
+
+  const finalizeFailure = vi.fn(async (failure: AttemptFailureCommitRequest) => {
+    if (failure.decision.kind !== 'terminal') {
+      throw new Error('Terminal trace cannot schedule a retry.');
+    }
+    failureRequests.push(structuredClone(failure));
+    job = GenerationJobLifecycleSchema.parse({
+      ...failure.currentJob,
+      state: failure.decision.jobState,
+      nextAttemptAtMs: null,
+      finishedAtMs: failure.finishedAtMs,
+      terminalError: {
+        category: failure.error.category,
+        code: failure.decision.jobErrorCode,
+        message: failure.error.message,
+      },
+    });
+    attempt = GenerationAttemptLifecycleSchema.parse({
+      ...failure.currentAttempt,
+      state: failure.decision.attemptState,
+      finishedAtMs: failure.finishedAtMs,
+      error: {
+        category: failure.error.category,
+        code: failure.decision.attemptErrorCode,
+        message: failure.error.message,
+      },
+    });
+    events.push('failure-commit');
+    const result: AttemptFailureCommitResult = { job, attempt };
+    failureResults.push(structuredClone(result));
+    return result;
+  });
+
+  const commitCheckpoint = vi.fn(async (checkpointRequest: CheckpointCommitRequest) => {
+    if (mode === 'checkpoint-cancellation') {
+      nowMs = 1_500;
+      fixture.controller.advanceTo(nowMs);
+      job = GenerationJobLifecycleSchema.parse({
+        ...job,
+        cancelRequestedAtMs: nowMs,
+      });
+      locallyCancelled = true;
+      events.push('checkpoint-cancellation-persist');
+      throw new Error('Checkpoint commit observed a persisted cancellation.');
+    }
+    if (committedCheckpoint !== null || checkpointMaterial !== null) {
+      throw new Error('Terminal trace checkpoint is immutable.');
+    }
+    committedCheckpoint = structuredClone(checkpointRequest.checkpoint);
+    checkpointMaterial = structuredClone(checkpointRequest.material);
+    checkpointWrites += 1;
+    events.push('checkpoint-commit');
+    return structuredClone(checkpointRequest.checkpoint);
+  });
+
+  const commitSuccess = vi.fn(async () => {
+    if (mode !== 'success-cancellation-race') {
+      throw new Error('Terminal trace must not attempt success in this mode.');
+    }
+    nowMs = 2_000;
+    fixture.controller.advanceTo(nowMs);
+    const cancellation = createStructuredJobError(
+      'CANCELLED',
+      'The provider-free analyze job was cancelled.',
+    );
+    job = GenerationJobLifecycleSchema.parse({
+      ...job,
+      state: 'cancelled',
+      cancelRequestedAtMs: nowMs,
+      finishedAtMs: nowMs,
+      terminalError: {
+        category: cancellation.category,
+        code: cancellation.code,
+        message: cancellation.message,
+      },
+    });
+    attempt = GenerationAttemptLifecycleSchema.parse({
+      ...attempt,
+      state: 'cancelled',
+      finishedAtMs: nowMs,
+      error: {
+        category: cancellation.category,
+        code: cancellation.code,
+        message: cancellation.message,
+      },
+    });
+    committedFinalOutputs = [];
+    events.push('cancellation-terminal-winner');
+    throw new ProviderFreeAnalyzeCommitRaceError('cancellation');
+  });
+
+  const leaseAttempt = vi.fn(async (lease: LeaseAttemptCommand) => {
+    if (job.state !== 'running') return { kind: 'not-eligible' as const };
+    expect(lease).toEqual({
+      workspaceId,
+      jobId,
+      workerId: attempt.workerId,
+      leaseToken,
+      nowMs,
+    });
+    events.push('lease');
+    return { kind: 'leased' as const, job, attempt };
+  });
+
+  const recordRunningProgress = vi.fn(async (progressRequest: unknown) => {
+    const target = deriveRunningProgressCommitTarget(progressRequest);
+    expect(target.currentProgressBps).toBe(job.progressBps);
+    const kind = target.targetProgressBps === target.currentProgressBps ? 'unchanged' : 'advanced';
+    job = GenerationJobLifecycleSchema.parse({ ...job, progressBps: target.targetProgressBps });
+    progressValues.push(target.targetProgressBps);
+    events.push(`progress-${String(target.targetProgressBps)}`);
+    return { kind, job };
+  });
+
+  const cleanupIncomplete = vi.fn(() => events.push('cleanup-incomplete'));
+  const cleanupStaged = vi.fn(() => events.push('cleanup-staged'));
+  const signalCancellation = vi.fn(() => {
+    events.push('local-cancellation-signal');
+    locallyCancelled = true;
+  });
+  const cancellationSignal = {
+    get cancelled() {
+      return locallyCancelled;
+    },
+    throwIfCancelled() {
+      if (locallyCancelled) throw new Error('The local analyze cancellation signal fired.');
+    },
+  };
+
+  const service = new ProviderFreeBannerAnalyzeService({
+    clock: { nowMs: () => EpochMillisecondsSchema.parse(nowMs) },
+    uuids: {
+      nextUuid: (purpose: 'lease-token' | 'final-output') =>
+        purpose === 'lease-token' ? leaseToken : outputId,
+    },
+    jobs: {
+      async findIdempotent() {
+        return null;
+      },
+      async createQueued() {
+        throw new Error('Terminal finalization trace does not submit jobs.');
+      },
+      leaseAttempt,
+      async heartbeatAttempt() {
+        throw new Error('Heartbeat renewal is outside this milestone.');
+      },
+      recordRunningProgress,
+      requestCancellation,
+      finalizeAttemptFailure: finalizeFailure,
+      commitCheckpoint,
+      commitSuccessAtomically: commitSuccess,
+      async loadExecutionAggregate() {
+        return execution();
+      },
+    },
+    workflows: { resolveExplicit: async () => INITIAL_BANNER_ANALYZE_WORKFLOW_V1 },
+    sources: { resolveSource: async () => source as never },
+    budgets: { reserveUnderJobLock },
+    usage: {
+      async findAttemptCall() {
+        return null;
+      },
+      finalizeOnce: finalizeUsage,
+    },
+    checkpoints: { verify: async () => ({ kind: 'absent', overwrite: false }) },
+    analysis: fixture.port,
+    cancellations: {
+      forJob: () => cancellationSignal,
+      signal: signalCancellation,
+    },
+    temporaries: {
+      forAttempt: () => ({
+        deleteIncompleteStepBytes: cleanupIncomplete,
+        deleteStagedFinalBytes: cleanupStaged,
+      }),
+    },
+  } as never);
+
+  const durableSnapshot = () =>
+    canonicalizeJson({
+      job,
+      attempt,
+      usageRows,
+      committedCheckpoint,
+      checkpointMaterial,
+      committedFinalOutputs,
+    });
+  const sideEffectCounts = () => ({
+    reservations: reservationRequests.length,
+    usageRows: usageRows.length,
+    usageFinalizations: usageFinalizationRequests.length,
+    dispatches: dispatchesObserved,
+    progressCommits: progressValues.length,
+    checkpointWrites,
+    failureCommits: failureRequests.length,
+    finalOutputs: committedFinalOutputs.length,
+  });
+
+  return {
+    service,
+    fixture,
+    events,
+    originalJob,
+    originalAttempt,
+    progressValues,
+    usageRows,
+    cancellationRequests,
+    cancellationResults,
+    reservationRequests,
+    reservationResults,
+    usageFinalizationRequests,
+    usageFinalizationResults,
+    failureRequests,
+    failureResults,
+    requestCancellation,
+    reserveUnderJobLock,
+    finalizeUsage,
+    finalizeFailure,
+    commitCheckpoint,
+    commitSuccess,
+    leaseAttempt,
+    cleanupIncomplete,
+    cleanupStaged,
+    signalCancellation,
+    durableSnapshot,
+    sideEffectCounts,
+    observeHeldDispatch() {
+      expect(fixture.controller.pendingGateKeys()).toEqual(['terminal-analysis-dispatch']);
+      dispatchesObserved += 1;
+      events.push('held-dispatch-observed');
+    },
+    setNowMs(value: number) {
+      nowMs = value;
+      fixture.controller.advanceTo(value);
+    },
+    releaseDispatch() {
+      fixture.controller.release('terminal-analysis-dispatch');
+    },
+    get currentJob() {
+      return job;
+    },
+    get currentAttempt() {
+      return attempt;
+    },
+    get usageRow() {
+      return usageRow;
+    },
+    get committedCheckpoint() {
+      return committedCheckpoint;
+    },
+    get checkpointMaterial() {
+      return checkpointMaterial;
+    },
+    get committedFinalOutputs() {
+      return committedFinalOutputs;
+    },
+  };
+};
+
+const completeHeldCancellationTrace = async () => {
+  const harness = buildAnalyzeTerminalHarness('held-cancellation');
+  const executing = harness.service.executeAttempt({
+    workspaceId,
+    jobId,
+    workerId: 'worker.executor:1',
+  } as never);
+  await vi.waitFor(() =>
+    expect(harness.fixture.controller.pendingGateKeys()).toEqual(['terminal-analysis-dispatch']),
+  );
+  harness.observeHeldDispatch();
+  harness.setNowMs(1_500);
+  await harness.service.requestCancellation({
+    context: {
+      actorId: cancellationActorId,
+      workspaceId,
+      requestId: cancellationRequestId,
+    },
+    jobId,
+  } as never);
+  harness.releaseDispatch();
+  await executing;
+  return harness;
+};
+
 describe('timeboxed provider-free analyze executor safety', () => {
   it('commits reservation before held dispatch and completes one exact provider-free success', async () => {
     const harness = buildHarness({ happyPath: true });
@@ -1413,5 +1925,606 @@ describe('timeboxed provider-free analyze executor safety', () => {
       'progress-8500',
       'atomic-success',
     ]);
+  });
+
+  it('persists held cancellation, finalizes uncertain usage, then terminalizes once', async () => {
+    const harness = buildAnalyzeTerminalHarness('held-cancellation');
+    const executing = harness.service.executeAttempt({
+      workspaceId,
+      jobId,
+      workerId: 'worker.executor:1',
+    } as never);
+
+    await vi.waitFor(() =>
+      expect(harness.fixture.controller.pendingGateKeys()).toEqual(['terminal-analysis-dispatch']),
+    );
+    expect(harness.events).toEqual(['lease', 'progress-1000', 'reservation-commit']);
+    harness.observeHeldDispatch();
+    expect(harness.sideEffectCounts()).toEqual({
+      reservations: 1,
+      usageRows: 1,
+      usageFinalizations: 0,
+      dispatches: 1,
+      progressCommits: 1,
+      checkpointWrites: 0,
+      failureCommits: 0,
+      finalOutputs: 0,
+    });
+    expect(harness.usageRow).toMatchObject({ status: 'started' });
+    expect(harness.currentJob).toMatchObject({
+      state: 'running',
+      progressBps: 1_000,
+      providerCallCount: 1,
+      cancelRequestedAtMs: null,
+      deadlineAtMs: 601_000,
+    });
+
+    harness.setNowMs(1_500);
+    const cancellation = await harness.service.requestCancellation({
+      context: {
+        actorId: cancellationActorId,
+        workspaceId,
+        requestId: cancellationRequestId,
+      },
+      jobId,
+    } as never);
+    expect(cancellation).toEqual({
+      kind: 'cancellation-requested',
+      acknowledgedRequest: {
+        context: {
+          actorId: cancellationActorId,
+          workspaceId,
+          requestId: cancellationRequestId,
+        },
+        jobId,
+        requestedAtMs: 1_500,
+      },
+      job: harness.currentJob,
+    });
+    expect(harness.cancellationRequests).toEqual([
+      {
+        context: {
+          actorId: cancellationActorId,
+          workspaceId,
+          requestId: cancellationRequestId,
+        },
+        jobId,
+        requestedAtMs: 1_500,
+      },
+    ]);
+    expect(harness.events.slice(-2)).toEqual(['cancellation-persist', 'local-cancellation-signal']);
+    expect(harness.currentJob).toMatchObject({
+      initiatedByActorId: actorId,
+      requestId,
+      requestSha256,
+      cancelRequestedAtMs: 1_500,
+      state: 'running',
+    });
+    expect(cancellationActorId).not.toBe(actorId);
+    expect(cancellationRequestId).not.toBe(requestId);
+
+    harness.releaseDispatch();
+    const result = await executing;
+    const cancelled = createStructuredJobError(
+      'CANCELLED',
+      'The provider-free analyze job was cancelled.',
+    );
+    expect(result).toEqual({
+      kind: 'terminal',
+      job: harness.currentJob,
+      code: 'CANCELLED',
+    });
+    expect(harness.events).toEqual([
+      'lease',
+      'progress-1000',
+      'reservation-commit',
+      'held-dispatch-observed',
+      'cancellation-persist',
+      'local-cancellation-signal',
+      'usage-finalize',
+      'failure-commit',
+      'cleanup-incomplete',
+      'cleanup-staged',
+    ]);
+    expect(harness.usageFinalizationRequests).toEqual([
+      expect.objectContaining({
+        status: 'indeterminate',
+        responseSha256: null,
+        actualCostMicros: '0',
+        finishedAtMs: 1_500,
+        error: createStructuredJobError(
+          'PROVIDER_RESULT_INDETERMINATE',
+          'The started fixture call did not produce a trustworthy committed result.',
+        ),
+      }),
+    ]);
+    expect(harness.usageRow).toMatchObject({
+      usageId,
+      workspaceId,
+      jobId,
+      attemptId,
+      status: 'indeterminate',
+    });
+    expect(harness.failureRequests).toEqual([
+      expect.objectContaining({
+        workspaceId,
+        projectId,
+        jobId,
+        attemptId,
+        currentAttemptNumber: 1,
+        finishedAtMs: 1_500,
+        jobDeadlineAtMs: 601_000,
+        cancelRequestedAtMs: 1_500,
+        indeterminateProviderCall: false,
+        error: cancelled,
+        decision: {
+          kind: 'terminal',
+          jobState: 'cancelled',
+          attemptState: 'cancelled',
+          attemptErrorCode: 'CANCELLED',
+          jobErrorCode: 'CANCELLED',
+          reason: 'not-retryable',
+        },
+      }),
+    ]);
+    expect(harness.currentJob).toEqual({
+      ...harness.originalJob,
+      state: 'cancelled',
+      progressBps: 1_000,
+      providerCallCount: 1,
+      cancelRequestedAtMs: 1_500,
+      finishedAtMs: 1_500,
+      terminalError: {
+        category: cancelled.category,
+        code: cancelled.code,
+        message: cancelled.message,
+      },
+    });
+    expect(harness.currentAttempt).toEqual({
+      ...harness.originalAttempt,
+      state: 'cancelled',
+      finishedAtMs: 1_500,
+      error: {
+        category: cancelled.category,
+        code: cancelled.code,
+        message: cancelled.message,
+      },
+    });
+    expect(harness.progressValues).toEqual([1_000]);
+    expect(harness.committedCheckpoint).toBeNull();
+    expect(harness.checkpointMaterial).toBeNull();
+    expect(harness.committedFinalOutputs).toEqual([]);
+    expect(harness.commitCheckpoint).not.toHaveBeenCalled();
+    expect(harness.commitSuccess).not.toHaveBeenCalled();
+    expect(harness.finalizeUsage).toHaveBeenCalledOnce();
+    expect(harness.finalizeFailure).toHaveBeenCalledOnce();
+    expect(harness.cleanupIncomplete).toHaveBeenCalledOnce();
+    expect(harness.cleanupStaged).toHaveBeenCalledOnce();
+    expect(harness.sideEffectCounts()).toEqual({
+      reservations: 1,
+      usageRows: 1,
+      usageFinalizations: 1,
+      dispatches: 1,
+      progressCommits: 1,
+      checkpointWrites: 0,
+      failureCommits: 1,
+      finalOutputs: 0,
+    });
+
+    const terminalSnapshot = harness.durableSnapshot();
+    const terminalEffects = harness.sideEffectCounts();
+    const terminalEvents = [...harness.events];
+    await expect(
+      harness.service.executeAttempt({
+        workspaceId,
+        jobId,
+        workerId: 'worker.executor:1',
+      } as never),
+    ).resolves.toEqual({ kind: 'not-eligible' });
+    expect(harness.durableSnapshot()).toBe(terminalSnapshot);
+    expect(harness.sideEffectCounts()).toEqual(terminalEffects);
+    expect(harness.events).toEqual(terminalEvents);
+  });
+
+  it('expires attempt 3 at the immutable absolute job deadline and finalizes in order', async () => {
+    const harness = buildAnalyzeTerminalHarness('operation-timeout');
+    expect(harness.originalJob).toMatchObject({
+      attemptCount: 3,
+      startedAtMs: 1_000,
+      deadlineAtMs: 601_000,
+    });
+    expect(harness.originalAttempt).toMatchObject({
+      attemptNumber: 3,
+      startedAtMs: 590_000,
+      leaseExpiresAtMs: 620_000,
+    });
+    expect(harness.originalAttempt.startedAtMs + 120_000).toBe(710_000);
+    expect(harness.originalJob.deadlineAtMs! - harness.originalAttempt.startedAtMs).toBe(11_000);
+
+    const executing = harness.service.executeAttempt({
+      workspaceId,
+      jobId,
+      workerId: 'worker.executor:1',
+    } as never);
+    await vi.waitFor(() =>
+      expect(harness.fixture.controller.pendingGateKeys()).toEqual(['terminal-analysis-dispatch']),
+    );
+    harness.observeHeldDispatch();
+    expect(harness.events).toEqual([
+      'lease',
+      'progress-1000',
+      'reservation-commit',
+      'held-dispatch-observed',
+    ]);
+
+    harness.setNowMs(601_000);
+    harness.releaseDispatch();
+    const result = await executing;
+    const timedOut = createStructuredJobError(
+      'ATTEMPT_TIMEOUT',
+      'The provider-free analyze attempt exceeded its deadline.',
+    );
+    expect(result).toEqual({
+      kind: 'terminal',
+      job: harness.currentJob,
+      code: 'ATTEMPT_TIMEOUT',
+    });
+    expect(harness.events).toEqual([
+      'lease',
+      'progress-1000',
+      'reservation-commit',
+      'held-dispatch-observed',
+      'usage-finalize',
+      'failure-commit',
+      'cleanup-incomplete',
+      'cleanup-staged',
+    ]);
+    expect(harness.usageFinalizationRequests).toEqual([
+      expect.objectContaining({
+        status: 'failed',
+        responseSha256: null,
+        error: timedOut,
+        finishedAtMs: 601_000,
+      }),
+    ]);
+    expect(harness.usageRow).toMatchObject({ status: 'failed' });
+    expect(harness.failureRequests).toEqual([
+      expect.objectContaining({
+        currentAttemptNumber: 3,
+        finishedAtMs: 601_000,
+        jobDeadlineAtMs: 601_000,
+        cancelRequestedAtMs: null,
+        error: timedOut,
+        decision: {
+          kind: 'terminal',
+          jobState: 'failed',
+          attemptState: 'timed_out',
+          attemptErrorCode: 'ATTEMPT_TIMEOUT',
+          jobErrorCode: 'ATTEMPT_TIMEOUT',
+          reason: 'attempts-exhausted',
+        },
+      }),
+    ]);
+    expect(harness.currentJob).toEqual({
+      ...harness.originalJob,
+      state: 'failed',
+      progressBps: 1_000,
+      providerCallCount: 1,
+      finishedAtMs: 601_000,
+      terminalError: {
+        category: timedOut.category,
+        code: timedOut.code,
+        message: timedOut.message,
+      },
+    });
+    expect(harness.currentAttempt).toEqual({
+      ...harness.originalAttempt,
+      state: 'timed_out',
+      finishedAtMs: 601_000,
+      error: {
+        category: timedOut.category,
+        code: timedOut.code,
+        message: timedOut.message,
+      },
+    });
+    expect(harness.currentJob.deadlineAtMs).toBe(601_000);
+    expect(harness.currentAttempt.leaseExpiresAtMs).toBeGreaterThan(601_000);
+    expect(harness.originalAttempt.startedAtMs + 120_000).toBeGreaterThan(601_000);
+    expect(harness.progressValues).toEqual([1_000]);
+    expect(harness.commitCheckpoint).not.toHaveBeenCalled();
+    expect(harness.commitSuccess).not.toHaveBeenCalled();
+    expect(harness.requestCancellation).not.toHaveBeenCalled();
+    expect(harness.signalCancellation).not.toHaveBeenCalled();
+    expect(harness.finalizeUsage).toHaveBeenCalledOnce();
+    expect(harness.finalizeFailure).toHaveBeenCalledOnce();
+    expect(harness.sideEffectCounts()).toEqual({
+      reservations: 1,
+      usageRows: 1,
+      usageFinalizations: 1,
+      dispatches: 1,
+      progressCommits: 1,
+      checkpointWrites: 0,
+      failureCommits: 1,
+      finalOutputs: 0,
+    });
+
+    const terminalSnapshot = harness.durableSnapshot();
+    const terminalEffects = harness.sideEffectCounts();
+    const terminalEvents = [...harness.events];
+    await expect(
+      harness.service.executeAttempt({
+        workspaceId,
+        jobId,
+        workerId: 'worker.executor:1',
+      } as never),
+    ).resolves.toEqual({ kind: 'not-eligible' });
+    expect(harness.durableSnapshot()).toBe(terminalSnapshot);
+    expect(harness.sideEffectCounts()).toEqual(terminalEffects);
+    expect(harness.events).toEqual(terminalEvents);
+  });
+
+  it('cannot overwrite a cancellation that wins the atomic success commit race', async () => {
+    const harness = buildAnalyzeTerminalHarness('success-cancellation-race');
+    const executing = harness.service.executeAttempt({
+      workspaceId,
+      jobId,
+      workerId: 'worker.executor:1',
+    } as never);
+    await vi.waitFor(() =>
+      expect(harness.fixture.controller.pendingGateKeys()).toEqual(['terminal-analysis-dispatch']),
+    );
+    harness.observeHeldDispatch();
+    harness.releaseDispatch();
+    const result = await executing;
+
+    expect(result).toEqual({ kind: 'lost-commit-race', winner: 'cancellation' });
+    expect(harness.events).toEqual([
+      'lease',
+      'progress-1000',
+      'reservation-commit',
+      'held-dispatch-observed',
+      'usage-finalize',
+      'checkpoint-commit',
+      'progress-7000',
+      'progress-8500',
+      'cancellation-terminal-winner',
+      'cleanup-incomplete',
+      'cleanup-staged',
+    ]);
+    expect(harness.usageFinalizationRequests).toEqual([
+      expect.objectContaining({
+        status: 'succeeded',
+        responseSha256: sha256Hex(Buffer.from(canonicalizeJson(proposal), 'utf8')),
+        error: null,
+      }),
+    ]);
+    expect(harness.usageRow).toMatchObject({ status: 'succeeded' });
+    expect(harness.progressValues).toEqual([1_000, 7_000, 8_500]);
+    expect(harness.currentJob).toMatchObject({
+      ...harness.originalJob,
+      state: 'cancelled',
+      progressBps: 8_500,
+      providerCallCount: 1,
+      cancelRequestedAtMs: 2_000,
+      finishedAtMs: 2_000,
+      terminalError: { category: 'cancelled', code: 'CANCELLED' },
+    });
+    expect(harness.currentAttempt).toMatchObject({
+      ...harness.originalAttempt,
+      state: 'cancelled',
+      finishedAtMs: 2_000,
+      error: { category: 'cancelled', code: 'CANCELLED' },
+    });
+    expect(harness.committedCheckpoint).toMatchObject({
+      workspaceId,
+      projectId,
+      jobId,
+      attemptId,
+      requestSha256,
+      output: {
+        outputKey: 'analysis.fixture-proposal',
+        disposition: 'checkpoint',
+      },
+      payload: proposal,
+    });
+    const checkpointBeforeInertExecute = canonicalizeJson(harness.committedCheckpoint);
+    const checkpointMaterialBeforeInertExecute = canonicalizeJson(harness.checkpointMaterial);
+    expect(harness.committedFinalOutputs).toEqual([]);
+    expect(harness.commitCheckpoint).toHaveBeenCalledOnce();
+    expect(harness.commitSuccess).toHaveBeenCalledOnce();
+    expect(harness.finalizeFailure).not.toHaveBeenCalled();
+    expect(harness.requestCancellation).not.toHaveBeenCalled();
+    expect(harness.cleanupIncomplete).toHaveBeenCalledOnce();
+    expect(harness.cleanupStaged).toHaveBeenCalledOnce();
+    expect(harness.sideEffectCounts()).toEqual({
+      reservations: 1,
+      usageRows: 1,
+      usageFinalizations: 1,
+      dispatches: 1,
+      progressCommits: 3,
+      checkpointWrites: 1,
+      failureCommits: 0,
+      finalOutputs: 0,
+    });
+
+    const terminalSnapshot = harness.durableSnapshot();
+    const terminalEffects = harness.sideEffectCounts();
+    const terminalEvents = [...harness.events];
+    await expect(
+      harness.service.executeAttempt({
+        workspaceId,
+        jobId,
+        workerId: 'worker.executor:1',
+      } as never),
+    ).resolves.toEqual({ kind: 'not-eligible' });
+    expect(harness.durableSnapshot()).toBe(terminalSnapshot);
+    expect(harness.sideEffectCounts()).toEqual(terminalEffects);
+    expect(harness.events).toEqual(terminalEvents);
+    expect(canonicalizeJson(harness.committedCheckpoint)).toBe(checkpointBeforeInertExecute);
+    expect(canonicalizeJson(harness.checkpointMaterial)).toBe(checkpointMaterialBeforeInertExecute);
+  });
+
+  it('routes a checkpoint cancellation through the normal failure CAS', async () => {
+    const harness = buildAnalyzeTerminalHarness('checkpoint-cancellation');
+    const executing = harness.service.executeAttempt({
+      workspaceId,
+      jobId,
+      workerId: 'worker.executor:1',
+    } as never);
+    await vi.waitFor(() =>
+      expect(harness.fixture.controller.pendingGateKeys()).toEqual(['terminal-analysis-dispatch']),
+    );
+    harness.observeHeldDispatch();
+    harness.releaseDispatch();
+    const result = await executing;
+
+    expect(result).toEqual({
+      kind: 'terminal',
+      job: harness.currentJob,
+      code: 'CANCELLED',
+    });
+    expect(harness.events).toEqual([
+      'lease',
+      'progress-1000',
+      'reservation-commit',
+      'held-dispatch-observed',
+      'usage-finalize',
+      'checkpoint-cancellation-persist',
+      'failure-commit',
+      'cleanup-incomplete',
+      'cleanup-staged',
+    ]);
+    expect(harness.usageRow).toMatchObject({ status: 'succeeded' });
+    expect(harness.finalizeUsage).toHaveBeenCalledOnce();
+    expect(harness.commitCheckpoint).toHaveBeenCalledOnce();
+    expect(harness.committedCheckpoint).toBeNull();
+    expect(harness.checkpointMaterial).toBeNull();
+    expect(harness.commitSuccess).not.toHaveBeenCalled();
+    expect(harness.finalizeFailure).toHaveBeenCalledOnce();
+    expect(harness.failureRequests).toEqual([
+      expect.objectContaining({
+        cancelRequestedAtMs: 1_500,
+        error: expect.objectContaining({ code: 'CANCELLED', category: 'cancelled' }),
+        decision: expect.objectContaining({
+          kind: 'terminal',
+          jobState: 'cancelled',
+          attemptState: 'cancelled',
+        }),
+      }),
+    ]);
+    expect(harness.currentJob).toMatchObject({
+      state: 'cancelled',
+      progressBps: 1_000,
+      providerCallCount: 1,
+      cancelRequestedAtMs: 1_500,
+      deadlineAtMs: 601_000,
+    });
+    expect(harness.currentAttempt).toMatchObject({ state: 'cancelled', finishedAtMs: 1_500 });
+    expect(harness.sideEffectCounts()).toEqual({
+      reservations: 1,
+      usageRows: 1,
+      usageFinalizations: 1,
+      dispatches: 1,
+      progressCommits: 1,
+      checkpointWrites: 0,
+      failureCommits: 1,
+      finalOutputs: 0,
+    });
+  });
+
+  it('validates exact executor persistence results and complete usage-finalization identity', async () => {
+    const harness = await completeHeldCancellationTrace();
+    const exactResults = [
+      {
+        label: 'cancellation',
+        validate: () =>
+          validateCancellationRequestResult({
+            request: harness.cancellationRequests[0]!,
+            result: harness.cancellationResults[0]!,
+          }),
+      },
+      {
+        label: 'reservation',
+        validate: () =>
+          validateAtomicUsageReservationResult({
+            command: harness.reservationRequests[0]!,
+            result: harness.reservationResults[0]!,
+          }),
+      },
+      {
+        label: 'usage finalization',
+        validate: () =>
+          validateProviderUsageFinalizationResult({
+            command: harness.usageFinalizationRequests[0]!,
+            result: harness.usageFinalizationResults[0]!,
+          }),
+      },
+      {
+        label: 'terminal failure',
+        validate: () =>
+          validateAttemptFailureCommitResult({
+            request: harness.failureRequests[0]!,
+            result: harness.failureResults[0]!,
+          }),
+      },
+    ];
+    for (const exact of exactResults) {
+      expect(exact.validate(), exact.label).toBeDefined();
+    }
+
+    const command = harness.usageFinalizationRequests[0]!;
+    const result = harness.usageFinalizationResults[0]!;
+    const immutableUsageMutations = [
+      ['usage id', ['usage', 'usageId'], '80000000-0000-4000-8000-000000000002'],
+      ['workspace', ['usage', 'workspaceId'], '10000000-0000-4000-8000-000000000002'],
+      ['job', ['usage', 'jobId'], '50000000-0000-4000-8000-000000000002'],
+      ['attempt', ['usage', 'attemptId'], '60000000-0000-4000-8000-000000000002'],
+      ['call key', ['usage', 'callKey'], 'analysis.other-call'],
+      ['capability', ['usage', 'capability'], 'vision_analysis'],
+      ['provider', ['usage', 'providerKey'], 'other-fixture'],
+      ['model', ['usage', 'modelKey'], 'other-fixture-v1'],
+      ['workflow', ['usage', 'workflowVersionId'], 'a0000000-0000-4000-8000-000000000001'],
+      ['external marker', ['usage', 'external'], true],
+      ['request digest', ['usage', 'requestSha256'], '2'.repeat(64)],
+      ['estimate', ['usage', 'estimatedCostMicros'], '1'],
+      ['currency', ['usage', 'currency'], 'EUR'],
+    ] as const;
+    for (const [label, path, value] of immutableUsageMutations) {
+      expect(
+        () =>
+          validateProviderUsageFinalizationResult({
+            command,
+            result: mutatePersistenceResult(result, [{ path, value }]),
+          }),
+        label,
+      ).toThrow();
+    }
+
+    const payloadMutations = [
+      ['response digest', ['finalization', 'responseSha256'], '2'.repeat(64)],
+      ['metrics', ['finalization', 'usageMetrics', 'calls'], 2],
+      ['actual cost', ['finalization', 'actualCostMicros'], '1'],
+      ['structured error', ['finalization', 'error'], null],
+      ['finish timestamp', ['finalization', 'finishedAtMs'], 1_501],
+    ] as const;
+    for (const [label, path, value] of payloadMutations) {
+      expect(
+        () =>
+          validateProviderUsageFinalizationResult({
+            command,
+            result: mutatePersistenceResult(result, [{ path, value }]),
+          }),
+        label,
+      ).toThrow();
+    }
+    expect(() =>
+      validateProviderUsageFinalizationResult({
+        command,
+        result: mutatePersistenceResult(result, [
+          { path: ['usage', 'status'], value: 'failed' },
+          { path: ['finalization', 'status'], value: 'failed' },
+        ]),
+      }),
+    ).toThrow();
   });
 });
