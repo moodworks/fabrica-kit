@@ -11,6 +11,7 @@ import {
   AtomicUsageReservationCommandSchema,
   AtomicUsageReservationResultSchema,
   AttemptFailureCommitRequestSchema,
+  AttemptFailureCommitResultSchema,
   AuthoritativeWorkflowExecutionSchema,
   BannerExportRequestSchema,
   CancellationRequestResultSchema,
@@ -54,6 +55,7 @@ import {
   validateBannerExportResult,
   validateAtomicSuccessCommitResult,
   validateAtomicUsageReservationResult,
+  validateAttemptFailureCommitResult,
   validateCancellationRequestResult,
   validateCheckpointCommitRequest,
   validateCheckpointCommitResult,
@@ -1080,6 +1082,8 @@ describe('authoritative execution and atomic repository command contracts', () =
       indeterminateProviderCall: false,
     });
     const request = {
+      currentJob: runningJob(),
+      currentAttempt: runningAttempt(),
       workspaceId,
       projectId,
       jobId,
@@ -1099,6 +1103,28 @@ describe('authoritative execution and atomic repository command contracts', () =
       decision,
     };
     expect(AttemptFailureCommitRequestSchema.parse(request)).toBeDefined();
+    if (decision.kind !== 'retry') throw new Error('Expected retry fixture decision.');
+    const persistedError = {
+      category: error.category,
+      code: error.code,
+      message: error.message,
+    };
+    const retryResult = {
+      job: {
+        ...runningJob(),
+        state: 'retry_wait' as const,
+        nextAttemptAtMs: decision.nextAttemptAtMs,
+      },
+      attempt: {
+        ...runningAttempt(),
+        state: decision.attemptState,
+        finishedAtMs: 10_000,
+        error: persistedError,
+      },
+    };
+    expect(validateAttemptFailureCommitResult({ request, result: retryResult })).toEqual(
+      retryResult,
+    );
     expect(
       AttemptFailureCommitRequestSchema.safeParse({
         ...request,
@@ -1139,6 +1165,177 @@ describe('authoritative execution and atomic repository command contracts', () =
         jobDeadlineAtMs: 601_000,
       }),
     ).toBeDefined();
+  });
+
+  it('permits only the decision-derived failure transition and preserves both snapshots exactly', () => {
+    const error = createStructuredJobError(
+      'PROVIDER_REQUEST_REJECTED',
+      'Synthetic permanent provider failure.',
+    );
+    const decision = decideErrorRetry({
+      error,
+      workflow: INITIAL_BANNER_ANALYZE_WORKFLOW_V1,
+      stepKey: 'fixture-analysis',
+      jobId,
+      logicalCallNumber: 1,
+      externalIdempotencyKey: null,
+      currentAttemptNumber: 1,
+      finishedAtMs: 10_000,
+      jobDeadlineAtMs: 601_000,
+      indeterminateProviderCall: false,
+    });
+    if (decision.kind !== 'terminal') throw new Error('Expected terminal fixture decision.');
+    const request = {
+      currentJob: runningJob(),
+      currentAttempt: runningAttempt(),
+      workspaceId,
+      projectId,
+      jobId,
+      attemptId,
+      currentLeaseToken: leaseToken,
+      presentedLeaseToken: leaseToken,
+      currentAttemptNumber: 1,
+      finishedAtMs: 10_000,
+      jobDeadlineAtMs: 601_000,
+      cancelRequestedAtMs: null,
+      workflow: INITIAL_BANNER_ANALYZE_WORKFLOW_V1,
+      stepKey: 'fixture-analysis',
+      logicalCallNumber: 1,
+      externalIdempotencyKey: null,
+      indeterminateProviderCall: false,
+      error,
+      decision,
+    } as const;
+    const persistedError = {
+      category: error.category,
+      code: error.code,
+      message: error.message,
+    };
+    const result = {
+      job: {
+        ...runningJob(),
+        state: 'failed' as const,
+        finishedAtMs: 10_000,
+        terminalError: persistedError,
+      },
+      attempt: {
+        ...runningAttempt(),
+        state: 'failed' as const,
+        finishedAtMs: 10_000,
+        error: persistedError,
+      },
+    };
+    expect(AttemptFailureCommitResultSchema.parse(result)).toBeDefined();
+    expect(validateAttemptFailureCommitResult({ request, result })).toEqual(result);
+
+    for (const invalidRequest of [
+      {
+        ...request,
+        currentJob: {
+          ...request.currentJob,
+          workspaceId: '10000000-0000-4000-8000-000000000002',
+        },
+      },
+      {
+        ...request,
+        currentJob: { ...request.currentJob, deadlineAtMs: 602_000 },
+      },
+      {
+        ...request,
+        currentAttempt: {
+          ...request.currentAttempt,
+          leaseToken: 'a0000000-0000-4000-8000-000000000002',
+        },
+      },
+      { ...request, currentAttempt: { ...request.currentAttempt, attemptNumber: 2 } },
+      { ...request, currentJob: { ...request.currentJob, unknown: true } },
+      { ...request, currentAttempt: { ...request.currentAttempt, unknown: true } },
+    ]) {
+      expect(AttemptFailureCommitRequestSchema.safeParse(invalidRequest).success).toBe(false);
+    }
+
+    const jobMutations: Array<(value: Record<string, unknown>) => void> = [
+      (value) => void (value['workspaceId'] = '10000000-0000-4000-8000-000000000002'),
+      (value) => void (value['projectId'] = '20000000-0000-4000-8000-000000000002'),
+      (value) => void (value['jobId'] = '40000000-0000-4000-8000-000000000002'),
+      (value) => void (value['initiatedByActorId'] = '30000000-0000-4000-8000-000000000002'),
+      (value) => void (value['requestId'] = 'request.phase1a:0002'),
+      (value) => void (value['operation'] = 'banner.extract'),
+      (value) => void (value['workflowVersionId'] = '11111111-1111-5111-8111-111111111112'),
+      (value) => void (value['requestSha256'] = 'f'.repeat(64)),
+      (value) => void (value['progressBps'] = 2),
+      (value) => void (value['attemptCount'] = 2),
+      (value) => void (value['providerCallCount'] = 1),
+      (value) => void (value['maxAttempts'] = 2),
+      (value) => void (value['maxProviderCalls'] = 63),
+      (value) => void (value['attemptTimeoutMs'] = 119_999),
+      (value) => void (value['jobTimeoutMs'] = 599_999),
+      (value) => void (value['nextAttemptAtMs'] = 11_000),
+      (value) => void (value['cancelRequestedAtMs'] = 9_000),
+      (value) => {
+        value['startedAtMs'] = 2_000;
+        value['deadlineAtMs'] = 602_000;
+      },
+      (value) => void (value['finishedAtMs'] = 9_999),
+      (value) => {
+        value['state'] = 'retry_wait';
+        value['nextAttemptAtMs'] = 11_000;
+        value['finishedAtMs'] = null;
+        value['terminalError'] = null;
+      },
+      (value) =>
+        void (value['terminalError'] = {
+          category: 'internal',
+          code: 'INTERNAL_INVARIANT',
+          message: 'Mutated terminal error.',
+        }),
+      (value) => void (value['unknown'] = true),
+    ];
+    for (const mutate of jobMutations) {
+      const mutated = structuredClone(result);
+      mutate(mutated.job as unknown as Record<string, unknown>);
+      expect(() => validateAttemptFailureCommitResult({ request, result: mutated })).toThrow();
+    }
+
+    const attemptMutations: Array<(value: Record<string, unknown>) => void> = [
+      (value) => void (value['workspaceId'] = '10000000-0000-4000-8000-000000000002'),
+      (value) => void (value['jobId'] = '40000000-0000-4000-8000-000000000002'),
+      (value) => void (value['attemptId'] = '50000000-0000-4000-8000-000000000002'),
+      (value) => void (value['attemptNumber'] = 2),
+      (value) => void (value['workerId'] = 'worker.local:2'),
+      (value) => void (value['leaseToken'] = 'a0000000-0000-4000-8000-000000000002'),
+      (value) => void (value['leaseExpiresAtMs'] = 31_001),
+      (value) => void (value['heartbeatAtMs'] = 2_000),
+      (value) => {
+        value['startedAtMs'] = 2_000;
+        value['heartbeatAtMs'] = 2_000;
+        value['leaseExpiresAtMs'] = 32_000;
+      },
+      (value) => {
+        value['state'] = 'timed_out';
+        value['error'] = {
+          category: 'timeout',
+          code: 'CAPABILITY_TIMEOUT',
+          message: 'Mutated timeout.',
+        };
+      },
+      (value) => void (value['finishedAtMs'] = 9_999),
+      (value) =>
+        void (value['error'] = {
+          category: 'internal',
+          code: 'INTERNAL_INVARIANT',
+          message: 'Mutated attempt error.',
+        }),
+      (value) => void (value['unknown'] = true),
+    ];
+    for (const mutate of attemptMutations) {
+      const mutated = structuredClone(result);
+      mutate(mutated.attempt as unknown as Record<string, unknown>);
+      expect(() => validateAttemptFailureCommitResult({ request, result: mutated })).toThrow();
+    }
+    expect(() =>
+      validateAttemptFailureCommitResult({ request, result: { ...result, unknown: true } }),
+    ).toThrow();
   });
 
   it('binds lease adapter results to the exact job, worker, token, and lease timing', () => {

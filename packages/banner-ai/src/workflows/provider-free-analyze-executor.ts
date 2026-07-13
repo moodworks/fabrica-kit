@@ -70,6 +70,7 @@ import {
   startedUsageFinalizationAuthority,
   validateAtomicSuccessCommitResult,
   validateAtomicUsageReservationResult,
+  validateAttemptFailureCommitResult,
   validateCancellationRequestResult,
   validateCheckpointCommitResult,
   validateLeaseAttemptResult,
@@ -1072,6 +1073,8 @@ export class ProviderFreeBannerAnalyzeService {
       indeterminateProviderCall: input.indeterminateProviderCall,
     });
     const request = AttemptFailureCommitRequestSchema.parse({
+      currentJob: input.execution.job,
+      currentAttempt: input.execution.attempt,
       workspaceId: input.execution.workspaceId,
       projectId: input.execution.projectId,
       jobId: input.execution.job.jobId,
@@ -1090,12 +1093,11 @@ export class ProviderFreeBannerAnalyzeService {
       error: input.error,
       decision,
     });
-    const job = GenerationJobLifecycleSchema.parse(
-      await this.#dependencies.jobs.finalizeAttemptFailure(request),
-    );
-    if (job.jobId !== input.execution.job.jobId || job.state !== decision.jobState) {
-      throw new TypeError('Failure repository result differs from the exact retry decision.');
-    }
+    const failure = validateAttemptFailureCommitResult({
+      request,
+      result: await this.#dependencies.jobs.finalizeAttemptFailure(request),
+    });
+    const job = failure.job;
     return decision.kind === 'retry'
       ? {
           kind: 'retry-scheduled',

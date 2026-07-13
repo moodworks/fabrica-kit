@@ -4,13 +4,17 @@ import {
   AuthoritativeWorkflowExecutionSchema,
   EpochMillisecondsSchema,
   ExistingUsageIdentitySchema,
+  GenerationAttemptLifecycleSchema,
   GenerationJobLifecycleSchema,
   INITIAL_BANNER_ANALYZE_WORKFLOW_V1,
   ProviderFreeBannerAnalyzeService,
+  canonicalizeJson,
+  createStructuredJobError,
   createProviderFreeCompositionAnalysisFixturePort,
   deriveRunningProgressCommitTarget,
   operationRequestSha256,
   projectCanonicalOperationRequest,
+  sha256Hex,
   type AuthoritativeWorkflowExecution,
 } from '../src/index.js';
 
@@ -22,6 +26,7 @@ const jobId = '50000000-0000-4000-8000-000000000001';
 const attemptId = '60000000-0000-4000-8000-000000000001';
 const leaseToken = '70000000-0000-4000-8000-000000000001';
 const usageId = '80000000-0000-4000-8000-000000000001';
+const outputId = '90000000-0000-4000-8000-000000000001';
 const requestId = 'request.executor:0001';
 const sourceSha256 = '1'.repeat(64);
 
@@ -68,6 +73,7 @@ const buildHarness = (input?: {
   readonly progressBps?: number;
   readonly attemptNumber?: 1 | 2;
   readonly duplicateReservation?: boolean;
+  readonly happyPath?: boolean;
 }) => {
   let nowMs = input?.nowMs ?? 1_000;
   const attemptNumber = input?.attemptNumber ?? 1;
@@ -124,21 +130,78 @@ const buildHarness = (input?: {
       attemptDeadlineAtMs: attempt.startedAtMs + 120_000,
     });
   const events: string[] = [];
-  const finalizeUsage = vi.fn();
+  let usageRow: ReturnType<typeof ExistingUsageIdentitySchema.parse> | null = null;
+  let committedCheckpoint: unknown = null;
+  let committedFinalOutputs: readonly unknown[] = [];
+  let committedSuccessAttempt: unknown = null;
+  const finalizeUsage = vi.fn(
+    async (finalization: {
+      status: 'succeeded' | 'failed' | 'indeterminate';
+      responseSha256: string | null;
+      usageMetrics: Record<string, number>;
+      actualCostMicros: string | null;
+      error: unknown;
+      finishedAtMs: number;
+    }) => {
+      if (usageRow === null || usageRow.status !== 'started') {
+        throw new Error('Usage must exist in started state before finalization.');
+      }
+      events.push('usage-finalize');
+      usageRow = ExistingUsageIdentitySchema.parse({
+        ...usageRow,
+        status: finalization.status,
+      });
+      return {
+        kind: 'finalize' as const,
+        usage: usageRow,
+        finalization: {
+          status: finalization.status,
+          responseSha256: finalization.responseSha256,
+          usageMetrics: finalization.usageMetrics,
+          actualCostMicros: finalization.actualCostMicros,
+          error: finalization.error,
+          finishedAtMs: finalization.finishedAtMs,
+        },
+      };
+    },
+  );
   const finalizeFailure = vi.fn(
-    async (failure: { error: { code: string; category: string; message: string } }) => {
+    async (failure: {
+      currentAttempt: typeof attempt;
+      decision: {
+        kind: 'terminal';
+        jobState: 'failed';
+        attemptState: 'failed';
+        jobErrorCode: Parameters<typeof createStructuredJobError>[0];
+      };
+      error: { code: string; category: string; message: string };
+    }) => {
+      const jobError = createStructuredJobError(
+        failure.decision.jobErrorCode,
+        failure.error.message,
+      );
       job = GenerationJobLifecycleSchema.parse({
         ...job,
-        state: 'failed',
+        state: failure.decision.jobState,
         nextAttemptAtMs: null,
         finishedAtMs: nowMs,
         terminalError: {
+          category: jobError.category,
+          code: jobError.code,
+          message: jobError.message,
+        },
+      });
+      const failedAttempt = GenerationAttemptLifecycleSchema.parse({
+        ...failure.currentAttempt,
+        state: failure.decision.attemptState,
+        finishedAtMs: nowMs,
+        error: {
           category: failure.error.category,
           code: failure.error.code,
           message: failure.error.message,
         },
       });
-      return job;
+      return { job, attempt: failedAttempt };
     },
   );
   const cleanupIncomplete = vi.fn(() => events.push('cleanup-incomplete'));
@@ -173,14 +236,33 @@ const buildHarness = (input?: {
       const kind =
         target.targetProgressBps === target.currentProgressBps ? 'unchanged' : 'advanced';
       job = GenerationJobLifecycleSchema.parse({ ...job, progressBps: target.targetProgressBps });
+      events.push(`progress-${String(target.targetProgressBps)}`);
       return { kind, job };
     },
     finalizeAttemptFailure: finalizeFailure,
-    async commitCheckpoint() {
-      throw new Error('checkpoint must not commit in these safety tests');
+    async commitCheckpoint(checkpointRequest: { checkpoint: unknown }) {
+      if (!input?.happyPath) throw new Error('checkpoint must not commit in this safety test');
+      events.push('checkpoint-commit');
+      committedCheckpoint = checkpointRequest.checkpoint;
+      return checkpointRequest.checkpoint;
     },
-    async commitSuccessAtomically() {
-      throw new Error('success must not commit in these safety tests');
+    async commitSuccessAtomically(successRequest: { finalOutputs: readonly unknown[] }) {
+      if (!input?.happyPath) throw new Error('success must not commit in this safety test');
+      events.push('atomic-success');
+      committedFinalOutputs = structuredClone(successRequest.finalOutputs);
+      job = GenerationJobLifecycleSchema.parse({
+        ...job,
+        state: 'succeeded',
+        progressBps: 10_000,
+        finishedAtMs: nowMs,
+      });
+      const succeededAttempt = GenerationAttemptLifecycleSchema.parse({
+        ...attempt,
+        state: 'succeeded',
+        finishedAtMs: nowMs,
+      });
+      committedSuccessAttempt = succeededAttempt;
+      return { job, attempt: succeededAttempt, finalOutputs: successRequest.finalOutputs };
     },
   };
   const usage = {
@@ -192,7 +274,10 @@ const buildHarness = (input?: {
   };
   const service = new ProviderFreeBannerAnalyzeService({
     clock: { nowMs: () => EpochMillisecondsSchema.parse(nowMs) },
-    uuids: { nextUuid: () => leaseToken },
+    uuids: {
+      nextUuid: (purpose: 'lease-token' | 'final-output') =>
+        purpose === 'lease-token' ? leaseToken : outputId,
+    },
     jobs,
     workflows: { resolveExplicit: async () => INITIAL_BANNER_ANALYZE_WORKFLOW_V1 },
     sources: { resolveSource: async () => source as never },
@@ -214,7 +299,7 @@ const buildHarness = (input?: {
           currency: string;
         };
       }) {
-        events.push('reserve');
+        events.push(input?.happyPath ? 'reservation-commit' : 'reserve');
         const existing = ExistingUsageIdentitySchema.parse({
           usageId,
           workspaceId: reservation.workspaceId,
@@ -231,7 +316,21 @@ const buildHarness = (input?: {
           currency: reservation.identity.currency,
           status: 'started',
         });
-        if (!input?.duplicateReservation) throw new Error('only duplicate branch is configured');
+        if (input?.happyPath) {
+          job = GenerationJobLifecycleSchema.parse({
+            ...job,
+            providerCallCount: job.providerCallCount + 1,
+          });
+          usageRow = existing;
+          return {
+            kind: 'reserved',
+            usage: existing,
+            incrementProviderCallCount: true,
+            createUsageRow: true,
+            dispatch: 'after-transaction-commit',
+          };
+        }
+        if (!input?.duplicateReservation) throw new Error('no reservation branch is configured');
         return {
           kind: 'duplicate',
           usage: existing,
@@ -267,10 +366,121 @@ const buildHarness = (input?: {
     setNowMs(value: number) {
       nowMs = value;
     },
+    get usageRow() {
+      return usageRow;
+    },
+    get committedCheckpoint() {
+      return committedCheckpoint;
+    },
+    get committedFinalOutputs() {
+      return committedFinalOutputs;
+    },
+    get currentJob() {
+      return job;
+    },
+    get committedSuccessAttempt() {
+      return committedSuccessAttempt;
+    },
   };
 };
 
 describe('timeboxed provider-free analyze executor safety', () => {
+  it('commits reservation before held dispatch and completes one exact provider-free success', async () => {
+    const harness = buildHarness({ happyPath: true });
+    const executing = harness.service.executeAttempt({
+      workspaceId,
+      jobId,
+      workerId: 'worker.executor:1',
+    } as never);
+
+    await vi.waitFor(() =>
+      expect(harness.fixture.controller.pendingGateKeys()).toEqual(['executor-dispatch']),
+    );
+    expect(harness.events).toEqual(['progress-1000', 'reservation-commit']);
+    expect(harness.usageRow).toMatchObject({
+      usageId,
+      status: 'started',
+      external: false,
+      capability: 'fixture_replay',
+      providerKey: 'fixture',
+      modelKey: 'phase1a-fixture-v1',
+      estimatedCostMicros: '0',
+      currency: 'USD',
+    });
+    expect(harness.currentJob.providerCallCount).toBe(1);
+    expect(harness.finalizeUsage).not.toHaveBeenCalled();
+    expect(harness.committedCheckpoint).toBeNull();
+    expect(harness.committedFinalOutputs).toEqual([]);
+    expect(harness.finalizeFailure).not.toHaveBeenCalled();
+    harness.events.push('dispatch-held');
+
+    harness.fixture.controller.release('executor-dispatch');
+    const result = await executing;
+    const responseSha256 = sha256Hex(Buffer.from(canonicalizeJson(proposal), 'utf8'));
+    expect(harness.events).toEqual([
+      'progress-1000',
+      'reservation-commit',
+      'dispatch-held',
+      'usage-finalize',
+      'checkpoint-commit',
+      'progress-7000',
+      'progress-8500',
+      'atomic-success',
+    ]);
+    expect(harness.finalizeUsage).toHaveBeenCalledOnce();
+    expect(harness.finalizeUsage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        status: 'succeeded',
+        responseSha256,
+        usageMetrics: {
+          calls: 1,
+          inputTokens: 0,
+          outputTokens: 0,
+          inputPixels: 0,
+          outputImages: 0,
+          computeMs: 0,
+        },
+        actualCostMicros: '0',
+        error: null,
+      }),
+    );
+    expect(harness.usageRow).toMatchObject({ status: 'succeeded' });
+    expect(harness.committedCheckpoint).toMatchObject({
+      output: { outputKey: 'analysis.fixture-proposal', disposition: 'checkpoint' },
+      contentSha256: responseSha256,
+      payload: proposal,
+    });
+    expect(harness.committedFinalOutputs).toEqual([
+      expect.objectContaining({
+        outputId,
+        workspaceId,
+        projectId,
+        jobId,
+        attemptId,
+        declaration: expect.objectContaining({
+          outputKey: 'analysis.proposal',
+          disposition: 'final',
+        }),
+        contentSha256: responseSha256,
+        material: { kind: 'analysis_payload', payload: proposal },
+      }),
+    ]);
+    expect(result).toMatchObject({
+      kind: 'succeeded',
+      checkpoint: 'created',
+      job: { state: 'succeeded', progressBps: 10_000, providerCallCount: 1 },
+    });
+    expect(harness.committedSuccessAttempt).toMatchObject({
+      attemptId,
+      state: 'succeeded',
+      finishedAtMs: 1_000,
+      error: null,
+    });
+    expect(harness.finalizeFailure).not.toHaveBeenCalled();
+    expect(harness.cleanupIncomplete).not.toHaveBeenCalled();
+    expect(harness.cleanupStaged).not.toHaveBeenCalled();
+  });
+
   it('never dispatches, finalizes, or rewrites the winning usage on a duplicate reservation', async () => {
     const harness = buildHarness({ duplicateReservation: true });
     await expect(
@@ -280,7 +490,12 @@ describe('timeboxed provider-free analyze executor safety', () => {
         workerId: 'worker.executor:1',
       } as never),
     ).resolves.toEqual({ kind: 'lost-commit-race', winner: 'another-worker' });
-    expect(harness.events).toEqual(['reserve', 'cleanup-incomplete', 'cleanup-staged']);
+    expect(harness.events).toEqual([
+      'progress-1000',
+      'reserve',
+      'cleanup-incomplete',
+      'cleanup-staged',
+    ]);
     expect(harness.finalizeUsage).not.toHaveBeenCalled();
     expect(harness.finalizeFailure).not.toHaveBeenCalled();
     expect(harness.fixture.controller.pendingGateKeys()).toEqual([]);
@@ -312,7 +527,7 @@ describe('timeboxed provider-free analyze executor safety', () => {
       workerId: 'worker.executor:1',
     } as never);
     expect(result).toMatchObject({ kind: 'terminal', code: 'CHECKPOINT_IDENTITY_MISMATCH' });
-    expect(harness.events).toEqual(['cleanup-incomplete', 'cleanup-staged']);
+    expect(harness.events).toEqual(['progress-7000', 'cleanup-incomplete', 'cleanup-staged']);
     expect(harness.finalizeUsage).not.toHaveBeenCalled();
     expect(harness.finalizeFailure).toHaveBeenCalledOnce();
   });

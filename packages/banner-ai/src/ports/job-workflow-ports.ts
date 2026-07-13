@@ -17,8 +17,11 @@ import {
 } from '../jobs/cost-budget.js';
 import {
   StructuredJobErrorSchema,
+  createStructuredJobError,
   decideErrorRetry,
   type ErrorRetryDecision,
+  type StableJobErrorCode,
+  type StructuredJobError,
 } from '../jobs/error-policy.js';
 import {
   GenerationAttemptLifecycleSchema,
@@ -701,6 +704,8 @@ const ErrorRetryDecisionSchema = z.discriminatedUnion('kind', [
 
 export const AttemptFailureCommitRequestSchema = z
   .strictObject({
+    currentJob: GenerationJobLifecycleSchema,
+    currentAttempt: GenerationAttemptLifecycleSchema,
     workspaceId: PersistedWorkspaceIdSchema,
     projectId: PersistedProjectIdSchema,
     jobId: GenerationJobIdSchema,
@@ -720,6 +725,32 @@ export const AttemptFailureCommitRequestSchema = z
     decision: ErrorRetryDecisionSchema,
   })
   .superRefine((request, context) => {
+    const { currentJob, currentAttempt } = request;
+    if (
+      currentJob.state !== 'running' ||
+      currentAttempt.state !== 'running' ||
+      currentJob.workspaceId !== request.workspaceId ||
+      currentJob.projectId !== request.projectId ||
+      currentJob.jobId !== request.jobId ||
+      currentJob.workflowVersionId !== request.workflow.workflowVersionId ||
+      currentJob.operation !== request.workflow.definition.workflowKey ||
+      currentJob.attemptCount !== request.currentAttemptNumber ||
+      currentJob.deadlineAtMs !== request.jobDeadlineAtMs ||
+      currentJob.cancelRequestedAtMs !== request.cancelRequestedAtMs ||
+      currentAttempt.workspaceId !== request.workspaceId ||
+      currentAttempt.jobId !== request.jobId ||
+      currentAttempt.attemptId !== request.attemptId ||
+      currentAttempt.attemptNumber !== request.currentAttemptNumber ||
+      currentAttempt.leaseToken !== request.currentLeaseToken ||
+      request.finishedAtMs < currentAttempt.startedAtMs ||
+      request.finishedAtMs < currentAttempt.heartbeatAtMs
+    ) {
+      context.addIssue({
+        code: 'custom',
+        message: 'Failure commit snapshots do not match the current running job and attempt.',
+      });
+      return;
+    }
     if (request.currentLeaseToken !== request.presentedLeaseToken) {
       context.addIssue({ code: 'custom', message: 'Failure commit lease token is stale.' });
       return;
@@ -759,6 +790,77 @@ export const AttemptFailureCommitRequestSchema = z
   .readonly();
 
 export type AttemptFailureCommitRequest = z.infer<typeof AttemptFailureCommitRequestSchema>;
+
+export const AttemptFailureCommitResultSchema = z
+  .strictObject({
+    job: GenerationJobLifecycleSchema,
+    attempt: GenerationAttemptLifecycleSchema,
+  })
+  .readonly();
+
+export type AttemptFailureCommitResult = z.infer<typeof AttemptFailureCommitResultSchema>;
+
+const persistedFailureSummary = (
+  error: StructuredJobError,
+  code: StableJobErrorCode,
+): {
+  readonly category: StructuredJobError['category'];
+  readonly code: string;
+  readonly message: string;
+} => {
+  const classified = createStructuredJobError(code, error.message);
+  return Object.freeze({
+    category: classified.category,
+    code: classified.code,
+    message: classified.message,
+  });
+};
+
+export const validateAttemptFailureCommitResult = (input: {
+  readonly request: unknown;
+  readonly result: unknown;
+}): AttemptFailureCommitResult => {
+  const request = AttemptFailureCommitRequestSchema.parse(input.request);
+  const result = AttemptFailureCommitResultSchema.parse(input.result);
+  const expectedDecision = decideErrorRetry({
+    error: request.error,
+    workflow: request.workflow,
+    stepKey: request.stepKey,
+    jobId: request.jobId,
+    logicalCallNumber: request.logicalCallNumber,
+    externalIdempotencyKey: request.externalIdempotencyKey,
+    currentAttemptNumber: request.currentAttemptNumber,
+    finishedAtMs: request.finishedAtMs,
+    jobDeadlineAtMs: request.jobDeadlineAtMs,
+    indeterminateProviderCall: request.indeterminateProviderCall,
+  });
+  const attemptError = persistedFailureSummary(request.error, expectedDecision.attemptErrorCode);
+  const expectedAttempt = GenerationAttemptLifecycleSchema.parse({
+    ...request.currentAttempt,
+    state: expectedDecision.attemptState,
+    finishedAtMs: request.finishedAtMs,
+    error: attemptError,
+  });
+  const expectedJob = GenerationJobLifecycleSchema.parse({
+    ...request.currentJob,
+    state: expectedDecision.jobState,
+    nextAttemptAtMs: expectedDecision.kind === 'retry' ? expectedDecision.nextAttemptAtMs : null,
+    finishedAtMs: expectedDecision.kind === 'terminal' ? request.finishedAtMs : null,
+    terminalError:
+      expectedDecision.kind === 'terminal'
+        ? persistedFailureSummary(request.error, expectedDecision.jobErrorCode)
+        : null,
+  });
+  if (
+    canonicalizeJson(result.job) !== canonicalizeJson(expectedJob) ||
+    canonicalizeJson(result.attempt) !== canonicalizeJson(expectedAttempt)
+  ) {
+    throw new TypeError(
+      'Failure commit result must equal the decision-derived job and attempt transition exactly.',
+    );
+  }
+  return result;
+};
 
 export const LeaseAttemptCommandSchema = z
   .strictObject({
@@ -1279,7 +1381,7 @@ export interface GenerationJobRepository {
    */
   recordRunningProgress(input: RunningProgressCommitRequest): Promise<RunningProgressCommitResult>;
   requestCancellation(input: CancellationRequest): Promise<CancellationRequestResult>;
-  finalizeAttemptFailure(input: AttemptFailureCommitRequest): Promise<GenerationJobLifecycle>;
+  finalizeAttemptFailure(input: AttemptFailureCommitRequest): Promise<AttemptFailureCommitResult>;
   /**
    * The adapter must re-resolve asset/scene material from its immutable authoritative row and
    * compare its scoped identity, bounded content, and digest before inserting the checkpoint.
