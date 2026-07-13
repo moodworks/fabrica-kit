@@ -95,6 +95,25 @@ describe('POST /api/banner-ai/analyze', () => {
     },
   );
 
+  it.each(['benchmarkProfile', 'benchmarkAuthorization', 'benchmarkActivation'])(
+    'rejects the extra %s field so the web route cannot activate a real-model benchmark',
+    async (field) => {
+      const formData = new FormData();
+      formData.append('file', createRasterFile('png'));
+      formData.append(field, 'synthetic.invalid');
+
+      const response = await postForm(formData);
+      expect(response.status).toBe(400);
+      await expect(response.json()).resolves.toMatchObject({
+        ok: false,
+        error: {
+          code: 'INVALID_UPLOAD_FORM',
+          message: expect.stringContaining('Only the file field'),
+        },
+      });
+    },
+  );
+
   it('rejects a text value in the file field', async () => {
     const formData = new FormData();
     formData.append('file', 'not-a-file');
