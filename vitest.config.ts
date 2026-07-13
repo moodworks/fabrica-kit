@@ -10,10 +10,18 @@ const commonTestConfig = {
   unstubGlobals: true,
 } as const;
 
+const reactTransformConfig = {
+  jsx: {
+    runtime: 'automatic',
+    importSource: 'react',
+  },
+} as const;
+
 export default defineConfig({
   test: {
     projects: [
       {
+        oxc: reactTransformConfig,
         test: {
           ...commonTestConfig,
           name: 'unit',
@@ -27,6 +35,7 @@ export default defineConfig({
         },
       },
       {
+        oxc: reactTransformConfig,
         test: {
           ...commonTestConfig,
           name: 'integration',

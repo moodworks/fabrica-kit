@@ -4,9 +4,10 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "next dev",
+    "dev": "next dev --webpack",
+    "start": "next start",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "build": "next build"
+    "build": "next build --webpack"
   },
   "dependencies": {
     "@fabrica/banner-ai": "workspace:*",
