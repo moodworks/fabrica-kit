@@ -12,6 +12,7 @@ export const BenchmarkPricingConfigIdSchema = z
 export const UsdMicrosAmountV1Schema = z
   .strictObject({
     currency: z.literal('USD'),
+    unit: z.literal('micro-USD'),
     micros: CanonicalMicrosStringSchema,
   })
   .readonly()
@@ -59,6 +60,7 @@ export const BenchmarkCostUsageV1Schema = z
 export const BenchmarkCostComponentV1Schema = z
   .strictObject({
     usageUnits: BenchmarkUsageUnitSchema,
+    rateUnit: z.literal('micro-USD-per-unit'),
     rateMicrosPerUnit: CanonicalMicrosStringSchema,
     subtotal: UsdMicrosAmountV1Schema,
   })
@@ -133,9 +135,11 @@ const component = (usageUnits: number, rateMicrosPerUnit: string) => {
   const rate = parseMicros(rateMicrosPerUnit);
   return BenchmarkCostComponentV1Schema.parse({
     usageUnits,
+    rateUnit: 'micro-USD-per-unit',
     rateMicrosPerUnit,
     subtotal: {
       currency: 'USD',
+      unit: 'micro-USD',
       micros: formatMicros(rate * BigInt(usageUnits)),
     },
   });
@@ -167,6 +171,6 @@ export const estimateBenchmarkCostV1 = (input: {
     pricingConfigId: pricing.configId,
     pricingConfigVersion: pricing.configVersion,
     components,
-    total: { currency: 'USD', micros: formatMicros(total) },
+    total: { currency: 'USD', unit: 'micro-USD', micros: formatMicros(total) },
   });
 };

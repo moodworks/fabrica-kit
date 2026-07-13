@@ -5,6 +5,7 @@ export * from './evaluation/cost-estimator.js';
 export * from './evaluation/evaluation-runner.js';
 export * from './evaluation/prompt-catalog.js';
 export * from './evaluation/provider-free-fake-model-adapter.js';
+export * from './evaluation/repository-benchmark-fixture.js';
 export * from './export/deterministic-fake-exporter.js';
 export * from './export/zip-inspector.js';
 export * from './jobs/cost-budget.js';

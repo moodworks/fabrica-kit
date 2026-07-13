@@ -1,19 +1,21 @@
 import { z } from 'zod';
 
 import { OutputKeySchema } from '../jobs/syntax.js';
+import { MAX_ATTEMPTS } from '../jobs/timing.js';
 import { canonicalizeJson } from '../scene/canonical-scene-json.js';
 import { BenchmarkCostBreakdownV1Schema } from './cost-estimator.js';
 import {
+  BenchmarkCaseIdSchema,
   SceneAnalysisModelInvocationV1Schema,
   StructuredSceneAnalysisOutputV1Schema,
   validateSceneAnalysisInvocationForRequestV1,
   type LayerProposalV1,
   type SceneAnalysisModelInvocationV1,
   type SceneAnalysisModelRequestV1,
+  type TextObservationV1,
 } from './ai-contracts.js';
 import {
   BannerAiBenchmarkCaseV1Schema,
-  BenchmarkCaseIdSchema,
   BenchmarkQualityReviewFlagSchema,
   benchmarkCaseSceneAnalysisRequestV1,
   type BannerAiBenchmarkCaseV1,
@@ -113,7 +115,13 @@ export const BannerAiBenchmarkEvaluationV1Schema = z
     deterministicReproducibility: z.boolean(),
     cost: BenchmarkCostObservationV1Schema.nullable(),
     latencyMs: z.int().min(0).max(600_000).nullable(),
-    retryCount: z.int().min(0).max(9).nullable(),
+    attemptCount: z.int().min(1).max(MAX_ATTEMPTS).nullable(),
+    retryCount: z
+      .int()
+      .min(0)
+      .max(MAX_ATTEMPTS - 1)
+      .nullable(),
+    failedAttemptCount: z.int().min(0).max(MAX_ATTEMPTS).nullable(),
     qualityReviewFlags: z
       .array(BenchmarkQualityReviewFlagSchema)
       .max(BenchmarkQualityReviewFlagSchema.options.length)
@@ -127,6 +135,45 @@ export const BannerAiBenchmarkEvaluationV1Schema = z
         message: 'Benchmark pass boolean must match the pass classification.',
         path: ['pass'],
       });
+    }
+    const { attemptCount, failedAttemptCount, retryCount } = evaluation;
+    const counts = [attemptCount, retryCount, failedAttemptCount];
+    const hasMetadata = counts.every((count) => count !== null);
+    if (!hasMetadata && counts.some((count) => count !== null)) {
+      context.addIssue({
+        code: 'custom',
+        message: 'Attempt, retry, and failed-attempt evaluation counts must appear together.',
+      });
+    }
+    const metadataValues = [evaluation.cost, evaluation.latencyMs, ...counts];
+    if (
+      evaluation.classification === 'schema-invalid'
+        ? metadataValues.some((value) => value !== null)
+        : metadataValues.some((value) => value === null)
+    ) {
+      context.addIssue({
+        code: 'custom',
+        message: 'Evaluation metadata presence must match the primary invocation classification.',
+      });
+    }
+    if (attemptCount !== null && retryCount !== null && failedAttemptCount !== null) {
+      if (retryCount !== attemptCount - 1) {
+        context.addIssue({
+          code: 'custom',
+          message: 'Evaluation retry count must equal attempt count minus one.',
+          path: ['retryCount'],
+        });
+      }
+      const failureOutcome =
+        evaluation.classification === 'malformed-output' || evaluation.classification === 'timeout';
+      const expectedFailures = failureOutcome ? attemptCount : attemptCount - 1;
+      if (failedAttemptCount !== expectedFailures) {
+        context.addIssue({
+          code: 'custom',
+          message: 'Evaluation failed-attempt count contradicts its outcome classification.',
+          path: ['failedAttemptCount'],
+        });
+      }
     }
   })
   .readonly();
@@ -254,20 +301,41 @@ const evaluateTextPreservation = (
   ) {
     return 'not-evaluated';
   }
-  const actualText = invocation.output.parts
-    .filter((part) => part.role === 'text')
-    .map((part) => part.label);
+  const actualText = textObservationSemanticMultisetV1(invocation.textObservations.observations);
+  const expectedText = textObservationSemanticMultisetV1(
+    benchmark.textPreservation.expectedObservations.observations,
+  );
   if (benchmark.textPreservation.kind === 'no-text-present') {
     return actualText.length === 0 ? 'not-applicable' : 'unexpected-text';
   }
   if (actualText.length === 0) return 'missing';
-  return canonicalizeJson(actualText) === canonicalizeJson(benchmark.textPreservation.expectedText)
-    ? 'preserved'
-    : 'changed';
+  if (actualText.length < expectedText.length) return 'missing';
+  return canonicalizeJson(actualText) === canonicalizeJson(expectedText) ? 'preserved' : 'changed';
 };
 
+const textObservationSemanticMultisetV1 = (
+  observations: readonly TextObservationV1[],
+): readonly string[] =>
+  observations
+    .map((observation) =>
+      canonicalizeJson({
+        observationVersion: observation.observationVersion,
+        text: observation.text,
+        boundingBox: observation.boundingBox,
+        confidence: observation.confidence,
+      }),
+    )
+    .toSorted();
+
 const reproducibilityValue = (invocation: SceneAnalysisModelInvocationV1): unknown => {
-  if (invocation.kind === 'success') return invocation.output;
+  if (invocation.kind === 'success') {
+    return {
+      output: invocation.output,
+      textObservationSemanticMultiset: textObservationSemanticMultisetV1(
+        invocation.textObservations.observations,
+      ),
+    };
+  }
   if (invocation.kind === 'malformed-output') return invocation.rawOutput;
   return invocation.timeout;
 };
@@ -341,7 +409,9 @@ export const evaluateBannerAiBenchmarkCaseV1 = (input: {
     deterministicReproducibility,
     cost,
     latencyMs: metadata?.latency.total ?? null,
+    attemptCount: metadata?.retry.attemptCount ?? null,
     retryCount: metadata?.retry.retryCount ?? null,
+    failedAttemptCount: metadata?.retry.failedAttemptCount ?? null,
     qualityReviewFlags: benchmark.qualityReviewFlags,
     pass: classification === 'pass',
   });

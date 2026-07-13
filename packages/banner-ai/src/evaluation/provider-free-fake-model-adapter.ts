@@ -5,7 +5,9 @@ import {
   PROVIDER_FREE_FIXTURE_SCENE_MODEL_V1,
   SceneAnalysisModelInvocationV1Schema,
   SceneAnalysisModelRequestV1Schema,
+  createModelProducedActualTextObservationSetV1,
   validateSceneAnalysisInvocationForRequestV1,
+  validateSceneAnalysisModelDispatchContentPolicyV1,
   validateSceneAnalysisRequestContextV1,
   type AiModelContractV1,
   type SceneAnalysisModelInvocationV1,
@@ -97,6 +99,7 @@ const validateCanonicalFixtureRequest = (
     expectedModel: PROVIDER_FREE_FIXTURE_SCENE_MODEL_V1,
     expectedWorkflow: ANGEL_PROVIDER_FREE_BENCHMARK_CASE_V1.expectedWorkflow,
   });
+  validateSceneAnalysisModelDispatchContentPolicyV1(request);
   const prompt = getCanonicalBannerAiPrompt(request.input.prompt.id);
   if (
     prompt.version !== request.input.prompt.version ||
@@ -114,6 +117,12 @@ const validateCanonicalFixtureRequest = (
   }
   return request;
 };
+
+const buildProviderFreeActualTextObservations = (request: SceneAnalysisModelRequestV1) =>
+  createModelProducedActualTextObservationSetV1({
+    request,
+    observations: [],
+  });
 
 const buildMetadata = (
   request: SceneAnalysisModelRequestV1,
@@ -157,6 +166,7 @@ const invoke = (
       kind: 'success',
       metadata,
       output: ANGEL_PROVIDER_FREE_SCENE_PROPOSAL_V1,
+      textObservations: buildProviderFreeActualTextObservations(request),
     });
   } else if (scenario === 'malformed-output') {
     invocation = SceneAnalysisModelInvocationV1Schema.parse({

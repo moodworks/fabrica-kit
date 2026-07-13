@@ -7,24 +7,22 @@ import {
   AiInputDigestV1Schema,
   AiModelContractV1Schema,
   BannerAiWorkflowRefV1Schema,
+  BenchmarkCaseIdSchema,
+  BenchmarkExpectedTextObservationSetV1Schema,
   INITIAL_BANNER_ANALYZE_WORKFLOW_REF_V1,
   PROVIDER_FREE_FIXTURE_SCENE_MODEL_V1,
   RepositoryFixtureInputRefV1Schema,
   SceneAnalysisModelInputV1Schema,
   StructuredSceneAnalysisOutputV1Schema,
+  createBenchmarkExpectedTextObservationSetV1,
   createSceneAnalysisModelRequestV1,
   sceneAnalysisModelInputDigestV1,
+  validateBenchmarkExpectedTextObservationsForSceneAnalysisRequestV1,
   validateInitialBannerAnalyzeWorkflowRefV1,
   type SceneAnalysisModelRequestV1,
 } from './ai-contracts.js';
 import { BannerAiPromptRefV1Schema, canonicalBannerAiPromptRef } from './prompt-catalog.js';
-
-const benchmarkCaseIdPattern = /^[a-z0-9][a-z0-9._-]{7,79}$/;
-
-export const BenchmarkCaseIdSchema = z
-  .string()
-  .regex(benchmarkCaseIdPattern)
-  .brand<'BenchmarkCaseId'>();
+import { ANGEL_PROVIDER_FREE_FIXTURE_INPUT_REF_V1 } from './repository-benchmark-fixture.js';
 
 export const BenchmarkStatusSchema = z.enum(['draft', 'ready', 'accepted', 'retired']);
 
@@ -39,13 +37,19 @@ export const TextPreservationRequirementsV1Schema = z.discriminatedUnion('kind',
   z
     .strictObject({
       kind: z.literal('no-text-present'),
-      expectedText: z.tuple([]),
+      expectedObservations: BenchmarkExpectedTextObservationSetV1Schema.refine(
+        (set) => set.observations.length === 0,
+        'A no-text benchmark requires an explicit empty observation set.',
+      ),
     })
     .readonly(),
   z
     .strictObject({
       kind: z.literal('preserve-exact'),
-      expectedText: z.array(z.string().min(1).max(200)).min(1).max(20).readonly(),
+      expectedObservations: BenchmarkExpectedTextObservationSetV1Schema.refine(
+        (set) => set.observations.length > 0,
+        'Exact text preservation requires at least one observed text value.',
+      ),
     })
     .readonly(),
 ]);
@@ -116,13 +120,24 @@ export const BannerAiBenchmarkCaseV1Schema = z
         path: ['expectedLayers'],
       });
     }
-    if (
-      benchmark.textPreservation.kind === 'no-text-present' &&
-      benchmark.expectedLayers.some((layer) => layer.proposal.role === 'text')
-    ) {
+    try {
+      validateBenchmarkExpectedTextObservationsForSceneAnalysisRequestV1({
+        request: createSceneAnalysisModelRequestV1({
+          requestId: benchmark.requestId,
+          modelInput: benchmark.input,
+        }),
+        benchmarkCase: {
+          caseId: benchmark.caseId,
+          caseVersion: benchmark.caseVersion,
+          inputDigest: benchmark.inputDigest,
+          fixture: benchmark.input.fixture,
+        },
+        expectedObservations: benchmark.textPreservation.expectedObservations,
+      });
+    } catch {
       context.addIssue({
         code: 'custom',
-        message: 'A no-text benchmark cannot declare expected text layers.',
+        message: 'Expected text observations must bind to the benchmark request and source.',
         path: ['textPreservation'],
       });
     }
@@ -143,14 +158,9 @@ export type TextPreservationRequirementsV1 = z.infer<typeof TextPreservationRequ
 const ANGEL_NORMALIZED_SOURCE_SHA256 =
   '16767d791c8b19501eb071b51c3ee56f0bbfe3139b0cd39c38e3deef6528dd4f';
 
-const angelRepositoryFixture = RepositoryFixtureInputRefV1Schema.parse({
-  referenceVersion: 1,
-  kind: 'repository-fixture',
-  repositoryPath: 'apps/web/src/server/banner-ai/raster.test-fixtures.ts',
-  exportName: 'createRasterFile',
-  variant: 'png',
-  normalization: 'canonical-raster-upload-v1',
-});
+const angelRepositoryFixture = RepositoryFixtureInputRefV1Schema.parse(
+  ANGEL_PROVIDER_FREE_FIXTURE_INPUT_REF_V1,
+);
 
 const angelSourceAsset = {
   assetId: 'asset_16767d791c8b19501eb071b51c3ee56f0bbfe3139b0cd39c38e3deef65',
@@ -219,14 +229,35 @@ const angelModelInput = SceneAnalysisModelInputV1Schema.parse({
   workflow: INITIAL_BANNER_ANALYZE_WORKFLOW_REF_V1,
 });
 
+const angelRequestId = 'benchmark.angel-local-png-v1:request';
+const angelModelRequest = createSceneAnalysisModelRequestV1({
+  requestId: angelRequestId,
+  modelInput: angelModelInput,
+});
+
+export const ANGEL_PROVIDER_FREE_EXPECTED_TEXT_OBSERVATIONS_V1 =
+  createBenchmarkExpectedTextObservationSetV1({
+    request: angelModelRequest,
+    benchmarkCase: {
+      caseId: 'angel-local-png-v1',
+      caseVersion: 1,
+      inputDigest: angelModelRequest.requestIdentity.inputDigest,
+      fixture: angelRepositoryFixture,
+    },
+    observations: [],
+  });
+
 export const ANGEL_PROVIDER_FREE_BENCHMARK_CASE_V1 = BannerAiBenchmarkCaseV1Schema.parse({
   caseVersion: 1,
   caseId: 'angel-local-png-v1',
-  requestId: 'benchmark.angel-local-png-v1:request',
+  requestId: angelRequestId,
   input: angelModelInput,
   inputDigest: sceneAnalysisModelInputDigestV1(angelModelInput),
   expectedLayers: ANGEL_PROVIDER_FREE_EXPECTED_LAYERS_V1,
-  textPreservation: { kind: 'no-text-present', expectedText: [] },
+  textPreservation: {
+    kind: 'no-text-present',
+    expectedObservations: ANGEL_PROVIDER_FREE_EXPECTED_TEXT_OBSERVATIONS_V1,
+  },
   qualityReviewFlags: ['bounds-approximate', 'ocr-not-required', 'segmentation-not-evaluated'],
   expectedModel: PROVIDER_FREE_FIXTURE_SCENE_MODEL_V1,
   expectedPrompt: canonicalBannerAiPromptRef('scene-analysis-v1'),
