@@ -63,6 +63,7 @@ import {
   CancellationRequestSchema,
   CheckpointCommitRequestSchema,
   CurrentAttemptCommitAuthoritySchema,
+  HeartbeatAttemptCommandSchema,
   PersistedActorWorkspaceContextSchema,
   ProviderUsageFinalizationCommandSchema,
   RunningProgressCommitRequestSchema,
@@ -73,6 +74,7 @@ import {
   validateAttemptFailureCommitResult,
   validateCancellationRequestResult,
   validateCheckpointCommitResult,
+  validateHeartbeatAttemptResult,
   validateLeaseAttemptResult,
   validateProviderUsageFinalizationResult,
   validateRunningProgressCommitResult,
@@ -81,6 +83,7 @@ import {
   type ClockPort,
   type CostBudgetPort,
   type GenerationJobRepository,
+  type HeartbeatAttemptResult,
   type PersistedActorWorkspaceContext,
   type ProviderUsageRepository,
   type WorkflowVersionRepository,
@@ -395,6 +398,54 @@ export class ProviderFreeBannerAnalyzeService {
       });
     }
     return result;
+  }
+
+  async heartbeatAttempt(input: {
+    readonly workspaceId: PersistedWorkspaceId;
+    readonly jobId: GenerationJobId;
+    readonly attemptId: GenerationAttemptId;
+    readonly leaseToken: string;
+  }): Promise<HeartbeatAttemptResult> {
+    const parsed = RecoverLeaseLossSchema.parse(input);
+    const loaded = await this.#loadCurrentExecution({
+      workspaceId: parsed.workspaceId,
+      jobId: parsed.jobId,
+    });
+    if (loaded === null || loaded.attempt.attemptId !== parsed.attemptId) {
+      return { kind: 'rejected', reason: 'stale-state' };
+    }
+    const execution = this.#assertAnalyzeExecution(loaded);
+    const command = HeartbeatAttemptCommandSchema.parse({
+      currentJob: execution.job,
+      currentAttempt: execution.attempt,
+      workspaceId: execution.workspaceId,
+      projectId: execution.projectId,
+      jobId: execution.job.jobId,
+      attemptId: execution.attempt.attemptId,
+      requestSha256: execution.requestSha256,
+      operation: execution.job.operation,
+      workflow: execution.workflow,
+      currentAttemptNumber: execution.attempt.attemptNumber,
+      workerId: execution.attempt.workerId,
+      currentLeaseToken: execution.attempt.leaseToken,
+      presentedLeaseToken: parsed.leaseToken,
+      nowMs: this.#dependencies.clock.nowMs(),
+      currentHeartbeatAtMs: execution.attempt.heartbeatAtMs,
+      currentLeaseExpiresAtMs: execution.attempt.leaseExpiresAtMs,
+      attemptDeadlineAtMs: execution.attemptDeadlineAtMs,
+      jobDeadlineAtMs: execution.job.deadlineAtMs,
+    });
+    try {
+      return validateHeartbeatAttemptResult({
+        command,
+        result: await this.#dependencies.jobs.heartbeatAttempt(command),
+      });
+    } catch (error) {
+      if (error instanceof ProviderFreeAnalyzeCommitRaceError) {
+        return { kind: 'rejected', reason: 'stale-state' };
+      }
+      throw error;
+    }
   }
 
   async executeAttempt(input: {
@@ -760,50 +811,58 @@ export class ProviderFreeBannerAnalyzeService {
     readonly leaseToken: string;
   }): Promise<ProviderFreeAnalyzeAttemptResult> {
     const parsed = RecoverLeaseLossSchema.parse(input);
-    const execution = await this.#loadExactExecution(parsed);
-    if (this.#dependencies.clock.nowMs() < execution.attempt.leaseExpiresAtMs) {
-      throw new TypeError('A live analyze lease cannot be recovered as worker loss.');
+    const loaded = await this.#loadCurrentExecution({
+      workspaceId: parsed.workspaceId,
+      jobId: parsed.jobId,
+    });
+    if (
+      loaded === null ||
+      loaded.attempt.attemptId !== parsed.attemptId ||
+      loaded.attempt.leaseToken !== parsed.leaseToken
+    ) {
+      return { kind: 'lost-commit-race', winner: 'another-worker' };
     }
-    const cleanup = this.#dependencies.temporaries.forAttempt({
+    const execution = this.#assertAnalyzeExecution(loaded);
+    const nowMs = this.#dependencies.clock.nowMs();
+    const cancellationWon = execution.job.cancelRequestedAtMs !== null;
+    if (cancellationWon) {
+      if (nowMs < execution.attempt.leaseExpiresAtMs) {
+        throw new TypeError('A live analyze lease cannot be recovered as worker loss.');
+      }
+    } else {
+      if (nowMs >= execution.job.deadlineAtMs!) {
+        throw new TypeError('The analyze job deadline owns recovery at this boundary.');
+      }
+      if (nowMs >= execution.attemptDeadlineAtMs) {
+        throw new TypeError('The analyze attempt deadline owns recovery at this boundary.');
+      }
+      if (nowMs < execution.attempt.leaseExpiresAtMs) {
+        throw new TypeError('A live analyze lease cannot be recovered as worker loss.');
+      }
+    }
+    const usageInput = await this.#dependencies.usage.findAttemptCall({
       workspaceId: execution.workspaceId,
       jobId: execution.job.jobId,
       attemptId: execution.attempt.attemptId,
+      callKey: ANALYSIS_CALL_KEY,
     });
+    const usage = usageInput === null ? null : ExistingUsageIdentitySchema.parse(usageInput);
+    if (
+      usage !== null &&
+      (usage.workspaceId !== execution.workspaceId ||
+        usage.jobId !== execution.job.jobId ||
+        usage.attemptId !== execution.attempt.attemptId ||
+        usage.callKey !== ANALYSIS_CALL_KEY)
+    ) {
+      throw new TypeError('Lease recovery usage belongs to another analyze attempt call.');
+    }
+    const indeterminateProviderCall = usage?.status === 'started';
+    let result: ProviderFreeAnalyzeAttemptResult;
     try {
-      const usageInput = await this.#dependencies.usage.findAttemptCall({
-        workspaceId: execution.workspaceId,
-        jobId: execution.job.jobId,
-        attemptId: execution.attempt.attemptId,
-        callKey: ANALYSIS_CALL_KEY,
-      });
-      const usage = usageInput === null ? null : ExistingUsageIdentitySchema.parse(usageInput);
-      if (
-        usage !== null &&
-        (usage.workspaceId !== execution.workspaceId ||
-          usage.jobId !== execution.job.jobId ||
-          usage.attemptId !== execution.attempt.attemptId ||
-          usage.callKey !== ANALYSIS_CALL_KEY)
-      ) {
-        throw new TypeError('Lease recovery usage belongs to another analyze attempt call.');
-      }
-      let indeterminateProviderCall = false;
-      if (usage?.status === 'started') {
-        const error = createStructuredJobError(
-          'PROVIDER_RESULT_INDETERMINATE',
-          'Worker lease loss left the fixture call result indeterminate.',
-        );
-        await this.#finalizeUsage({
-          usage,
-          status: 'indeterminate',
-          responseSha256: null,
-          error,
-        });
-        indeterminateProviderCall = true;
-      }
-      const cancellationWon = execution.job.cancelRequestedAtMs !== null;
-      return await this.#commitFailure({
+      result = await this.#commitFailure({
         execution,
         stepKey: 'fixture-analysis',
+        finishedAtMs: nowMs,
         error: cancellationWon
           ? createStructuredJobError('CANCELLED', 'The provider-free analyze job was cancelled.')
           : createStructuredJobError(
@@ -812,9 +871,43 @@ export class ProviderFreeBannerAnalyzeService {
             ),
         indeterminateProviderCall: cancellationWon ? false : indeterminateProviderCall,
       });
+    } catch (error) {
+      if (error instanceof ProviderFreeAnalyzeCommitRaceError) {
+        return { kind: 'lost-commit-race', winner: 'another-worker' };
+      }
+      throw error;
+    }
+
+    const cleanup = this.#dependencies.temporaries.forAttempt({
+      workspaceId: execution.workspaceId,
+      jobId: execution.job.jobId,
+      attemptId: execution.attempt.attemptId,
+    });
+    try {
+      if (usage?.status === 'started') {
+        await this.#finalizeUsage({
+          usage,
+          status: 'indeterminate',
+          responseSha256: null,
+          error: createStructuredJobError(
+            'PROVIDER_RESULT_INDETERMINATE',
+            'Worker lease loss left the fixture call result indeterminate.',
+          ),
+        });
+      }
+      return result;
     } finally {
       await cleanupAttemptTemporaries('lease_loss', cleanup);
     }
+  }
+
+  async #loadCurrentExecution(input: {
+    readonly workspaceId: PersistedWorkspaceId;
+    readonly jobId: GenerationJobId;
+  }): Promise<AuthoritativeWorkflowExecution | null> {
+    const loaded = await this.#dependencies.jobs.loadExecutionAggregate(input);
+    if (loaded === null) return null;
+    return AuthoritativeWorkflowExecutionSchema.parse(loaded);
   }
 
   async #loadExactExecution(input: {
@@ -1044,10 +1137,11 @@ export class ProviderFreeBannerAnalyzeService {
   async #commitFailure(input: {
     readonly execution: AuthoritativeWorkflowExecution;
     readonly stepKey: string;
+    readonly finishedAtMs?: number;
     readonly error: StructuredJobError;
     readonly indeterminateProviderCall: boolean;
   }): Promise<ProviderFreeAnalyzeAttemptResult> {
-    const finishedAtMs = this.#dependencies.clock.nowMs();
+    const finishedAtMs = input.finishedAtMs ?? this.#dependencies.clock.nowMs();
     const step = input.execution.workflow.definition.steps.find(
       (candidate) => candidate.stepKey === input.stepKey,
     );

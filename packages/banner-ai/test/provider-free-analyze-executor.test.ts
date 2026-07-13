@@ -12,6 +12,7 @@ import {
   canonicalizeJson,
   createStructuredJobError,
   createProviderFreeCompositionAnalysisFixturePort,
+  decideHeartbeat,
   deriveRunningProgressCommitTarget,
   nextProgressBps,
   operationRequestSha256,
@@ -38,6 +39,7 @@ import {
   type CheckpointMaterial,
   type ExistingUsageIdentity,
   type FinalOutputCommitIdentity,
+  type HeartbeatAttemptCommand,
   type LeaseAttemptCommand,
   type PersistedCheckpointIdentity,
   type ProviderUsageFinalizationCommand,
@@ -666,7 +668,7 @@ const buildHarness = (input?: {
     finishedAtMs: null,
     terminalError: null,
   });
-  const attempt = {
+  let attempt = GenerationAttemptLifecycleSchema.parse({
     attemptId,
     workspaceId,
     jobId,
@@ -679,7 +681,7 @@ const buildHarness = (input?: {
     startedAtMs: nowMs,
     finishedAtMs: null,
     error: null,
-  };
+  });
   const execution = (): AuthoritativeWorkflowExecution =>
     AuthoritativeWorkflowExecutionSchema.parse({
       workspaceId,
@@ -694,6 +696,7 @@ const buildHarness = (input?: {
       attemptDeadlineAtMs: attempt.startedAtMs + 120_000,
     });
   const events: string[] = [];
+  const heartbeatRequests: HeartbeatAttemptCommand[] = [];
   let usageRow: ReturnType<typeof ExistingUsageIdentitySchema.parse> | null = null;
   let committedCheckpoint: unknown = null;
   let committedFinalOutputs: readonly unknown[] = [];
@@ -794,6 +797,41 @@ const buildHarness = (input?: {
     },
     async loadExecutionAggregate() {
       return execution();
+    },
+    async heartbeatAttempt(heartbeat: HeartbeatAttemptCommand) {
+      heartbeatRequests.push(structuredClone(heartbeat));
+      const decision = decideHeartbeat({
+        lease: {
+          leaseToken: attempt.leaseToken,
+          jobState: job.state,
+          attemptState: attempt.state,
+          heartbeatAtMs: attempt.heartbeatAtMs,
+          leaseExpiresAtMs: attempt.leaseExpiresAtMs,
+          attemptDeadlineAtMs: heartbeat.attemptDeadlineAtMs,
+          jobDeadlineAtMs: job.deadlineAtMs!,
+        },
+        presentedLeaseToken: heartbeat.presentedLeaseToken,
+        nowMs: heartbeat.nowMs,
+      });
+      if (decision.kind === 'rejected') return decision;
+      if (
+        canonicalizeJson(heartbeat.currentJob) !== canonicalizeJson(job) ||
+        canonicalizeJson(heartbeat.currentAttempt) !== canonicalizeJson(attempt)
+      ) {
+        return { kind: 'rejected' as const, reason: 'stale-state' as const };
+      }
+      attempt = GenerationAttemptLifecycleSchema.parse({
+        ...attempt,
+        heartbeatAtMs: decision.heartbeatAtMs,
+        leaseExpiresAtMs: decision.leaseExpiresAtMs,
+      });
+      events.push('heartbeat-renewed');
+      return {
+        ...decision,
+        attemptDeadlineAtMs: heartbeat.attemptDeadlineAtMs,
+        job,
+        attempt,
+      };
     },
     async recordRunningProgress(progressRequest: unknown) {
       const target = deriveRunningProgressCommitTarget(progressRequest);
@@ -925,10 +963,14 @@ const buildHarness = (input?: {
     finalizeFailure,
     cleanupIncomplete,
     cleanupStaged,
-    attempt,
+    heartbeatRequests,
+    get attempt() {
+      return attempt;
+    },
     usage,
     setNowMs(value: number) {
       nowMs = value;
+      fixture.controller.advanceTo(value);
     },
     get usageRow() {
       return usageRow;
@@ -941,6 +983,9 @@ const buildHarness = (input?: {
     },
     get currentJob() {
       return job;
+    },
+    get currentAttempt() {
+      return attempt;
     },
     get committedSuccessAttempt() {
       return committedSuccessAttempt;
@@ -1418,6 +1463,56 @@ const completeHeldCancellationTrace = async () => {
 };
 
 describe('timeboxed provider-free analyze executor safety', () => {
+  it('renews a held running attempt at cadence without extending either absolute deadline', async () => {
+    const harness = buildHarness({ happyPath: true });
+    const executing = harness.service.executeAttempt({
+      workspaceId,
+      jobId,
+      workerId: 'worker.executor:1',
+    } as never);
+    await vi.waitFor(() =>
+      expect(harness.fixture.controller.pendingGateKeys()).toEqual(['executor-dispatch']),
+    );
+
+    harness.setNowMs(11_000);
+    const heartbeat = await harness.service.heartbeatAttempt({
+      workspaceId,
+      jobId,
+      attemptId,
+      leaseToken,
+    } as never);
+    expect(heartbeat).toMatchObject({
+      kind: 'renewed',
+      heartbeatAtMs: 11_000,
+      nextHeartbeatAtMs: 21_000,
+      leaseExpiresAtMs: 41_000,
+      attemptDeadlineAtMs: 121_000,
+      jobDeadlineAtMs: 601_000,
+    });
+    expect(harness.currentJob).toMatchObject({ startedAtMs: 1_000, deadlineAtMs: 601_000 });
+    expect(harness.currentAttempt).toMatchObject({
+      startedAtMs: 1_000,
+      heartbeatAtMs: 11_000,
+      leaseExpiresAtMs: 41_000,
+    });
+    expect(harness.heartbeatRequests).toHaveLength(1);
+    expect(harness.events).toEqual(['progress-1000', 'reservation-commit', 'heartbeat-renewed']);
+
+    harness.fixture.controller.release('executor-dispatch');
+    await expect(executing).resolves.toMatchObject({ kind: 'succeeded' });
+    expect(harness.currentJob).toMatchObject({
+      state: 'succeeded',
+      startedAtMs: 1_000,
+      deadlineAtMs: 601_000,
+    });
+    expect(harness.committedSuccessAttempt).toMatchObject({
+      state: 'succeeded',
+      startedAtMs: 1_000,
+      heartbeatAtMs: 11_000,
+      leaseExpiresAtMs: 41_000,
+    });
+  });
+
   it('commits reservation before held dispatch and completes one exact provider-free success', async () => {
     const harness = buildHarness({ happyPath: true });
     const executing = harness.service.executeAttempt({

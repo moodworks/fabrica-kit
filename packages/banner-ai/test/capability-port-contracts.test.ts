@@ -24,6 +24,7 @@ import {
   GdnValidationRequestSchema,
   GdnValidationResultSchema,
   HeartbeatAttemptCommandSchema,
+  HeartbeatAttemptResultSchema,
   HeartbeatDecisionSchema,
   INITIAL_BANNER_ANALYZE_WORKFLOW_V1,
   LayerExtractionRequestV1Schema,
@@ -62,6 +63,7 @@ import {
   validateCompositionAnalysisResponseV1,
   validateExtractedLayerResultV1,
   validateHeartbeatDecision,
+  validateHeartbeatAttemptResult,
   validateInternalGdnValidationResult,
   validateLeaseAttemptResult,
   validateProviderUsageFinalizationResult,
@@ -337,6 +339,27 @@ const runningAttempt = () => ({
   startedAtMs: 1_000,
   finishedAtMs: null,
   error: null,
+});
+
+const heartbeatCommand = () => ({
+  currentJob: runningJob(),
+  currentAttempt: runningAttempt(),
+  workspaceId,
+  projectId,
+  jobId,
+  attemptId,
+  requestSha256,
+  operation: 'banner.analyze' as const,
+  workflow: INITIAL_BANNER_ANALYZE_WORKFLOW_V1,
+  currentAttemptNumber: 1,
+  workerId: 'worker.local:1',
+  currentLeaseToken: leaseToken,
+  presentedLeaseToken: leaseToken,
+  nowMs: 10_000,
+  currentHeartbeatAtMs: 1_000,
+  currentLeaseExpiresAtMs: 31_000,
+  attemptDeadlineAtMs: 121_000,
+  jobDeadlineAtMs: 601_000,
 });
 
 const executionAggregate = () => ({
@@ -1152,19 +1175,7 @@ describe('authoritative execution and atomic repository command contracts', () =
         requestedAtMs: 2_000,
       }).success,
     ).toBe(false);
-    expect(
-      HeartbeatAttemptCommandSchema.parse({
-        workspaceId,
-        jobId,
-        attemptId,
-        leaseToken,
-        nowMs: 10_000,
-        currentHeartbeatAtMs: 1_000,
-        currentLeaseExpiresAtMs: 31_000,
-        attemptDeadlineAtMs: 121_000,
-        jobDeadlineAtMs: 601_000,
-      }),
-    ).toBeDefined();
+    expect(HeartbeatAttemptCommandSchema.parse(heartbeatCommand())).toBeDefined();
   });
 
   it('permits only the decision-derived failure transition and preserves both snapshots exactly', () => {
@@ -1385,17 +1396,7 @@ describe('authoritative execution and atomic repository command contracts', () =
   });
 
   it('strictly validates heartbeat timing and every cancellation result variant', () => {
-    const heartbeatCommand = {
-      workspaceId,
-      jobId,
-      attemptId,
-      leaseToken,
-      nowMs: 10_000,
-      currentHeartbeatAtMs: 1_000,
-      currentLeaseExpiresAtMs: 31_000,
-      attemptDeadlineAtMs: 121_000,
-      jobDeadlineAtMs: 601_000,
-    } as const;
+    const command = heartbeatCommand();
     const renewed = {
       kind: 'renewed',
       heartbeatAtMs: 10_000,
@@ -1404,12 +1405,10 @@ describe('authoritative execution and atomic repository command contracts', () =
       jobDeadlineAtMs: 601_000,
     } as const;
     expect(HeartbeatDecisionSchema.parse(renewed)).toBeDefined();
-    expect(validateHeartbeatDecision({ command: heartbeatCommand, result: renewed })).toEqual(
-      renewed,
-    );
+    expect(validateHeartbeatDecision({ command, result: renewed })).toEqual(renewed);
     expect(
       validateHeartbeatDecision({
-        command: heartbeatCommand,
+        command,
         result: { kind: 'rejected', reason: 'wrong-token' },
       }),
     ).toEqual({ kind: 'rejected', reason: 'wrong-token' });
@@ -1421,15 +1420,13 @@ describe('authoritative execution and atomic repository command contracts', () =
       { ...renewed, jobDeadlineAtMs: 602_000 },
       { ...renewed, unknown: true },
     ]) {
-      expect(() =>
-        validateHeartbeatDecision({ command: heartbeatCommand, result: invalid }),
-      ).toThrow();
+      expect(() => validateHeartbeatDecision({ command, result: invalid })).toThrow();
     }
     for (const invalidCommand of [
-      { ...heartbeatCommand, currentLeaseExpiresAtMs: 99_000 },
-      { ...heartbeatCommand, currentHeartbeatAtMs: 10_000, currentLeaseExpiresAtMs: 40_000 },
-      { ...heartbeatCommand, attemptDeadlineAtMs: 10_000 },
-      { ...heartbeatCommand, jobDeadlineAtMs: 10_000 },
+      { ...command, currentLeaseExpiresAtMs: 99_000 },
+      { ...command, currentHeartbeatAtMs: 10_000, currentLeaseExpiresAtMs: 40_000 },
+      { ...command, attemptDeadlineAtMs: 10_000 },
+      { ...command, jobDeadlineAtMs: 10_000 },
     ]) {
       expect(() =>
         validateHeartbeatDecision({ command: invalidCommand, result: renewed }),
@@ -1438,6 +1435,30 @@ describe('authoritative execution and atomic repository command contracts', () =
     expect(
       HeartbeatDecisionSchema.safeParse({ kind: 'rejected', reason: 'invented' }).success,
     ).toBe(false);
+
+    const persistedRenewal = {
+      ...renewed,
+      attemptDeadlineAtMs: 121_000,
+      job: runningJob(),
+      attempt: {
+        ...runningAttempt(),
+        heartbeatAtMs: 10_000,
+        leaseExpiresAtMs: 40_000,
+      },
+    } as const;
+    expect(HeartbeatAttemptResultSchema.parse(persistedRenewal)).toBeDefined();
+    expect(validateHeartbeatAttemptResult({ command, result: persistedRenewal })).toEqual(
+      persistedRenewal,
+    );
+    expect(() =>
+      validateHeartbeatAttemptResult({
+        command: {
+          ...command,
+          presentedLeaseToken: 'a0000000-0000-4000-8000-000000000002',
+        },
+        result: persistedRenewal,
+      }),
+    ).toThrow();
 
     const cancelRequest = {
       context: { actorId, workspaceId, requestId: 'request.cancel:0001' },

@@ -39,6 +39,7 @@ import {
   type OperationRequestSha256,
 } from '../jobs/request-digests.js';
 import {
+  BannerOperationSchema,
   CallKeySchema,
   CanonicalUuidSchema,
   CurrencyCodeSchema,
@@ -1032,10 +1033,19 @@ export const validateCancellationRequestResult = (input: {
 
 export const HeartbeatAttemptCommandSchema = z
   .strictObject({
+    currentJob: GenerationJobLifecycleSchema,
+    currentAttempt: GenerationAttemptLifecycleSchema,
     workspaceId: PersistedWorkspaceIdSchema,
+    projectId: PersistedProjectIdSchema,
     jobId: GenerationJobIdSchema,
     attemptId: GenerationAttemptIdSchema,
-    leaseToken: LeaseTokenSchema,
+    requestSha256: OperationRequestSha256Schema,
+    operation: BannerOperationSchema,
+    workflow: WorkflowVersionContractSchema,
+    currentAttemptNumber: z.int().min(1).max(3),
+    workerId: WorkerIdSchema,
+    currentLeaseToken: LeaseTokenSchema,
+    presentedLeaseToken: LeaseTokenSchema,
     nowMs: EpochMillisecondsSchema,
     currentHeartbeatAtMs: EpochMillisecondsSchema,
     currentLeaseExpiresAtMs: EpochMillisecondsSchema,
@@ -1043,19 +1053,74 @@ export const HeartbeatAttemptCommandSchema = z
     jobDeadlineAtMs: EpochMillisecondsSchema,
   })
   .superRefine((command, context) => {
+    const { currentJob, currentAttempt } = command;
     if (
+      currentJob.state !== 'running' ||
+      currentAttempt.state !== 'running' ||
+      currentJob.workspaceId !== command.workspaceId ||
+      currentJob.projectId !== command.projectId ||
+      currentJob.jobId !== command.jobId ||
+      currentJob.requestSha256 !== command.requestSha256 ||
+      currentJob.operation !== command.operation ||
+      currentJob.operation !== command.workflow.definition.workflowKey ||
+      currentJob.workflowVersionId !== command.workflow.workflowVersionId ||
+      currentJob.attemptCount !== command.currentAttemptNumber ||
+      currentJob.deadlineAtMs !== command.jobDeadlineAtMs ||
+      currentAttempt.workspaceId !== command.workspaceId ||
+      currentAttempt.jobId !== command.jobId ||
+      currentAttempt.attemptId !== command.attemptId ||
+      currentAttempt.attemptNumber !== command.currentAttemptNumber ||
+      currentAttempt.workerId !== command.workerId ||
+      currentAttempt.leaseToken !== command.currentLeaseToken ||
+      currentAttempt.heartbeatAtMs !== command.currentHeartbeatAtMs ||
+      currentAttempt.leaseExpiresAtMs !== command.currentLeaseExpiresAtMs ||
+      command.attemptDeadlineAtMs !==
+        checkedEpochAdd(currentAttempt.startedAtMs, ATTEMPT_TIMEOUT_MS) ||
       command.currentLeaseExpiresAtMs - command.currentHeartbeatAtMs !== LEASE_DURATION_MS ||
       command.currentHeartbeatAtMs > command.nowMs
     ) {
       context.addIssue({
         code: 'custom',
-        message: 'Heartbeat command must carry coherent immutable current lease timing.',
+        message:
+          'Heartbeat command must carry the exact current job, attempt, workflow, and lease identity.',
       });
     }
   })
   .readonly();
 
 export type HeartbeatAttemptCommand = z.infer<typeof HeartbeatAttemptCommandSchema>;
+
+const RenewedHeartbeatAttemptResultSchema = z
+  .strictObject({
+    kind: z.literal('renewed'),
+    heartbeatAtMs: EpochMillisecondsSchema,
+    nextHeartbeatAtMs: EpochMillisecondsSchema,
+    leaseExpiresAtMs: EpochMillisecondsSchema,
+    attemptDeadlineAtMs: EpochMillisecondsSchema,
+    jobDeadlineAtMs: EpochMillisecondsSchema,
+    job: GenerationJobLifecycleSchema,
+    attempt: GenerationAttemptLifecycleSchema,
+  })
+  .readonly();
+
+export const HeartbeatAttemptResultSchema = z.discriminatedUnion('kind', [
+  RenewedHeartbeatAttemptResultSchema,
+  z
+    .strictObject({
+      kind: z.literal('rejected'),
+      reason: z.enum([
+        'wrong-token',
+        'stale-state',
+        'non-monotonic',
+        'lease-expired',
+        'attempt-expired',
+        'job-expired',
+      ]),
+    })
+    .readonly(),
+]);
+
+export type HeartbeatAttemptResult = z.infer<typeof HeartbeatAttemptResultSchema>;
 
 export const validateHeartbeatDecision = (input: {
   readonly command: unknown;
@@ -1069,12 +1134,48 @@ export const validateHeartbeatDecision = (input: {
       result.nextHeartbeatAtMs !== checkedEpochAdd(command.nowMs, HEARTBEAT_INTERVAL_MS) ||
       result.leaseExpiresAtMs !== checkedEpochAdd(command.nowMs, LEASE_DURATION_MS) ||
       result.jobDeadlineAtMs !== command.jobDeadlineAtMs ||
+      command.currentLeaseToken !== command.presentedLeaseToken ||
       command.nowMs <= command.currentHeartbeatAtMs ||
       command.nowMs >= command.currentLeaseExpiresAtMs ||
       command.nowMs >= command.attemptDeadlineAtMs ||
       command.nowMs >= command.jobDeadlineAtMs)
   ) {
     throw new TypeError('Heartbeat renewal does not match the requested timestamp and deadlines.');
+  }
+  return result;
+};
+
+export const validateHeartbeatAttemptResult = (input: {
+  readonly command: unknown;
+  readonly result: unknown;
+}): HeartbeatAttemptResult => {
+  const command = HeartbeatAttemptCommandSchema.parse(input.command);
+  const result = HeartbeatAttemptResultSchema.parse(input.result);
+  if (result.kind === 'rejected') return result;
+
+  validateHeartbeatDecision({
+    command,
+    result: {
+      kind: result.kind,
+      heartbeatAtMs: result.heartbeatAtMs,
+      nextHeartbeatAtMs: result.nextHeartbeatAtMs,
+      leaseExpiresAtMs: result.leaseExpiresAtMs,
+      jobDeadlineAtMs: result.jobDeadlineAtMs,
+    },
+  });
+  const expectedAttempt = GenerationAttemptLifecycleSchema.parse({
+    ...command.currentAttempt,
+    heartbeatAtMs: result.heartbeatAtMs,
+    leaseExpiresAtMs: result.leaseExpiresAtMs,
+  });
+  if (
+    result.attemptDeadlineAtMs !== command.attemptDeadlineAtMs ||
+    canonicalizeJson(result.job) !== canonicalizeJson(command.currentJob) ||
+    canonicalizeJson(result.attempt) !== canonicalizeJson(expectedAttempt)
+  ) {
+    throw new TypeError(
+      'Heartbeat persistence may change only the current attempt heartbeat and lease expiry.',
+    );
   }
   return result;
 };
@@ -1374,7 +1475,7 @@ export interface GenerationJobRepository {
   }): Promise<GenerationJobLifecycle>;
   leaseAttempt(input: LeaseAttemptCommand): Promise<LeaseAttemptResult>;
   /** Reload and compare the current lease timing and immutable deadlines under the job lock. */
-  heartbeatAttempt(input: HeartbeatAttemptCommand): Promise<HeartbeatDecision>;
+  heartbeatAttempt(input: HeartbeatAttemptCommand): Promise<HeartbeatAttemptResult>;
   /**
    * Under the job lock, compare the live lease, cancellation, deadlines, workflow identity, and
    * persisted current progress before deriving the completed step's cumulative boundary.
