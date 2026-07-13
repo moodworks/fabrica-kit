@@ -19,7 +19,10 @@ describe('browser raster preflight', () => {
           resolveDimensions = resolve;
         }),
     );
-    let state = bannerAiReducer(initialBannerAiState, { type: 'selection_started' });
+    let state = bannerAiReducer(initialBannerAiState, {
+      type: 'selection_started',
+      requestRevision: 1,
+    });
     const inspection = inspectBrowserRasterUpload(file(name, type), 'blob:preview', decode);
 
     await Promise.resolve();
@@ -27,7 +30,11 @@ describe('browser raster preflight', () => {
     expect(decode).toHaveBeenCalledWith('blob:preview');
     resolveDimensions({ width: 300, height: 250 });
     const selection = await inspection;
-    state = bannerAiReducer(state, { type: 'selection_succeeded', selection });
+    state = bannerAiReducer(state, {
+      type: 'selection_succeeded',
+      requestRevision: 1,
+      selection,
+    });
 
     expect(state).toMatchObject({
       phase: 'idle',

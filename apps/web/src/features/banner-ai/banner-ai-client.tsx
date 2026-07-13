@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { useEffect, useReducer, useRef, type ChangeEvent } from 'react';
 
 import { requestLocalFixtureAnalysis } from './banner-ai-api';
+import { BannerAiSourceImage } from './banner-ai-source-image';
 import { BannerAiStatusPanel } from './banner-ai-status-panel';
 import {
   bannerAiReducer,
@@ -25,7 +26,7 @@ export function BannerAiClient() {
   const [state, dispatch] = useReducer(bannerAiReducer, initialBannerAiState);
   const fileRef = useRef<File | null>(null);
   const previewUrlRef = useRef<string | null>(null);
-  const validationSequenceRef = useRef(0);
+  const requestRevisionRef = useRef(0);
 
   useEffect(
     () => () => {
@@ -40,31 +41,36 @@ export function BannerAiClient() {
     fileRef.current = null;
   };
 
+  const nextRequestRevision = (): number => {
+    requestRevisionRef.current += 1;
+    return requestRevisionRef.current;
+  };
+
   const selectFile = async (file: File | undefined): Promise<void> => {
-    const sequence = validationSequenceRef.current + 1;
-    validationSequenceRef.current = sequence;
+    const requestRevision = nextRequestRevision();
     clearPreview();
     if (file === undefined) {
-      dispatch({ type: 'selection_cleared' });
+      dispatch({ type: 'selection_cleared', requestRevision });
       return;
     }
 
-    dispatch({ type: 'selection_started' });
+    dispatch({ type: 'selection_started', requestRevision });
     const previewUrl = URL.createObjectURL(file);
     try {
       const selection = await inspectBrowserRasterUpload(file, previewUrl);
-      if (validationSequenceRef.current !== sequence) {
+      if (requestRevisionRef.current !== requestRevision) {
         URL.revokeObjectURL(previewUrl);
         return;
       }
       previewUrlRef.current = previewUrl;
       fileRef.current = file;
-      dispatch({ type: 'selection_succeeded', selection });
+      dispatch({ type: 'selection_succeeded', requestRevision, selection });
     } catch (error) {
       URL.revokeObjectURL(previewUrl);
-      if (validationSequenceRef.current !== sequence) return;
+      if (requestRevisionRef.current !== requestRevision) return;
       dispatch({
         type: 'selection_failed',
+        requestRevision,
         message: messageFrom(error, 'The selected image could not be validated.'),
       });
     }
@@ -79,13 +85,17 @@ export function BannerAiClient() {
   const analyze = async (): Promise<void> => {
     const file = fileRef.current;
     if (file === null || state.selection === null) return;
-    dispatch({ type: 'analysis_started' });
+    const requestRevision = nextRequestRevision();
+    dispatch({ type: 'analysis_started', requestRevision });
     try {
       const result = await requestLocalFixtureAnalysis(file);
-      dispatch({ type: 'analysis_succeeded', result });
+      if (requestRevisionRef.current !== requestRevision) return;
+      dispatch({ type: 'analysis_succeeded', requestRevision, result });
     } catch (error) {
+      if (requestRevisionRef.current !== requestRevision) return;
       dispatch({
         type: 'analysis_failed',
+        requestRevision,
         message: messageFrom(error, 'The local fixture analysis could not be completed.'),
       });
     }
@@ -158,14 +168,11 @@ export function BannerAiClient() {
 
           {state.selection !== null ? (
             <div className="preview-panel">
-              <div className="image-stage">
-                {/* A local blob URL is deliberately used for an unoptimized, in-memory preview. */}
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img
-                  src={state.selection.previewUrl}
-                  alt={`Preview of ${state.selection.filename}`}
-                />
-              </div>
+              <BannerAiSourceImage
+                selection={state.selection}
+                result={state.result}
+                review={state.layerReview}
+              />
               <dl className="file-metadata">
                 <div className="filename-row">
                   <dt>Filename</dt>
@@ -217,6 +224,14 @@ export function BannerAiClient() {
           ready={state.selection !== null}
           error={state.error?.message ?? null}
           result={state.result}
+          review={state.layerReview}
+          onSelectPart={(partKey) => dispatch({ type: 'layer_selected', partKey })}
+          onSetPartIncluded={(partKey, included) =>
+            dispatch({ type: 'layer_inclusion_set', partKey, included })
+          }
+          onSetPartVisible={(partKey, visible) =>
+            dispatch({ type: 'layer_visibility_set', partKey, visible })
+          }
         />
       </div>
 
