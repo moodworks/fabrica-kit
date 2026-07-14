@@ -13,6 +13,7 @@ export * from './evaluation/openai-scene-analysis-output.js';
 export * from './evaluation/repository-benchmark-fixture.js';
 export * from './evaluation/real-model-benchmark-corpus-manifest.js';
 export * from './evaluation/real-model-benchmark-pending-corpus.js';
+export * from './evaluation/real-model-benchmark-pending-corpus-v2.js';
 export * from './evaluation/real-model-benchmark-execution.js';
 export * from './evaluation/real-model-benchmark-profile.js';
 export * from './evaluation/real-model-benchmark-quality.js';
