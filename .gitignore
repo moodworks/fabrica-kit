@@ -27,6 +27,7 @@ blob-report/
 /storage/
 /uploads/
 /artifacts/
+/banners-tests/
 *.sqlite
 *.sqlite3
 *.db
