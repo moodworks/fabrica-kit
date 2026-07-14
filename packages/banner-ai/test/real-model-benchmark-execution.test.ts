@@ -4,6 +4,7 @@ import {
   BLOCKED_REAL_MODEL_BENCHMARK_PROFILE_V1,
   DEFAULT_REAL_MODEL_BENCHMARK_MANUAL_CONTROL_V1,
   REAL_MODEL_BENCHMARK_CAPS_V1,
+  ZERO_RETRY_REAL_MODEL_BENCHMARK_POLICY_V1,
   RealModelBenchmarkExecutionLedgerV1Schema,
   decideRealModelBenchmarkAttemptOutcomeV1,
   deriveRealModelBenchmarkLogicalCallKeyV1,
@@ -28,33 +29,59 @@ import {
 beforeAll(prepareSyntheticBenchmarkTestSources);
 
 const pendingRetryInput = () => {
-  const input = mutableClone(validGateInput());
+  const input = validGateInput();
   const fixture = input.ledger.fixtures[0]!;
-  fixture.providerCalls = 1;
-  fixture.failedAttemptCount = 1;
-  fixture.logicalRuns[0]!.attemptedProviderCallCount = 1;
-  fixture.logicalRuns[0]!.elapsedAttemptedProviderCallMs = 60_000;
-  fixture.pendingTimeoutRetry = {
-    kind: 'first-timeout-counted-pending-bound-review',
-    runOrdinal: 1,
-    requestSha256: input.providerRequestSha256,
-    logicalCallKey: input.callTarget.logicalCall.key,
-    mechanism: input.callTarget.logicalCall.mechanism,
-    fullActualOrEstimatedCostMicros: '100000',
-    costAccounting: 'record-full-actual-when-known-otherwise-full-reservation-without-clipping',
-    retryAuthority: false,
-    manualControl: 'engaged-until-fresh-authoritative-release',
-    engagedAfterControlRevision: 2,
-    freshReleaseRevision: 'must-be-strictly-greater-than-engaged-revision',
-  } as never;
-  input.ledger.totalProviderCalls = 1;
-  input.ledger.totalFailedAttempts = 1;
-  input.ledger.worstCaseReservedSpendMicros = '100000';
-  input.ledger.accountedActualOrEstimatedSpend.micros = '100000';
-  input.ledger.elapsedWallTimeMs = 60_000;
-  input.ordinals = { fixtureOrdinal: 1, runOrdinal: 1, retryOrdinal: 1, callOrdinal: 2 };
-  input.manualControl = releasedManualControlFor(input.authorization, 3);
-  return input;
+  return {
+    ...input,
+    ledger: {
+      ...input.ledger,
+      totalProviderCalls: 1,
+      totalFailedAttempts: 1,
+      worstCaseReservedSpendMicros: '100000',
+      accountedActualOrEstimatedSpend: {
+        ...input.ledger.accountedActualOrEstimatedSpend,
+        micros: '100000',
+      },
+      elapsedWallTimeMs: 60_000,
+      fixtures: [
+        {
+          ...fixture,
+          providerCalls: 1,
+          failedAttemptCount: 1,
+          logicalRuns: [
+            {
+              ...fixture.logicalRuns[0]!,
+              attemptedProviderCallCount: 1,
+              elapsedAttemptedProviderCallMs: 60_000,
+            },
+            fixture.logicalRuns[1]!,
+          ],
+          pendingTimeoutRetry: {
+            kind: 'first-timeout-counted-pending-bound-review' as const,
+            runOrdinal: 1 as const,
+            requestSha256: input.providerRequestSha256,
+            logicalCallKey: input.callTarget.logicalCall.key,
+            mechanism: input.callTarget.logicalCall.mechanism,
+            fullActualOrEstimatedCostMicros: '100000',
+            costAccounting:
+              'record-full-actual-when-known-otherwise-full-reservation-without-clipping' as const,
+            retryAuthority: false as const,
+            manualControl: 'engaged-until-fresh-authoritative-release' as const,
+            engagedAfterControlRevision: 10,
+            freshReleaseRevision: 'must-be-strictly-greater-than-engaged-revision' as const,
+          },
+        },
+        ...input.ledger.fixtures.slice(1),
+      ],
+    },
+    ordinals: {
+      fixtureOrdinal: 1 as const,
+      runOrdinal: 1 as const,
+      retryOrdinal: 1 as const,
+      callOrdinal: 2,
+    },
+    manualControl: releasedManualControlFor(input.authorization),
+  };
 };
 
 const nearLimitLedger = (manifest = admittedManifest()) => ({
@@ -137,7 +164,7 @@ const nearLimitInput = () => {
   const profile = selectedProfile();
   const manifest = admittedManifest();
   const entry = manifest.entries[2]!;
-  const request = requestFor(profile, entry);
+  const request = requestFor(profile, entry, 2);
   const authorization = authorizationFor(profile, manifest);
   const base = validGateInput();
   const canonicalRequestDigest = digestValidatedCapabilityRequest(request);
@@ -168,11 +195,22 @@ const nearLimitInput = () => {
       endpoint: profile.candidateSelection.endpointAllowlist[0],
       serverSideSecretName: profile.candidateSelection.serverSideSecret.name,
       logicalCall: {
+        kind: 'evidenced-timeout-replay' as const,
         key: logicalCallKey,
-        mechanism: profile.candidateSelection.timeoutReplayContract.mechanism,
+        mechanism:
+          authorization.retryPolicy.mode === 'one-timeout-replay-with-exact-provider-evidence'
+            ? authorization.retryPolicy.mechanism
+            : (() => {
+                throw new TypeError('Expected test-only evidenced replay policy.');
+              })(),
       },
     },
-    ordinals: { fixtureOrdinal: 3, runOrdinal: 2, retryOrdinal: 0, callOrdinal: 8 },
+    ordinals: {
+      fixtureOrdinal: 3 as const,
+      runOrdinal: 2 as const,
+      retryOrdinal: 0 as const,
+      callOrdinal: 8,
+    },
     ledger: nearLimitLedger(manifest),
     manualControl: releasedManualControlFor(authorization),
   };
@@ -218,7 +256,7 @@ const terminalLedger = (
       failureClass,
       attemptRecorded: true as const,
       fixtureId: manifest.entries[0]!.fixtureId,
-      runOrdinal: 1,
+      runOrdinal: 1 as const,
       callOrdinal: 1,
       previousAccountedActualOrEstimatedSpendMicros: '0',
       fullActualOrEstimatedCostMicros,
@@ -260,10 +298,15 @@ const consistentSecondRunTerminalLedger = () => {
   ledger.worstCaseReservedSpendMicros = '200000';
   ledger.accountedActualOrEstimatedSpend.micros = '200000';
   ledger.elapsedWallTimeMs = 2_000;
-  ledger.terminalAttempt.runOrdinal = 2;
-  ledger.terminalAttempt.callOrdinal = 2;
-  ledger.terminalAttempt.previousAccountedActualOrEstimatedSpendMicros = '100000';
-  return ledger;
+  return {
+    ...ledger,
+    terminalAttempt: {
+      ...ledger.terminalAttempt,
+      runOrdinal: 2 as const,
+      callOrdinal: 2,
+      previousAccountedActualOrEstimatedSpendMicros: '100000',
+    },
+  };
 };
 
 const consistentPriorRetryThenTimeoutTerminalLedger = () => {
@@ -287,21 +330,17 @@ const consistentPriorRetryThenTimeoutTerminalLedger = () => {
 };
 
 describe('bound execution preparation', () => {
-  it('cannot prepare from the inactive profile and returns no retry or dispatch authority', () => {
+  it('uses the exact inactive OpenAI profile and returns no retry or dispatch authority', () => {
     const input = validGateInput();
-    expect(() =>
-      prepareRealModelBenchmarkCallIntentV1({
-        ...input,
-        profile: BLOCKED_REAL_MODEL_BENCHMARK_PROFILE_V1,
-      }),
-    ).toThrow();
+    expect(BLOCKED_REAL_MODEL_BENCHMARK_PROFILE_V1).toEqual(input.profile);
     expect(prepareRealModelBenchmarkCallIntentV1(input)).toMatchObject({
       kind: 'validated-future-real-model-call-intent',
       authorizationId: input.authorization.authorizationId,
       authorizationSha256: digestRealModelBenchmarkAuthorizationV1(input.authorization),
       providerKey: input.profile.candidateSelection.model.identity.providerKey,
       providerModelIdentifier: input.profile.candidateSelection.providerModelIdentifier,
-      immutableProviderModelVersion: input.profile.candidateSelection.immutableProviderModelVersion,
+      providerModelAliasStatus: 'proposed-unverified-provider-alias',
+      immutableSnapshotClaim: false,
       responseIdentityRequirement: input.profile.candidateSelection.responseIdentityRequirement,
       dispatchAuthority: false,
       retryAuthority: false,
@@ -315,7 +354,10 @@ describe('bound execution preparation', () => {
     const deletionCases = [
       ['provider', ['profile', 'candidateSelection', 'model', 'identity', 'providerKey']],
       ['model', ['profile', 'candidateSelection', 'model', 'identity', 'modelKey']],
-      ['immutable version', ['profile', 'candidateSelection', 'immutableProviderModelVersion']],
+      [
+        'model evidence status',
+        ['profile', 'candidateSelection', 'providerModelVersionEvidenceStatus'],
+      ],
       ['endpoint', ['profile', 'candidateSelection', 'endpointAllowlist', '0', 'url']],
       ['request prompt', ['request', 'input', 'prompt']],
       ['request content policy', ['request', 'contentPolicy']],
@@ -342,7 +384,7 @@ describe('bound execution preparation', () => {
         ...input,
         manualControl: DEFAULT_REAL_MODEL_BENCHMARK_MANUAL_CONTROL_V1,
       }),
-    ).toThrow(/manual control/i);
+    ).toThrow(/manual-control/i);
     for (const [mutate, label] of [
       [(changed: Mutable<typeof input>) => void (changed.normalizedSource.bytes[0] = 0), 'bytes'],
       [
@@ -387,7 +429,7 @@ describe('bound execution preparation', () => {
         'mechanism',
         (input) => void (input.callTarget.logicalCall.mechanism.exactHeaderName = 'Other-Key'),
       ],
-      ['stale release', (input) => void (input.manualControl.revision = 2)],
+      ['stale release', (input) => void (input.manualControl.revision = 10)],
       ['remaining caps', (input) => void (input.ledger.elapsedWallTimeMs = 540_001)],
     ];
     for (const [label, mutate] of substitutions) {
@@ -459,32 +501,58 @@ describe('exact call, failure, spend, and latency caps', () => {
   });
 
   it('rejects before a call when global or per-fixture failure exposure is exhausted', () => {
-    const globalCap = mutableClone(nearLimitInput());
-    const fixture = globalCap.ledger.fixtures[2]!;
-    fixture.providerCalls = 2;
-    fixture.failedAttemptCount = 1;
-    fixture.logicalRuns[1]!.attemptedProviderCallCount = 1;
-    fixture.logicalRuns[1]!.elapsedAttemptedProviderCallMs = 60_000;
-    fixture.pendingTimeoutRetry = {
-      kind: 'first-timeout-counted-pending-bound-review',
-      runOrdinal: 2,
-      requestSha256: globalCap.providerRequestSha256,
-      logicalCallKey: globalCap.callTarget.logicalCall.key,
-      mechanism: globalCap.callTarget.logicalCall.mechanism,
-      fullActualOrEstimatedCostMicros: '100000',
-      costAccounting: 'record-full-actual-when-known-otherwise-full-reservation-without-clipping',
-      retryAuthority: false,
-      manualControl: 'engaged-until-fresh-authoritative-release',
-      engagedAfterControlRevision: 2,
-      freshReleaseRevision: 'must-be-strictly-greater-than-engaged-revision',
-    } as never;
-    globalCap.ledger.totalProviderCalls = 8;
-    globalCap.ledger.totalFailedAttempts = 3;
-    globalCap.ledger.worstCaseReservedSpendMicros = '800000';
-    globalCap.ledger.accountedActualOrEstimatedSpend.micros = '800000';
-    globalCap.ordinals.retryOrdinal = 1;
-    globalCap.ordinals.callOrdinal = 9;
-    globalCap.manualControl = releasedManualControlFor(globalCap.authorization, 3);
+    const base = nearLimitInput();
+    const fixture = base.ledger.fixtures[2]!;
+    const globalCap = {
+      ...base,
+      ledger: {
+        ...base.ledger,
+        totalProviderCalls: 8,
+        totalFailedAttempts: 3,
+        worstCaseReservedSpendMicros: '800000',
+        accountedActualOrEstimatedSpend: {
+          ...base.ledger.accountedActualOrEstimatedSpend,
+          micros: '800000',
+        },
+        fixtures: [
+          base.ledger.fixtures[0]!,
+          base.ledger.fixtures[1]!,
+          {
+            ...fixture,
+            providerCalls: 2,
+            failedAttemptCount: 1,
+            logicalRuns: [
+              fixture.logicalRuns[0]!,
+              {
+                ...fixture.logicalRuns[1]!,
+                attemptedProviderCallCount: 1,
+                elapsedAttemptedProviderCallMs: 60_000,
+              },
+            ],
+            pendingTimeoutRetry: {
+              kind: 'first-timeout-counted-pending-bound-review' as const,
+              runOrdinal: 2 as const,
+              requestSha256: base.providerRequestSha256,
+              logicalCallKey: base.callTarget.logicalCall.key,
+              mechanism: base.callTarget.logicalCall.mechanism,
+              fullActualOrEstimatedCostMicros: '100000',
+              costAccounting:
+                'record-full-actual-when-known-otherwise-full-reservation-without-clipping' as const,
+              retryAuthority: false as const,
+              manualControl: 'engaged-until-fresh-authoritative-release' as const,
+              engagedAfterControlRevision: 10,
+              freshReleaseRevision: 'must-be-strictly-greater-than-engaged-revision' as const,
+            },
+          },
+        ],
+      },
+      ordinals: {
+        ...base.ordinals,
+        retryOrdinal: 1 as const,
+        callOrdinal: 9,
+      },
+      manualControl: releasedManualControlFor(base.authorization),
+    };
     expect(() => prepareRealModelBenchmarkCallIntentV1(globalCap)).toThrow(/caps cannot fit/i);
 
     const perFixtureCap = consistentSecondTimeoutTerminalLedger();
@@ -507,6 +575,7 @@ describe('non-authoritative outcome classification and terminal accounting', () 
     const pending = decideRealModelBenchmarkAttemptOutcomeV1({
       kind: 'timeout',
       priorFixtureRetryCount: 0,
+      retryPolicy: validGateInput().authorization.retryPolicy,
       ...accounting,
     });
     expect(pending).toEqual({
@@ -524,6 +593,7 @@ describe('non-authoritative outcome classification and terminal accounting', () 
       decideRealModelBenchmarkAttemptOutcomeV1({
         kind: 'timeout',
         priorFixtureRetryCount: 0,
+        retryPolicy: validGateInput().authorization.retryPolicy,
         providerAtMostOnceExecutionAndBillingContractVerified: true,
         identicalLogicalCallKeyAndMechanism: true,
         ...accounting,
@@ -557,9 +627,22 @@ describe('non-authoritative outcome classification and terminal accounting', () 
     const timeout = decideRealModelBenchmarkAttemptOutcomeV1({
       kind: 'timeout',
       priorFixtureRetryCount: 1,
+      retryPolicy: validGateInput().authorization.retryPolicy,
       ...accounting,
     });
     expect(timeout).toMatchObject({
+      action: 'record-terminal-inconclusive',
+      failureClass: 'timeout-terminal',
+      retryAuthority: false,
+    });
+    expect(
+      decideRealModelBenchmarkAttemptOutcomeV1({
+        kind: 'timeout',
+        priorFixtureRetryCount: 0,
+        retryPolicy: ZERO_RETRY_REAL_MODEL_BENCHMARK_POLICY_V1,
+        ...accounting,
+      }),
+    ).toMatchObject({
       action: 'record-terminal-inconclusive',
       failureClass: 'timeout-terminal',
       retryAuthority: false,
@@ -594,8 +677,14 @@ describe('non-authoritative outcome classification and terminal accounting', () 
   });
 
   it('rejects impossible terminal chronology and an extra unrecovered non-target failure', () => {
-    const alreadySuccessfulRun = consistentSecondRunTerminalLedger();
-    alreadySuccessfulRun.terminalAttempt.runOrdinal = 1;
+    const secondRunTerminal = consistentSecondRunTerminalLedger();
+    const alreadySuccessfulRun = {
+      ...secondRunTerminal,
+      terminalAttempt: {
+        ...secondRunTerminal.terminalAttempt,
+        runOrdinal: 1 as const,
+      },
+    };
     expect(RealModelBenchmarkExecutionLedgerV1Schema.safeParse(alreadySuccessfulRun).success).toBe(
       false,
     );

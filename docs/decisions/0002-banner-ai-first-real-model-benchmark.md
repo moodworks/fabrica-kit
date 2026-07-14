@@ -1,217 +1,165 @@
 # ADR 0002: Banner AI first real-model benchmark authorization gate
 
-- Status: Proposed and hard-disabled
-- Date: 2026-07-13
+- Status: Proposed, evidence-blocked, corpus-blocked, and hard-disabled
+- Date: 2026-07-14
 - Decision owners: Sol (scope), Terra (independent acceptance), Luna (implementation)
 - Profile: `banner-scene-analysis-ocr-first-call-v1`
 
 ## Decision
 
-Define, but do not activate, the first real-model benchmark category: scene analysis and exact
-OCR/text observations from a single image-input model using strict structured JSON. Each attempted
-run makes exactly one attempted provider call. A separately authorized future timeout replay would
-be a second counted attempt for the same logical run, never a follow-up chosen by the model.
+Record one explicit first benchmark candidate without activating it:
 
-The repository does not establish a real provider, exact model identifier, immutable model or
-snapshot pin, exact HTTPS endpoint, provider/model/endpoint-specific worst-case request-cost
-evidence, or an at-most-once timeout replay and billing contract. Candidate selection is therefore
-a blocking user decision. No placeholder candidate or endpoint is committed in the profile.
-Visibly test-only `.invalid` identities exercise provider-free validation only. This milestone did
-not live-verify price, model availability, provider terms, or provider policy.
-
-This category is first because useful scene-layer proposals and preserved visible copy are the
-earliest product evidence needed to judge Banner decomposition. One bounded vision request tests
-both without introducing another provider or an autonomous workflow. Segmentation, inpainting,
-animation, rendering, and export are deliberately deferred and receive no benchmark budget.
-
-The profile requires:
-
-- image input; strict structured JSON; scene-analysis parts; exact normalized OCR observations;
-  normalized bounding boxes; and deterministic source, request, workflow, and provider-call
-  identities;
-- canonical `scene-analysis-v1` prompt version 1 and content SHA-256
+- provider: `openai`;
+- API family: Responses API;
+- sole endpoint/method: `POST https://api.openai.com/v1/responses`;
+- requested model alias: `gpt-5.6-terra`;
+- task: one trusted local image-input scene-analysis + OCR request;
+- detail: explicit `original`;
+- output: strict structured JSON only;
+- instructions: canonical `scene-analysis-v1`, version 1, SHA-256
   `5cc311b7b353e06c61bcdf840b40dff9d35de0aea12851ffa18a654177917227`;
-- content-policy definition SHA-256
-  `14a27c163a4082a966971028e59b6d1d56ea9cde99038b823c0a18b1ea92d0c4`;
-- the initial immutable Banner analyze workflow, `CompositionAnalysisResultV1`,
-  `ModelProducedActualTextObservationSetV1`, and at most five proposed parts;
-- exact response identity equality with the selected provider, model identifier, and immutable
-  version; and
-- no tools, browsing, retrieval, URL fetching, code execution, model-directed follow-ups, or
-  autonomous calls.
+- output limit: `max_output_tokens: 4096`;
+- tools/background/storage: `tools: []`, `tool_choice: "none"`, `background: false`,
+  `store: false`;
+- absent: browsing, retrieval, code execution, provider URL fetching, previous response,
+  conversation, provider-side autonomous/background work, and follow-up calls.
 
-The committed profile is unselected, has an empty endpoint allowlist, disabled network, an engaged
-manual control, no authorization, and no dispatcher. Environment or secret presence alone never
-authorizes execution.
+Segmentation/SAM, cutouts, background fill/inpainting, animation, rendering, export, web
+activation, persistence, auth, billing, and deployment are excluded.
 
-## Candidate, replay, and endpoint decisions still required
+The requested model ID is a proposed and unverified provider alias. It is **not** claimed to be an
+immutable snapshot. The Responses request contract is also a hash-bound proposed/unverified shape.
+No official or network verification occurred. Model availability, exact API field semantics,
+provider terms, and an observed model-version/fingerprint identity remain future gates.
+The existing Banner model contract's numeric `modelVersion: 1` is only its internal contract
+revision and is not provider-version or snapshot evidence.
 
-A future selected candidate must reuse an external project AI-model identity with `ocr`,
-`scene_analysis`, and `structured_output` capabilities and bind one canonical credential-free
-HTTPS `POST` endpoint. The user must supply and confirm two provider/model/version/endpoint-specific
-evidence digests:
+## Pricing and cost gate
 
-1. evidence that the selected bounded request cannot exceed the configured worst-case reservation
-   ceiling; and
-2. provider documentation or contract evidence for an exact HTTPS idempotency header name and the
-   assertion that an initial request and identical post-timeout replay with the same logical key
-   result in at-most-once provider execution and billing for that logical run.
+The repository records the user-supplied pricing evidence captured 2026-07-13, source descriptor
+`user-supplied OpenAI public pricing page evidence`: standard input USD 2.50/M tokens
+(`2500000` micro-USD/M) and standard output USD 15.00/M tokens (`15000000` micro-USD/M). The
+canonical assertion has a computed SHA-256, `productionPriceTruth: false`, and requires future
+reconfirmation.
 
-No such replay contract is currently verified or committed. Without it, timeout is terminal and a
-future selected profile must be revised to zero retries before authorization. With it, the logical
-call key is a deterministic SHA-256 projection of the authorization digest, admitted-manifest
-digest, fixture ID, run ordinal, and validated provider-request digest. Retry ordinal is excluded:
-the initial attempt and its timeout replay use the identical key, while another run has another key.
-The outcome classifier is explicitly non-authoritative and never grants retry authority. A first
-timeout is counted, preserves its exact cost, engages manual control, and can only become a pending
-bound-review state. After a fresh authoritative release, the preparation gate must revalidate the
-candidate, authorization, request digest, key, mechanism, and every remaining cap; even its result
-has `retryAuthority: false` and `dispatchAuthority: false`. The new release revision must be
-strictly greater than the revision recorded when the timeout re-engaged control.
+Token rates do not establish a USD 0.10 request maximum. Execution remains blocked until a future
+authorization binds a separate provider/model/endpoint/request-shape proof covering the exact 4096
+output-token cap, `original` image-token formula, prompt/schema/input tokens, hidden/reasoning and
+all billed output, rounding, and other billed units. The proof must establish at most `100000`
+micro-USD for the exact bounded request.
 
-The endpoint policy rejects literal IP hosts and localhost/local/internal-style names. The future
-executor must resolve only public approved addresses, pin them for the call, and reject private,
-reserved, link-local, and loopback addresses, DNS rebinding, proxy overrides, redirects, alternate
-origins, paths, or methods. Queries, fragments, and embedded credentials are forbidden.
+Existing caps remain authoritative ceilings: exactly 3 admitted fixtures; 2 successful runs each;
+6 successful runs; at most 9 calls; `100000` micro-USD/call; `900000` total; 60 seconds/attempted
+call; 120 seconds/logical run; and 600 seconds total.
 
-## Proposed benchmark gates
+## Retry decision
 
-Every budget below is configuration marked exactly **“requires explicit user authorization before
-execution.”** These values are benchmark caps, not price or performance claims.
+No OpenAI idempotency contract is asserted. The committed mode is zero retry: no idempotency
+header/mechanism, timeout terminal, and `retryOrdinal > 0` rejected. Numerical retry caps remain
+ceilings only.
 
-- Corpus and success: exactly three admitted fixtures; two successful runs per fixture; six of six
-  strict-output runs.
-- Calls and failures: at most nine provider calls, three retries total, one timeout retry across
-  both runs for each fixture, two failed attempts per fixture, and three failed attempts globally.
-  A call is rejected when a fixture already has two failures or the ledger already has three, so a
-  further failure can never exceed either exposure. The nine-call arithmetic is a conservative
-  ceiling; execution may stop earlier.
-- Cost: `100000` micro-USD provider/model/endpoint-specific worst-case reservation per attempted
-  call and `900000` micro-USD total. The existing exact cost contract carries one `100000`
-  model-inference reservation unit and zero segmentation, inpainting, storage, retry, or
-  failed-attempt surcharge units, with `productionPriceTruth: false`. This is not a flat provider
-  tariff or production pricing truth. The user-confirmed evidence must show that the selected
-  bounded request cannot exceed the reservation.
-- Ledger: `worstCaseReservedSpendMicros` must equal `totalProviderCalls * 100000` using bigint
-  arithmetic. Actual cost is recorded when known; otherwise the entire reservation is accounted,
-  including failed or indeterminate attempts. A running ledger cannot carry an overrun, and a
-  future pre-call gate reserves the complete next-call ceiling.
-- Time: at most `60000` ms per attempted provider call, `120000` ms per logical run across its
-  initial attempt and sole possible timeout replay, and `600000` ms total wall-clock time. The
-  ledger records attempted-call count and elapsed provider-call time separately for each fixture
-  and logical run. “Successful run” continues to mean one strict successful output, not an attempt.
-- Image: original ingress is JPEG or PNG; transmitted normalization is PNG; byte size is
-  `1..5242880`, each side is `64..2048`, and decoded area is at most `4194304` pixels.
-- Scene quality: each successful proposal has three to five human-useful parts. Across six runs,
-  required-layer recall and useful-proposal precision must each be at least 8000 basis points.
-- OCR quality: duplicate-aware exact normalized-text multiset precision and recall must each be
-  10000 basis points. Deterministic one-to-one exact-text matches require bounding-box IoU of at
-  least 7000 basis points, calculated with integer arithmetic. Model confidence is never oracle
-  truth. A no-text fixture passes only with zero model-produced text observations.
+A future exact authorization may choose a one-time timeout replay only when it binds dated current
+provider/model/endpoint evidence, the exact header/mechanism, identical logical-call behavior, and
+an at-most-once execution-and-billing contract. Without all of that evidence, the zero-retry branch
+is mandatory.
 
-Before a call, the future boundary must prove the next full reservation and attempted-call timeout
-fit the logical-run and total remaining caps. Equality is allowed; exceeding a cap is not.
-Malformed output, permanent provider rejection, policy rejection, rate limiting, transient
-transport failure, indeterminate result, and worker loss are closed terminal outcome classes;
-unknown outcomes fail closed. Every non-success is counted and preserves the exact canonical full
-actual cost when known or full reservation otherwise. The ledger has distinct validated running
-and terminal-inconclusive states. A terminal state has `retryAuthority: false`, engaged manual
-control, the exact last-call identity and outcome class, and refuses all later preparation. Its
-aggregate accounting must equal the canonical prior-accounted amount plus the full terminal-call
-amount; the prior amount cannot exceed the reservation for all earlier calls. Only the target
-fixture may carry one newly unrecovered failure, and its terminal run is exactly the next run after
-its strict successes. An actual post-call overrun preserves the complete terminal-call amount
-without clipping, requires that call itself to exceed `100000` micro-USD, and can exist only in the
-explicit terminal-overrun state. A running ledger rejects that overrun.
+## Corpus decision
 
-## Corpus admission
+The production source registry and manifest entries are empty; execution is corpus-blocked. The
+12-by-8 Angel fixture is ineligible. No banner was downloaded or fabricated.
 
-The committed manifest is empty and blocked; it downloads and fabricates nothing. The existing
-12-by-8, 77-byte Angel fixture is explicitly ineligible. Execution requires the user to supply
-exactly three JPG/PNG creatives:
+Required intake is exactly:
 
-1. mixed subject and copy, with three to five required oracle layers and at least two exact text
-   occurrences;
-2. text-heavy, with three to five required oracle layers and at least three exact text occurrences;
-3. layered with no text, with three to five required oracle layers and zero text occurrences.
+1. Mixed subject + copy, 3–5 required oracle layers, at least 2 exact text occurrences.
+2. Text-heavy, 3–5 required oracle layers, at least 3 exact text occurrences.
+3. Layered no-text, 3–5 required oracle layers, exactly 0 text occurrences.
 
-Each entry must be user-owned or explicitly licensed for third-party provider evaluation. It must
-record original content type, digest, and byte size; normalized PNG digest, size, and dimensions;
-owner/license evidence; completed pixel and metadata review; confirmed absence of secrets,
-personal data, credentials, private client work, and embedded or visible tracking URLs; and a
-separate explicit human provider-transmission approval object and evidence digest. There is no URL
-source field.
+Each must be user-owned or explicitly licensed for OpenAI evaluation; a repository-local JPG/PNG
+no larger than 5 MiB; 64–2048 pixels per side; and no more than 4,194,304 pixels. Intake requires
+original digest/type/size/dimensions, normalized PNG digest/size/dimensions, license evidence,
+pixel+metadata/privacy review, absence of secrets/PII/credentials/private client work/tracking
+URLs, human oracle evidence, and exact OpenAI transmission approval. Approval binds normalized
+digest, provider, model alias, endpoint, profile/purpose, authorization revision/freshness, and
+canonical UTC `reviewedAt`/`expiresAt` plus evidence digests.
 
-Provider-neutral human oracle evidence has a separate `human-expected-oracle` role, digest,
-reference, required layers, and expected text occurrences. Model-produced evidence is structurally
-incompatible and cannot be admitted as an oracle. OCR scoring additionally validates the complete
-model-produced evidence envelope against the authoritative request and admitted source/fixture
-binding before comparison.
+The server-internal loader accepts manifest and authorization context only. A package-owned static
+registry owns filenames, types, references, and bytes. It validates all three identities before
+reading bytes, copies and verifies originals, re-normalizes each through trusted raster rules,
+re-verifies source/normalized type/size/dimensions/digests, and mints one whole-corpus capability
+only after atomic success. Bytes and membership remain private in `WeakMap`/`WeakSet` state; clones
+fail. URLs, paths supplied at runtime, remote storage, browser uploads, provider responses, and
+caller bytes are never sources.
 
-The existing trusted repository loader still allowlists only the Angel fixture. A manifest
-reference alone cannot make bytes loadable or admitted. A later reviewed implementation must use a
-package-owned admitted-corpus allowlist and fully normalize, decode, digest, and dimension-check
-the bytes; this milestone does not relax the current provider-free loader.
+## Output and quality decision
 
-## Secrets, manual control, privacy, and telemetry
+Provider JSON contains only the unchanged `CompositionAnalysisResultV1`, directly-visible
+per-layer evidence/confidence and bounded canonical review flags, a mandatory discriminated OCR
+completion disposition plus `TextObservationV1[]`, and a literal human-review/proposal-only/no-
+automatic-decision object. A no-visible-text disposition is valid only for the admitted no-text
+oracle and requires an empty observation array.
+Strict objects reject provider-supplied provenance, request, model, policy, and authorization data.
+Server code validates the result against the trusted request and constructs
+`ModelProducedActualTextObservationSetV1` provenance itself.
 
-The only permitted secret name is `BANNER_AI_REAL_MODEL_BENCHMARK_API_KEY`; no value belongs in
-source, profile, authorization, logs, browser code, or client input. Secret access is server-side
-only, and browser provider calls are forbidden.
+Six of six outputs must be valid. Only visible objects/text are reportable; successful layer
+proposals contain 3–5 useful parts, maximum 5; OCR uses exact normalized text and normalized boxes.
+Invalid JSON/schema, missing OCR evidence, timeout, cap breach, or identity mismatch fails closed.
+Every output remains a user-review proposal and cannot automatically authorize cutout, export, or
+another product action.
 
-Request logging must not contain image bytes, filenames, OCR text, secrets, raw provider request or
-response bodies, raw errors, full linkable corpus/source/request identifiers or hashes, or endpoint
-queries. Redacted telemetry is limited to profile/model/reservation IDs, run ordinal, status class,
-counts, latency, exact micro-USD, and a genuinely opaque correlation value.
+## Server-only request boundary
 
-The separately modeled manual control defaults to committed state `engaged`. A release binds its
-revision to the exact authorization ID and digest, profile ID and digest, and admitted-manifest
-digest. Re-engaged and stale releases fail closed. A future executor must read the fresh
-authoritative server-side control immediately before every provider call; caller-supplied JSON is
-never control authority. No release or authoritative control store is implemented here.
+The only secret reference name is `OPENAI_API_KEY`; no value, `.env`, environment read,
+authorization header, SDK, client, or network primitive exists. Browser/client activation,
+configuration, and provider calling are forbidden.
 
-Before execution, the user must confirm license and third-party transmission rights; current
-provider terms and exact model availability; provider/model/version/endpoint reservation evidence;
-the at-most-once timeout replay execution and billing contract; training use; retention and
-deletion; human review, subprocessors, and abuse monitoring; processing region, cross-border
-transfer, DPA, and legal basis; and every corpus transmission approval. These are assumptions to be
-confirmed, not facts established by this ADR.
+The internal request builder requires an unforgeable whole-corpus capability, exact profile,
+validated request, exact future authorization, structural manual release revision, and all
+candidate/request/input/source/prompt/policy/workflow/corpus/pricing/cost-proof bindings. It builds
+the proposed local-data request only after rerunning the full inert preparation gate with private
+trusted bytes: ledger, call/retry ordinal, cost reservation, timeout, logical-call key, failure
+exposure, and every cap are exact. Private capability state rejects a duplicate plan for the same
+bounded call. All admission/model/API/cost/oracle/transmission freshness windows and the earliest
+expiry are rechecked at plan construction, not only corpus minting. Exposed plans contain safe metadata only,
+`dispatchAuthority: false`, and `networkDispatch: "not-implemented"`. Structural clones fail. The
+stub exposes describe/refuse behavior and no dispatch method.
 
-## Exact authorization rendering
+Telemetry is strict and redacted: profile/model/pricing evidence IDs, run ordinal, enumerated
+status/error, counts, latency, exact cost, and opaque correlation only. Image bytes/data URIs,
+filenames, OCR text, prompt, secrets/headers, raw bodies/errors, and full linkable hashes/IDs are
+forbidden. Correlation IDs are minted by a private runtime-only counter and cannot be caller-
+supplied.
 
-No authorization object or rendered authorization statement is committed. A future authorization
-must bind the selected candidate, immutable model version, sole endpoint, selected-profile and
-admitted-manifest digests, worst-case reservation configuration and evidence, replay contract and
-mechanism evidence, prompt/policy/workflow bindings, every image/quality/call/cost/time cap, all
-confirmations, and the bounded execution release.
+## Future exact authorization object
 
-Rendering is deterministic UTF-8 text. `<canonical-payload-json>` is the repository's canonical
-JSON encoding of every authorization field except `renderedUserStatement`:
+A future authorization must bind all of the following and validate every derived digest/text:
 
-```text
-I explicitly authorize this one bounded Banner AI real-model benchmark payload=<canonical-payload-json>. I authorize no other provider, model, version, endpoint, corpus, prompt, policy, workflow, call, retry, spend, time, data use, or purpose.
-```
+- version/revision, authorization ID, canonical issue/expiry instants, revision-evidence SHA-256;
+- canonical payload SHA-256, exact rendered user statement, rendered-statement SHA-256;
+- exact profile/candidate/API family/endpoint/request-shape hash and 4096 output-token cap;
+- dated current official model-availability and API-field-semantics evidence;
+- exact expected provider model version/fingerprint evidence, later matched to execution-observed
+  evidence or failed closed;
+- dated pricing assertion SHA-256 plus the separate exact worst-case request-cost proof;
+- prompt, content-policy, workflow, corpus manifest/evidence, source, request, and input digests;
+- six exact fixture/run request bindings, every cap, and the frozen quality contract;
+- license/privacy/transmission, terms, training, retention/deletion, human review/subprocessors/
+  abuse monitoring, region/cross-border/DPA/legal-basis confirmations;
+- the selected strict retry-union branch;
+- `OPENAI_API_KEY` reference name only; and
+- exact required manual kill-switch release revision and release evidence.
 
-The exact text and authorization digest are re-derived. A missing or changed field, confirmation,
-digest, cap, or character fails closed. This authorization is necessary but is not a network
-capability; a separate fresh manual-control release is also required.
+Authorization and structural release data remain necessary but are not network capabilities. The
+structural manual-control object is explicitly non-authoritative; a future executor must require a
+server-only opaque authoritative-control capability read immediately before any call. No
+authorization, authoritative control capability, or release is committed.
 
-## Current boundary and next milestone
+## Consequences and next milestone
 
-The preparation gate validates exact profile, authorization, corpus, source, request, provider-call,
-logical-call, ordinal, running-ledger, per-run latency, manual-control, cost, and attempted-call
-timeout bindings. Its returned intent explicitly has `retryAuthority: false` and
-`dispatchAuthority: false`; the outcome classifier also cannot grant either authority. Plain
-caller bytes and metadata are not authoritative.
-Any future executor must introduce both a trusted admitted-corpus source loader and unforgeable
-server-side source and provider-call capabilities.
+The exact next recommended milestone is **user-owned three-banner corpus intake plus the dated
+OpenAI official-evidence and exact authorization packet, still provider-free and with no model
+call**. Only after independent review of that packet may a separately authorized paid/network
+benchmark execution milestone be proposed.
 
-There is no dispatcher, provider SDK, network client, secret reader, control store, or web
-activation route. The current provider-free adapter remains network-disabled and accepts only its
-existing materialized local fixtures. This profile cannot activate through the web app or adapter.
-
-The exact next recommended milestone is **candidate-and-corpus evidence completion plus trusted
-corpus loader and unforgeable server-side execution-boundary design**. That milestone must remain
-provider-free and cannot execute a real-model benchmark without a later, separately reviewed exact
-authorization and control release. This ADR and its configuration make no external call and grant
-no dispatch authority.
+No network, OpenAI, paid, external, SDK, database, persistence, UI, secret, commit, push, or
+deployment action occurred in this milestone.

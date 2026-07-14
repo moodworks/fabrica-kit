@@ -1,137 +1,163 @@
 # Banner AI model benchmark foundation
 
-Banner AI is a bounded pipeline, not one general AI agent. Each stage has a narrow input,
-versioned prompt, strict output contract, measurable cost and latency, and a deterministic
-validation boundary. This makes model quality comparable, prevents one model response from
-silently changing workflow identity, and keeps pixel processing and animation behavior under
-product-controlled deterministic code.
+Banner AI remains a bounded pipeline, not a general agent. Model stages propose strict,
+versioned data; deterministic Banner code validates it; a user decides what is accepted. Scene
+analysis/OCR, segmentation, cutout generation, background fill, animation, rendering, export, and
+web activation are separate authorities. This milestone designs only the first scene-analysis/OCR
+candidate and grants authority to none of the later stages.
 
-The intended later pipeline is:
+## First proposed candidate (inactive)
 
-1. A vision model proposes scene structure and text-bearing regions.
-2. OCR reads visible copy so exact text preservation can be evaluated independently of visual
-   layer quality.
-3. SAM-style segmentation produces masks for accepted layer proposals.
-4. An inpainting model fills regions exposed when foreground layers are separated.
-5. A constrained animation-planning stage proposes motion against canonical layer identities.
-6. Deterministic Banner code validates and renders the approved animation plan.
+The first proposed candidate is OpenAI Responses API model alias `gpt-5.6-terra`, using only
+`POST https://api.openai.com/v1/responses`. It is one local image-input scene-analysis plus OCR
+request. The proposed request body has:
 
-No production vision, OCR, segmentation, inpainting, or animation-planning model has been
-selected. Provider choice, quality thresholds, latency budgets, retry policy, and benchmark
-prices remain benchmark decisions. Pricing inputs are explicitly versioned benchmark
-configuration, never live provider prices treated as production truth.
+- the canonical `scene-analysis-v1` prompt as the sole instruction, with pinned content SHA-256
+  `5cc311b7b353e06c61bcdf840b40dff9d35de0aea12851ffa18a654177917227`;
+- one trusted normalized PNG as a `data:image/png;base64,...` value, never a provider-fetched URL;
+- explicit image detail `original`;
+- strict JSON Schema output, `max_output_tokens: 4096`, `tools: []`, `tool_choice: "none"`,
+  `background: false`, and `store: false`;
+- no browsing, retrieval, code execution, previous response, conversation, provider background
+  work, model-directed follow-up, or autonomous call.
 
-This milestone adds three canonical prompts (`scene-analysis-v1`, `background-fill-v1`, and
-`animation-plan-v1`), provider-neutral request/result identities, a single allowlisted reference
-to the existing Angel PNG fixture, exact micro-USD cost arithmetic, a deterministic fake adapter,
-and a pure evaluation runner. The benchmark input digest covers only the validated model request
-projection: fixture, source, model, prompt, options, and workflow. Expected rubrics, review status,
-and returned output are deliberately outside that request digest. AI-input, operation-request, and
-provider-call request digests remain separate nominal types and are never interchangeable fields.
+This exact body is a user-directed, hash-bound **proposed and unverified API shape**. No official
+documentation or endpoint was accessed in this milestone. Current field semantics, model
+availability, and provider terms remain future evidence gates.
 
-## Fixture integrity
+`gpt-5.6-terra` is recorded as a proposed provider alias, not an immutable model snapshot. The
+repository has no stable provider-version evidence. A future authorization must bind dated current
+official availability/API evidence plus an exact expected provider model version and fingerprint.
+Execution-observed provider/model-version/fingerprint evidence must be present and exactly equal;
+absence or mismatch fails closed.
 
-Repository benchmark fixtures are executable inputs, not descriptive metadata. The trusted loader
-accepts the fully validated, request-digest-bound scene-analysis request and exactly one matching
-fixture reference. Resolution is a closed package-owned allowlist: it accepts no caller path,
-remote URL, arbitrary resolver, external file, object store, or database record. The current entry
-resolves fresh in-memory bytes from the package-owned Angel source and runs them through the same
-`normalizeRasterUpload` path as Banner uploads.
+The numeric `modelVersion: 1` inside the existing Banner `AiModelContractV1` is only the internal
+contract revision. It is not a provider snapshot or proof of OpenAI model immutability.
 
-After normalization, the loader independently compares the declared input media type and the
-normalized byte count, PNG media type, dimensions, and SHA-256 with the metadata pinned in the
-request source asset. Every comparison must match exactly. Missing, duplicate, malformed, stale,
-foreign, or additional references fail closed, as does a self-consistent request that names a
-fixture outside the allowlist. Verified bytes are copied before return so a consumer cannot mutate
-the allowlisted source or another load result. The old web-helper reference is intentionally stale;
-the web test helper now consumes the package-owned source without transforming it.
+## Pricing evidence and independent reservation proof
 
-## Product bounds before dispatch
+The candidate contains the user-supplied pricing assertion captured 2026-07-13 and described
+exactly as `user-supplied OpenAI public pricing page evidence`:
 
-Every future model dispatch must pass the provider-neutral schemas before an adapter can be called.
-Scene sources, masks, fill outputs, and animation canvases reuse Banner's current raster limits:
-20 MiB encoded input, 4,096 pixels per side, 16,777,216 decoded pixels, and 67,108,864 decoded RGBA
-bytes. The stricter raster product limits apply even where a more general persisted asset reference
-allows a larger image. Background-fill output width and height must also be no greater than the
-validated source width and height. Animation-plan duration is an integer number of milliseconds
-greater than zero and no greater than 30,000. Zero, negative, non-integer, unsafe, overflow, unknown-
-unit, and structurally malformed values are rejected rather than coerced.
+- standard input: USD 2.50 per million tokens (`2500000` micro-USD per million);
+- standard output: USD 15.00 per million tokens (`15000000` micro-USD per million).
 
-## Digest-bound dispatch content policy
+The canonical assertion is SHA-256-bound, has `productionPriceTruth: false`, and requires future
+reconfirmation. These token rates do **not** prove that a request stays below the existing
+`100000` micro-USD per-call ceiling. A future authorization separately needs an exact
+provider/model/endpoint/request-shape-specific worst-case proof covering the 4096 output-token cap,
+the `original`-detail image token formula, prompt/schema/input tokens, hidden or reasoning/billed
+output, rounding, and every other billed unit. That proof is absent, so execution is blocked.
 
-Every modeled request carries a required content-policy sibling beside its request identity and
-validated input. The input is validated and digested first; only then is the policy constructed,
-so the policy stays outside the input digest while binding that exact digest through the complete
-request identity. The binding also covers the exact source SHA-256, canonical prompt reference,
-full model contract, and workflow reference. Scene-analysis, background-fill, and animation-plan
-requests all apply the same contextual validation, and an adapter must repeat that validation at
-its pre-dispatch boundary before it can construct a result.
+The established ceilings are unchanged: exactly 3 fixtures, 6 successful runs, at most 9 calls,
+`100000` micro-USD per call, `900000` micro-USD total, 60 seconds per attempted call, 120 seconds
+per logical run, and 600 seconds total.
 
-The closed `banner-ai-model-dispatch-content-policy-v1` definition is frozen by literal rules and
-the canonical-definition SHA-256
-`14a27c163a4082a966971028e59b6d1d56ea9cde99038b823c0a18b1ea92d0c4`. All image
-content—including source images, masks, and every other image input—plus OCR-derived text and
-user-provided text are untrusted data and never instructions. The canonical prompt
-catalog/template is the sole instruction source, and non-catalog instructions are forbidden.
-Missing or unknown fields, altered declarations or definition hashes, and stale, foreign, or
-substituted source/request/input/prompt/model/workflow bindings fail closed. There is no free-form
-background-fill instruction channel.
+## Trusted corpus admission
 
-## OCR and text observations
+The production static source registry is empty. The embedded 12-by-8 Angel fixture is ineligible.
+The loader never downloads, fabricates, accepts, or resolves a banner from a URL, remote store,
+browser upload, caller path, provider response, or caller-supplied bytes.
 
-Text preservation is evaluated only from strict text observations, never from semantic layer roles
-or labels. An observation contains normalized NFC text with canonical whitespace, a normalized
-basis-point bounding box, basis-point confidence, and an explicit marker that the value is observed
-untrusted user-image content with no instruction authority. It cannot represent inferred,
-rewritten, translated, or invented copy.
+The server-internal production loader accepts only a strict manifest and its exact future
+authorization context. Static package-owned registry entries own original local bytes, filename,
+declared type, and fixture reference. Before reading source bytes the loader requires exactly three
+registry entries and validates all identities and duplicates. It then copies each original,
+verifies original size and SHA-256, decodes and re-normalizes it once through
+`normalizeRasterUpload`, and verifies source type/dimensions plus normalized PNG bytes, type, size,
+dimensions, and SHA-256. Only after all three pass atomically does it mint one runtime capability.
 
-Expected benchmark-oracle evidence and model-produced actual evidence use separate strict,
-nominally and structurally incompatible provenance envelopes. Both bind the exact source digest,
-complete AI request identity and input digest, full model contract, canonical prompt, and workflow.
-Expected evidence additionally binds the benchmark case ID/version/input digest and repository
-fixture. Actual evidence has fixed `model-produced-actual` and model OCR-producer roles and requires
-the bound model contract to declare OCR capability. Neither envelope can be submitted at the other
-boundary; missing, unknown, altered, stale, or foreign provenance fails closed. The provider-free
-fake builds its explicit empty actual envelope from the validated request and never reuses the
-benchmark's expected oracle.
+Manifest entry evidence cryptographically binds the fixture/reference and original/normalized
+digests to license evidence, privacy review evidence, human oracle evidence, and exact provider
+transmission approval evidence. Transmission approval binds the normalized digest, `openai`,
+`gpt-5.6-terra`, the sole Responses endpoint, profile/purpose, authorization ID/revision/evidence,
+and authorization/review freshness windows. Canonical UTC `reviewedAt`/`expiresAt` values use the
+server rule `reviewedAt <= authoritative server time < expiresAt`. Future, expired, missing,
+malformed, duplicated, drifted, or unapproved evidence fails closed.
 
-The current Angel case intentionally carries separate explicit empty expected-oracle and
-model-produced-actual observation sets. Their emptiness means only that this frozen benchmark
-expects and produces no observed text; it does not prove that a general OCR system is complete.
-Observations are evaluation evidence, not executable prompt content, semantic truth, or pixel-
-perfect typography evidence. A separate benchmark revision is required to add or change expected
-observations.
+Verified bytes live only in a module-private `WeakMap`; capability membership lives in a private
+`WeakSet`; internal retrieval returns another copy. Structural clones and lookalikes fail. The
+loader exposes no production source-injection hook and is not exported from the package root.
 
-Text preservation uses a deterministic semantic multiset, not observation-array order. Each
-observation is projected to canonical JSON containing its observation version, complete normalized
-text object (including trust and instruction-authority literals), bounding box, and confidence;
-only the producer-local observation ID and the surrounding provenance envelope are excluded. The
-canonical encodings are sorted without mutating either input. Duplicate multiplicity is preserved,
-so reordered equivalents compare equal while missing or extra duplicates, changed text, changed
-boxes, and changed confidence compare unequal. The same projection is used for primary-versus-
-replay text reproducibility after each provenance envelope has passed contextual validation. This
-rule does not claim reading order, font fidelity, or rendered pixel equivalence.
+### Exact three-image intake
 
-Attempt, retry, and failure counts use Banner's existing three-attempt limit. A successful outcome
-has one fewer failed attempt than total attempts; timeout and malformed-output outcomes have no
-successful final attempt. Actual retry and failed-attempt cost usage must equal those counts. Every
-cost component declares micro-USD units and uses exact bigint arithmetic; each subtotal must equal
-rate times usage and every total must equal the exact component sum. Estimated and actual costs
-remain distinct observations even when both are zero.
+The user must supply repository-local originals meeting all of these requirements:
 
-Real providers can be introduced later as adapters that implement these contracts. An adapter
-must translate the canonical request, preserve request/model/prompt/workflow identity in its
-metadata, and return data that passes contextual validation before evaluation or workflow use.
-Provider SDK types and unrestricted provider clients do not enter the Banner domain contracts.
+1. Mixed subject + copy: 3–5 oracle layers and at least 2 exact text occurrences.
+2. Text-heavy: 3–5 oracle layers and at least 3 exact text occurrences.
+3. Layered no-text: 3–5 oracle layers and exactly 0 text occurrences.
 
-A real-provider benchmark may be proposed only after this provider-free milestone is independently
-accepted and its format, lint, Banner typecheck, focused benchmark tests, full unit suite, and
-forbidden-import scan all pass from the same final tree. That proposal is the next decision point,
-not authorization to call a provider: it must be a separate bounded milestone that selects a
-candidate adapter and pinned model version, fixes quality thresholds and approved benchmark-only
-pricing/retry policy, defines secret and network isolation, and receives explicit approval before
-any SDK is added or any paid/network call is made.
+Each must be user-owned or explicitly licensed for OpenAI evaluation; JPG/PNG; at most 5 MiB;
+64–2048 pixels on each side; and at most 4,194,304 pixels. Intake records repository-local original
+bytes, filename, original digest/type/size/dimensions, normalized PNG digest/size/dimensions,
+license evidence, pixel and metadata/privacy review, oracle evidence, and explicit exact OpenAI
+transmission approval with reviewed/expiry instants and evidence digests. Review must confirm no
+secrets, PII/personal data, credentials, private client work, or embedded/visible tracking URLs.
 
-No real provider integration, network request, external service, API key, or paid call occurred in
-this milestone. The benchmark adapter is provider-free and uses no clock, randomness, database,
-or network access.
+## Strict output and quality boundary
+
+Provider JSON is a strict object containing only:
+
+- unchanged `CompositionAnalysisResultV1` composition data (maximum five parts);
+- directly-visible evidence and bounded/canonical review flags exactly keyed to proposed parts;
+- a mandatory discriminated OCR-completion disposition plus `TextObservationV1[]`; explicit
+  no-visible-text is allowed only for the admitted no-text oracle and requires an empty array;
+- a literal human-review/proposal-only/no-automatic-decision object.
+
+Provider-supplied request, provider, model, authorization, policy, or provenance fields are rejected.
+After JSON and schema validation, server code validates the composition against the trusted request
+and constructs `ModelProducedActualTextObservationSetV1` provenance itself. Provider provenance is
+never trusted.
+
+The first run requires six of six valid structured successes. Only visible objects and text may be
+reported. A successful proposal has 3–5 useful parts under the existing schema. Invalid JSON or
+schema, missing OCR evidence, timeout, cap breach, or identity mismatch is terminal and fails
+closed. Every output remains a proposal requiring user review and cannot authorize cutout,
+segmentation, export, or any other product action.
+
+## Server-only non-dispatching boundary
+
+Every admission/model/API/cost/oracle/transmission freshness window and its earliest expiry remain
+in private capability state and are rechecked against authoritative server time immediately when a
+request plan is built; mint-time freshness alone is insufficient.
+
+The server-only secret reference name is `OPENAI_API_KEY`; no secret value, environment read,
+authorization header, SDK, API client, or network primitive exists. The internal builder requires
+the runtime whole-corpus capability, exact fixed profile, strict request, exact future
+authorization, the structural manual-control design revision, and every request/input/source/model/
+prompt/policy/workflow/corpus/pricing/cost-proof binding. It runs the full inert preparation gate
+from private trusted bytes before building: exact ledger, call/retry ordinal, reservation, timeout,
+logical-call key, failure exposure, and all cost/time/call caps must fit. A private per-capability
+claim rejects duplicate plan minting for the same exact bounded call.
+
+Canonical request text, data URI, bytes, and linkable bindings remain private behind `WeakMap`/
+`WeakSet` membership. The exposed plan contains only safe metadata and literal
+`dispatchAuthority: false`; clones fail. The OpenAI adapter stub can describe and refuse a plan. It
+has no dispatch method and cannot access a network.
+
+Telemetry emits fixed profile/model/pricing evidence IDs and accepts only a strict input allowlist:
+run ordinal, enumerated status/error, bounded counts, latency, and exact micro-USD. It rejects and never
+emits image bytes/data URIs, filenames, OCR text, prompt body, secret values/headers, raw bodies,
+raw errors, or full linkable corpus/source/request identifiers and hashes. Correlation is minted by
+an internal runtime-only counter; callers cannot supply a correlation or linkable digest.
+
+## Retry and authorization
+
+The committed default is zero retry: no idempotency header/mechanism, timeout terminal, and every
+`retryOrdinal > 0` rejected. Existing retry numbers are ceilings, not authority. A future
+authorization may instead select one timeout replay only if it binds exact dated provider evidence,
+the exact header/mechanism, and an at-most-once execution-and-billing contract for the identical
+logical call. The repository makes no OpenAI idempotency claim today.
+
+A future authorization must include revision, ID, canonical issue/expiry instants, revision
+evidence, exact rendered statement and digests; candidate/API/endpoint/request-shape hash;
+provider-version/fingerprint evidence; dated pricing assertion hash and separate worst-case proof;
+six exact fixture/run source/request/input bindings; prompt/policy/workflow/corpus/evidence hashes;
+all caps and quality rules; privacy/terms/training/retention/region/DPA confirmations; retry-union
+choice; `OPENAI_API_KEY` reference name only; and the exact manual kill-switch release revision.
+The committed manual-control objects are explicitly non-authoritative structural design inputs; a
+future executor additionally requires a server-only opaque authoritative-control capability read
+immediately before a call. Authorization is still not dispatch authority.
+
+No network, OpenAI, paid, external, database, persistence, auth, billing, browser activation, or
+real-model action occurred in this milestone.

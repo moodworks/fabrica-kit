@@ -3,8 +3,13 @@ export * from './evaluation/ai-contracts.js';
 export * from './evaluation/benchmark-case.js';
 export * from './evaluation/cost-estimator.js';
 export * from './evaluation/evaluation-runner.js';
+export {
+  OpenAiAuthorizedObservedIdentityEvidenceV1Schema,
+  OpenAiWorstCaseRequestCostProofV1Schema,
+} from './evaluation/openai-real-model-candidate-evidence.js';
 export * from './evaluation/prompt-catalog.js';
 export * from './evaluation/provider-free-fake-model-adapter.js';
+export * from './evaluation/openai-scene-analysis-output.js';
 export * from './evaluation/repository-benchmark-fixture.js';
 export * from './evaluation/real-model-benchmark-corpus-manifest.js';
 export * from './evaluation/real-model-benchmark-execution.js';

@@ -26,7 +26,9 @@ export interface NormalizedRasterUpload {
   readonly height: number;
   readonly mediaType: 'image/png';
   readonly sha256: string;
+  readonly sourceHeight: number;
   readonly sourceMediaType: 'image/jpeg' | 'image/png';
+  readonly sourceWidth: number;
   readonly width: number;
 }
 
@@ -347,7 +349,9 @@ export const normalizeRasterUploadWithCodec = async (
     height: outputInfo.height,
     mediaType: 'image/png',
     sha256: sha256Hex(normalized.bytes),
+    sourceHeight: evidence.height,
     sourceMediaType: inputInfo.mediaType,
+    sourceWidth: evidence.width,
     width: outputInfo.width,
   };
 };

@@ -5,8 +5,10 @@ import { fileURLToPath } from 'node:url';
 import { beforeAll, describe, expect, it } from 'vitest';
 
 import {
+  AdmittedRealModelBenchmarkCorpusEntryV1Schema,
   BLOCKED_REAL_MODEL_BENCHMARK_PROFILE_V1,
   PROVIDER_FREE_COMPOSITION_POLICY,
+  TextObservationV1Schema,
   canonicalizeJson,
   createModelProducedActualTextObservationSetV1,
   createProviderFreeFakeSceneAnalysisAdapterV1,
@@ -15,12 +17,13 @@ import {
   exactBasisPointRatioMeetsThreshold,
   exactBoundingBoxIouMeetsThreshold,
   prepareRealModelBenchmarkCallIntentV1,
-  type TextObservationV1,
 } from '../src/index.js';
 import {
+  admittedEntryInput,
   admittedManifest,
   mutableClone,
   prepareSyntheticBenchmarkTestSources,
+  recomputeAdmittedEntryEvidenceBinding,
   requestFor,
   selectedProfile,
   validGateInput,
@@ -87,26 +90,30 @@ describe('real-model benchmark quality evaluation', () => {
     const actualObservation = (
       observationId: string,
       boundingBox: (typeof expected)[number]['boundingBox'],
-    ): TextObservationV1 => ({
-      observationVersion: 1,
-      observationId: observationId as TextObservationV1['observationId'],
-      text: {
-        kind: 'observed-text',
-        value: 'Duplicate synthetic text' as TextObservationV1['text']['value'],
-        normalization: 'unicode-nfc-single-space-v1',
-        contentTrust: 'untrusted-user-image-content',
-        instructionAuthority: 'none',
-      },
-      boundingBox,
-      confidence: { unit: 'basis-points', valueBps: 1 },
-    });
+    ) =>
+      TextObservationV1Schema.parse({
+        observationVersion: 1,
+        observationId,
+        text: {
+          kind: 'observed-text',
+          value: 'Duplicate synthetic text',
+          normalization: 'unicode-nfc-single-space-v1',
+          contentTrust: 'untrusted-user-image-content',
+          instructionAuthority: 'none',
+        },
+        boundingBox,
+        confidence: { unit: 'basis-points', valueBps: 1 },
+      });
     const actual = [
       actualObservation('actual_duplicate_2', expected[1]!.boundingBox),
       actualObservation('actual_duplicate_1', expected[0]!.boundingBox),
     ];
     const profile = selectedProfile();
-    const entry = mutableClone(admittedManifest().entries[0]!);
-    entry.expectedOracle.expectedTextOccurrences = expected as never;
+    const entryInput = admittedEntryInput(1, 'mixed-subject-copy');
+    entryInput.expectedOracle.expectedTextOccurrences = expected;
+    const entry = AdmittedRealModelBenchmarkCorpusEntryV1Schema.parse(
+      recomputeAdmittedEntryEvidenceBinding(entryInput),
+    );
     const request = requestFor(profile, entry);
     const actualObservationSet = createModelProducedActualTextObservationSetV1({
       request,
@@ -262,8 +269,10 @@ describe('provider-free and web isolation', () => {
       const route = readFileSync(routePath, 'utf8');
       expect(route, routePath).not.toContain('real-model-benchmark-profile');
       expect(route, routePath).not.toContain('real-model-benchmark-execution');
+      expect(route, routePath).not.toContain('openai-real-model-request-boundary');
+      expect(route, routePath).not.toContain('real-model-benchmark-corpus-loader');
       expect(route, routePath).not.toContain('prepareRealModelBenchmarkCallIntentV1');
-      expect(route, routePath).not.toContain('BANNER_AI_REAL_MODEL_BENCHMARK_API_KEY');
+      expect(route, routePath).not.toContain('OPENAI_API_KEY');
     }
     expect(canonicalizeJson(BLOCKED_REAL_MODEL_BENCHMARK_PROFILE_V1)).not.toContain(
       'synthetic-provider.invalid',

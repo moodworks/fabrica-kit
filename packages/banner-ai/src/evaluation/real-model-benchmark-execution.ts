@@ -19,12 +19,14 @@ import {
   RealModelBenchmarkFixtureIdSchema,
   admitRealModelBenchmarkCorpusV1,
   digestAdmittedRealModelBenchmarkCorpusV1,
+  digestRepositoryFixtureInputRefV1,
 } from './real-model-benchmark-corpus-manifest.js';
 import {
   BenchmarkEndpointPolicyV1Schema,
   ExternalIdempotencyMechanismV1Schema,
   RealModelBenchmarkAuthorizationV1Schema,
   RealModelBenchmarkManualControlV1Schema,
+  RealModelBenchmarkRetryPolicyV1Schema,
   SelectedRealModelBenchmarkProfileV1Schema,
   digestRealModelBenchmarkAuthorizationV1,
   digestSelectedRealModelBenchmarkProfileV1,
@@ -33,8 +35,17 @@ import {
 const exactCanonicalEquality = (left: unknown, right: unknown): boolean =>
   canonicalizeJson(left) === canonicalizeJson(right);
 
+const assertFreshUtcWindow = (label: string, start: string, end: string, nowMs: number): void => {
+  if (Date.parse(start) > nowMs || nowMs >= Date.parse(end)) {
+    throw new TypeError(`${label} is not fresh at authoritative server time.`);
+  }
+};
+
 export const RealModelBenchmarkLogicalCallKeySha256Schema =
   Sha256HexSchema.brand<'RealModelBenchmarkLogicalCallKeySha256'>();
+
+const RealModelBenchmarkRunOrdinalV1Schema = z.union([z.literal(1), z.literal(2)]);
+const RealModelBenchmarkRetryOrdinalV1Schema = z.union([z.literal(0), z.literal(1)]);
 
 export const deriveRealModelBenchmarkLogicalCallKeyV1 = (input: {
   readonly authorization: unknown;
@@ -51,7 +62,7 @@ export const deriveRealModelBenchmarkLogicalCallKeyV1 = (input: {
       input.admittedCorpusManifestSha256,
     ),
     fixtureId: RealModelBenchmarkFixtureIdSchema.parse(input.fixtureId),
-    runOrdinal: z.int().min(1).max(2).parse(input.runOrdinal),
+    runOrdinal: RealModelBenchmarkRunOrdinalV1Schema.parse(input.runOrdinal),
     providerRequestSha256: CapabilityRequestSha256Schema.parse(input.providerRequestSha256),
   };
   return RealModelBenchmarkLogicalCallKeySha256Schema.parse(
@@ -64,7 +75,7 @@ const PendingTimeoutRetryV1Schema = z.discriminatedUnion('kind', [
   z
     .strictObject({
       kind: z.literal('first-timeout-counted-pending-bound-review'),
-      runOrdinal: z.int().min(1).max(2),
+      runOrdinal: RealModelBenchmarkRunOrdinalV1Schema,
       requestSha256: CapabilityRequestSha256Schema,
       logicalCallKey: RealModelBenchmarkLogicalCallKeySha256Schema,
       mechanism: ExternalIdempotencyMechanismV1Schema,
@@ -303,7 +314,7 @@ export const RealModelBenchmarkTerminalFailureClassV1Schema = z.enum([
 const terminalAttemptAccountingShape = {
   attemptRecorded: z.literal(true),
   fixtureId: RealModelBenchmarkFixtureIdSchema,
-  runOrdinal: z.int().min(1).max(2),
+  runOrdinal: RealModelBenchmarkRunOrdinalV1Schema,
   callOrdinal: z.int().min(1).max(9),
   previousAccountedActualOrEstimatedSpendMicros: CanonicalMicrosStringSchema,
   fullActualOrEstimatedCostMicros: CanonicalMicrosStringSchema,
@@ -429,8 +440,8 @@ export const RealModelBenchmarkExecutionLedgerV1Schema = z.union([
 const BenchmarkCallOrdinalV1Schema = z
   .strictObject({
     fixtureOrdinal: z.int().min(1).max(3),
-    runOrdinal: z.int().min(1).max(2),
-    retryOrdinal: z.int().min(0).max(1),
+    runOrdinal: RealModelBenchmarkRunOrdinalV1Schema,
+    retryOrdinal: RealModelBenchmarkRetryOrdinalV1Schema,
     callOrdinal: z.int().min(1).max(9),
   })
   .readonly();
@@ -438,13 +449,23 @@ const BenchmarkCallOrdinalV1Schema = z
 const BenchmarkCallTargetV1Schema = z
   .strictObject({
     endpoint: BenchmarkEndpointPolicyV1Schema,
-    serverSideSecretName: z.literal('BANNER_AI_REAL_MODEL_BENCHMARK_API_KEY'),
-    logicalCall: z
-      .strictObject({
-        key: RealModelBenchmarkLogicalCallKeySha256Schema,
-        mechanism: ExternalIdempotencyMechanismV1Schema,
-      })
-      .readonly(),
+    serverSideSecretName: z.literal('OPENAI_API_KEY'),
+    logicalCall: z.discriminatedUnion('kind', [
+      z
+        .strictObject({
+          kind: z.literal('zero-retry-no-idempotency'),
+          key: RealModelBenchmarkLogicalCallKeySha256Schema,
+          idempotencyHeaderOrMechanism: z.literal('none'),
+        })
+        .readonly(),
+      z
+        .strictObject({
+          kind: z.literal('evidenced-timeout-replay'),
+          key: RealModelBenchmarkLogicalCallKeySha256Schema,
+          mechanism: ExternalIdempotencyMechanismV1Schema,
+        })
+        .readonly(),
+    ]),
   })
   .readonly();
 
@@ -502,6 +523,34 @@ export const prepareRealModelBenchmarkCallIntentV1 = (input: {
   const attemptedProviderCallTimeoutMs = z
     .literal(60_000)
     .parse(input.attemptedProviderCallTimeoutMs);
+  const nowMs = Date.now();
+
+  assertFreshUtcWindow(
+    'Benchmark authorization',
+    authorization.issuedAt,
+    authorization.expiresAt,
+    nowMs,
+  );
+  assertFreshUtcWindow(
+    'Official model/API evidence',
+    authorization.authorizedObservedIdentityEvidence.officialEvidenceCapturedAt,
+    authorization.authorizedObservedIdentityEvidence.officialEvidenceExpiresAt,
+    nowMs,
+  );
+  assertFreshUtcWindow(
+    'Worst-case request-cost proof',
+    authorization.worstCaseRequestCostProof.capturedAt,
+    authorization.worstCaseRequestCostProof.expiresAt,
+    nowMs,
+  );
+  if (authorization.retryPolicy.mode === 'one-timeout-replay-with-exact-provider-evidence') {
+    assertFreshUtcWindow(
+      'Timeout-replay evidence',
+      authorization.retryPolicy.evidenceCapturedAt,
+      authorization.retryPolicy.evidenceExpiresAt,
+      nowMs,
+    );
+  }
 
   if (
     authorization.profileSha256 !== digestSelectedRealModelBenchmarkProfileV1(profile) ||
@@ -511,7 +560,8 @@ export const prepareRealModelBenchmarkCallIntentV1 = (input: {
     !exactCanonicalEquality(authorization.prompt, profile.prompt) ||
     !exactCanonicalEquality(authorization.contentPolicy, profile.contentPolicy) ||
     !exactCanonicalEquality(authorization.workflow, profile.workflow) ||
-    !exactCanonicalEquality(authorization.caps, profile.caps)
+    !exactCanonicalEquality(authorization.caps, profile.caps) ||
+    !exactCanonicalEquality(authorization.qualityContract, profile.qualityContract)
   ) {
     throw new TypeError('Authorization is missing, stale, substituted, or foreign to the profile.');
   }
@@ -522,12 +572,19 @@ export const prepareRealModelBenchmarkCallIntentV1 = (input: {
     manualControl.authorizationSha256 !== authorizationSha256 ||
     manualControl.profileId !== profile.profileId ||
     manualControl.profileSha256 !== authorization.profileSha256 ||
-    manualControl.admittedCorpusManifestSha256 !== authorization.admittedCorpusManifestSha256
+    manualControl.admittedCorpusManifestSha256 !== authorization.admittedCorpusManifestSha256 ||
+    manualControl.revision !== authorization.requiredManualControlReleaseRevision
   ) {
     throw new TypeError(
-      'Fresh authoritative manual control is engaged, re-engaged, stale, or foreign.',
+      'Structural manual-control design input is engaged, re-engaged, stale, or foreign.',
     );
   }
+  assertFreshUtcWindow(
+    'Structural manual-control release',
+    manualControl.releasedAt,
+    manualControl.expiresAt,
+    nowMs,
+  );
 
   const manifestEntry = manifest.entries[ordinals.fixtureOrdinal - 1];
   const fixtureProgress = ledger.fixtures[ordinals.fixtureOrdinal - 1];
@@ -593,10 +650,13 @@ export const prepareRealModelBenchmarkCallIntentV1 = (input: {
   if (
     !exactCanonicalEquality(callTarget.endpoint, candidate.endpointAllowlist[0]) ||
     callTarget.serverSideSecretName !== candidate.serverSideSecret.name ||
-    !exactCanonicalEquality(
-      callTarget.logicalCall.mechanism,
-      candidate.timeoutReplayContract.mechanism,
-    )
+    (authorization.retryPolicy.mode === 'zero-retry'
+      ? callTarget.logicalCall.kind !== 'zero-retry-no-idempotency'
+      : callTarget.logicalCall.kind !== 'evidenced-timeout-replay' ||
+        !exactCanonicalEquality(
+          callTarget.logicalCall.mechanism,
+          authorization.retryPolicy.mechanism,
+        ))
   ) {
     throw new TypeError(
       'Call target differs from the sole authorized endpoint, secret name, or idempotency mechanism.',
@@ -623,6 +683,9 @@ export const prepareRealModelBenchmarkCallIntentV1 = (input: {
   if (logicalRunProgress === undefined) {
     throw new RangeError('Logical-run latency accounting is missing.');
   }
+  if (authorization.retryPolicy.mode === 'zero-retry' && ordinals.retryOrdinal !== 0) {
+    throw new RangeError('Zero-retry authorization rejects every retry ordinal above zero.');
+  }
   if (fixtureProgress.pendingTimeoutRetry.kind === 'none') {
     if (
       ordinals.retryOrdinal !== 0 ||
@@ -636,6 +699,8 @@ export const prepareRealModelBenchmarkCallIntentV1 = (input: {
       );
     }
   } else if (
+    authorization.retryPolicy.mode !== 'one-timeout-replay-with-exact-provider-evidence' ||
+    callTarget.logicalCall.kind !== 'evidenced-timeout-replay' ||
     ordinals.retryOrdinal !== 1 ||
     ordinals.runOrdinal !== fixtureProgress.pendingTimeoutRetry.runOrdinal ||
     providerRequestSha256 !== fixtureProgress.pendingTimeoutRetry.requestSha256 ||
@@ -650,6 +715,26 @@ export const prepareRealModelBenchmarkCallIntentV1 = (input: {
     ledger.totalRetries >= profile.caps.maxRetriesTotal.value
   ) {
     throw new RangeError('Timeout replay is not the sole identical bound fixture retry.');
+  }
+  const authorizedRunBinding = authorization.authorizedRunBindings.find(
+    (binding) =>
+      binding.fixtureId === entry.fixtureId && binding.runOrdinal === ordinals.runOrdinal,
+  );
+  if (
+    authorizedRunBinding === undefined ||
+    authorizedRunBinding.sourceSha256 !== entry.normalizedTransmission.sha256 ||
+    authorizedRunBinding.requestFixtureBindingSha256 !==
+      digestRepositoryFixtureInputRefV1(entry.requestFixtureBinding) ||
+    !exactCanonicalEquality(authorizedRunBinding.requestIdentity, request.requestIdentity) ||
+    !exactCanonicalEquality(
+      authorizedRunBinding.inputDigest,
+      request.requestIdentity.inputDigest,
+    ) ||
+    authorizedRunBinding.providerRequestSha256 !== providerRequestSha256
+  ) {
+    throw new TypeError(
+      'Authorized source, request, or input-digest binding is absent or drifted.',
+    );
   }
 
   const perCallCeiling = parseMicros(profile.caps.perCallCostCeiling.value);
@@ -689,8 +774,10 @@ export const prepareRealModelBenchmarkCallIntentV1 = (input: {
     providerCallIdentity,
     providerKey: candidate.model.identity.providerKey,
     providerModelIdentifier: candidate.providerModelIdentifier,
-    immutableProviderModelVersion: candidate.immutableProviderModelVersion,
+    providerModelAliasStatus: candidate.modelAliasStatus,
+    immutableSnapshotClaim: candidate.immutableSnapshotClaim,
     responseIdentityRequirement: candidate.responseIdentityRequirement,
+    authorizedObservedIdentityEvidence: authorization.authorizedObservedIdentityEvidence,
     logicalRunIdentity: {
       fixtureId: entry.fixtureId,
       runOrdinal: ordinals.runOrdinal,
@@ -712,7 +799,8 @@ export const prepareRealModelBenchmarkCallIntentV1 = (input: {
     sourceAuthority: 'plain-caller-bytes-and-metadata-are-not-authoritative' as const,
     networkDispatch: 'not-implemented-in-this-milestone' as const,
     futureExecutorRequirements: {
-      freshManualControlRead: 'required-before-every-call' as const,
+      opaqueAuthoritativeManualControlCapability:
+        'future-server-only-capability-required-before-every-call' as const,
       trustedCorpusLoader:
         'package-owned-admitted-corpus-allowlist-with-full-normalize-decode-verification' as const,
       sourceCapability: 'unforgeable-server-side-branded-source-authority' as const,
@@ -744,6 +832,7 @@ export const decideRealModelBenchmarkAttemptOutcomeV1 = (input: unknown) => {
         .strictObject({
           kind: z.literal('timeout'),
           priorFixtureRetryCount: z.int().min(0).max(1),
+          retryPolicy: RealModelBenchmarkRetryPolicyV1Schema,
           ...attemptAccountingShape,
         })
         .readonly(),
@@ -790,7 +879,11 @@ export const decideRealModelBenchmarkAttemptOutcomeV1 = (input: unknown) => {
       ...exactAccounting,
     });
   }
-  if (parsed.kind === 'timeout' && parsed.priorFixtureRetryCount === 0) {
+  if (
+    parsed.kind === 'timeout' &&
+    parsed.priorFixtureRetryCount === 0 &&
+    parsed.retryPolicy.mode === 'one-timeout-replay-with-exact-provider-evidence'
+  ) {
     return Object.freeze({
       action: 'record-timeout-pending-bound-prepare-review' as const,
       pendingRetryReviewRequired: true as const,

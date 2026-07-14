@@ -1,21 +1,57 @@
 import { z } from 'zod';
 
 import { parseMicros } from '../jobs/cost-budget.js';
-import { ModelKeySchema, ProviderKeySchema } from '../jobs/syntax.js';
+import { CapabilityRequestSha256Schema } from '../jobs/request-digests.js';
 import { Sha256HexSchema } from '../scene/banner-scene-v1.schema.js';
 import { canonicalizeJson, sha256Hex } from '../scene/canonical-scene-json.js';
 import {
-  AiModelContractV1Schema,
-  BannerAiWorkflowRefV1Schema,
+  AiInputDigestV1Schema,
+  AiModelRequestIdentityV1Schema,
   BANNER_AI_MODEL_DISPATCH_CONTENT_POLICY_V1_DEFINITION_SHA256,
+  BannerAiWorkflowRefV1Schema,
   INITIAL_BANNER_ANALYZE_WORKFLOW_REF_V1,
 } from './ai-contracts.js';
 import { BenchmarkPricingConfigV1Schema } from './cost-estimator.js';
+import {
+  CanonicalUtcTimestampSchema,
+  OPENAI_BENCHMARK_PRICING_EVIDENCE_V1,
+  OPENAI_REAL_MODEL_BENCHMARK_CANDIDATE_V1,
+  OPENAI_REAL_MODEL_MAX_OUTPUT_TOKENS,
+  OPENAI_REAL_MODEL_SECRET_REFERENCE_NAME,
+  OpenAiAuthorizedObservedIdentityEvidenceV1Schema,
+  OpenAiWorstCaseRequestCostProofV1Schema,
+  PROPOSED_OPENAI_RESPONSES_REQUEST_CONTRACT_V1,
+  RealModelBenchmarkRetryPolicyV1Schema,
+  SelectedRealModelBenchmarkCandidateV1Schema,
+} from './openai-real-model-candidate-evidence.js';
 import { SCENE_ANALYSIS_PROMPT_V1 } from './prompt-catalog.js';
 import {
   REAL_MODEL_BENCHMARK_PROFILE_ID,
   RealModelBenchmarkCorpusManifestSha256Schema,
+  RealModelBenchmarkFixtureIdSchema,
 } from './real-model-benchmark-corpus-manifest.js';
+
+export {
+  BenchmarkEndpointPolicyV1Schema,
+  ExternalIdempotencyMechanismV1Schema,
+  OPENAI_BENCHMARK_PRICING_EVIDENCE_V1,
+  OPENAI_REAL_MODEL_BENCHMARK_CANDIDATE_V1,
+  OPENAI_REAL_MODEL_ENDPOINT,
+  OPENAI_REAL_MODEL_ENDPOINT_POLICY_V1,
+  OPENAI_REAL_MODEL_MAX_OUTPUT_TOKENS,
+  OPENAI_REAL_MODEL_PROVIDER_KEY,
+  OPENAI_REAL_MODEL_REQUESTED_MODEL_ID,
+  OPENAI_REAL_MODEL_RESPONSES_API_FAMILY,
+  OPENAI_REAL_MODEL_SECRET_REFERENCE_NAME,
+  PROPOSED_OPENAI_RESPONSES_REQUEST_CONTRACT_V1,
+  RealModelBenchmarkRetryPolicyV1Schema,
+  SelectedRealModelBenchmarkCandidateV1Schema,
+  ZERO_RETRY_REAL_MODEL_BENCHMARK_POLICY_V1,
+  digestOpenAiAuthorizedObservedIdentityEvidenceV1,
+  digestOpenAiExecutionObservedIdentityV1,
+  digestOpenAiWorstCaseRequestCostProofV1,
+  validateOpenAiExecutionObservedIdentityV1,
+} from './openai-real-model-candidate-evidence.js';
 
 export const EXPLICIT_BENCHMARK_AUTHORIZATION_REQUIRED =
   'requires explicit user authorization before execution' as const;
@@ -98,19 +134,20 @@ export const RealModelBenchmarkCapsV1Schema = z
     ) {
       context.addIssue({
         code: 'custom',
-        message: 'Total retries must equal the one-retry ceiling across all fixtures.',
+        message: 'Numerical retry ceilings must retain the existing three-fixture arithmetic.',
       });
     }
     if (caps.maxLatencyPerLogicalRun.value !== caps.maxLatencyPerAttemptedProviderCall.value * 2) {
       context.addIssue({
         code: 'custom',
         message:
-          'Logical-run latency cap must equal an initial attempted call plus the sole possible replay.',
+          'Logical-run latency cap retains room for at most one separately evidenced replay.',
       });
     }
-    const perCall = parseMicros(caps.perCallCostCeiling.value);
-    const total = parseMicros(caps.totalBenchmarkSpendCeiling.value);
-    if (perCall * BigInt(caps.maxTotalProviderCalls.value) !== total) {
+    if (
+      parseMicros(caps.perCallCostCeiling.value) * BigInt(caps.maxTotalProviderCalls.value) !==
+      parseMicros(caps.totalBenchmarkSpendCeiling.value)
+    ) {
       context.addIssue({
         code: 'custom',
         message: 'Total spend ceiling must equal the exact per-call ceiling times call ceiling.',
@@ -249,68 +286,6 @@ export const REAL_MODEL_BENCHMARK_CAPS_V1 = RealModelBenchmarkCapsV1Schema.parse
   },
 });
 
-export const BenchmarkEndpointPolicyV1Schema = z
-  .strictObject({
-    method: z.literal('POST'),
-    url: z.string().superRefine((value, context) => {
-      let parsed: URL;
-      try {
-        parsed = new URL(value);
-      } catch {
-        context.addIssue({ code: 'custom', message: 'Provider endpoint must be an absolute URL.' });
-        return;
-      }
-      if (
-        parsed.protocol !== 'https:' ||
-        parsed.username !== '' ||
-        parsed.password !== '' ||
-        parsed.search !== '' ||
-        parsed.hash !== '' ||
-        parsed.pathname === '/' ||
-        value !== `${parsed.origin}${parsed.pathname}`
-      ) {
-        context.addIssue({
-          code: 'custom',
-          message:
-            'Provider endpoint must be one canonical credential-free HTTPS origin and non-root path without query or fragment.',
-        });
-      }
-      const hostname = parsed.hostname.toLowerCase();
-      const ipv4Parts = hostname.split('.');
-      const literalIpv4 =
-        ipv4Parts.length === 4 &&
-        ipv4Parts.every((part) => /^(?:0|[1-9][0-9]{0,2})$/.test(part) && Number(part) <= 255);
-      const hostLabels = hostname.split('.');
-      if (
-        literalIpv4 ||
-        hostname.includes(':') ||
-        hostLabels.some((label) =>
-          ['localhost', 'local', 'internal', 'intranet', 'home', 'lan'].includes(label),
-        )
-      ) {
-        context.addIssue({
-          code: 'custom',
-          message: 'Provider endpoint cannot use a literal IP or local/internal-style host.',
-        });
-      }
-    }),
-    redirects: z.literal('forbidden'),
-    alternateOrigins: z.literal('forbidden'),
-    alternatePaths: z.literal('forbidden'),
-    alternateMethods: z.literal('forbidden'),
-    literalIpHosts: z.literal('forbidden'),
-    localhostLocalAndInternalHosts: z.literal('forbidden'),
-    dnsResolution: z.literal(
-      'future-executor-resolves-only-public-approved-addresses-and-pins-them-for-the-call',
-    ),
-    privateReservedLinkLocalAndLoopbackAddresses: z.literal('forbidden'),
-    dnsRebinding: z.literal('forbidden'),
-    proxyOverride: z.literal('forbidden'),
-  })
-  .readonly();
-
-const providerModelPinPattern = /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,159}$/;
-
 export const RealModelBenchmarkProfileSha256Schema =
   Sha256HexSchema.brand<'RealModelBenchmarkProfileSha256'>();
 export const RealModelBenchmarkReservationConfigSha256Schema =
@@ -325,157 +300,7 @@ export const digestRealModelBenchmarkReservationConfigV1 = (
   );
 };
 
-const ExternalIdempotencyHeaderNameSchema = z
-  .string()
-  .regex(/^[A-Za-z][A-Za-z0-9-]{0,79}$/)
-  .refine(
-    (value) => !['authorization', 'cookie', 'proxy-authorization'].includes(value.toLowerCase()),
-    'External idempotency header cannot be a credential-bearing header.',
-  );
-
-export const ExternalIdempotencyMechanismV1Schema = z
-  .strictObject({
-    kind: z.literal('https-header'),
-    exactHeaderName: ExternalIdempotencyHeaderNameSchema,
-    valueEncoding: z.literal('lowercase-sha256-hex-logical-call-key-v1'),
-    retryBehavior: z.literal('initial-and-timeout-retry-send-the-identical-key'),
-  })
-  .readonly();
-
-export const SelectedRealModelBenchmarkCandidateV1Schema = z
-  .strictObject({
-    candidateVersion: z.literal(1),
-    model: AiModelContractV1Schema,
-    providerModelIdentifier: ModelKeySchema,
-    immutableProviderModelVersion: z.string().regex(providerModelPinPattern),
-    versionPinRequirement: z.literal('exact-immutable-provider-model-or-snapshot-id'),
-    responseIdentityRequirement: z
-      .strictObject({
-        comparison: z.literal('exact-equality-with-requested-candidate'),
-        providerKey: ProviderKeySchema,
-        providerModelIdentifier: ModelKeySchema,
-        immutableProviderModelVersion: z.string().regex(providerModelPinPattern),
-      })
-      .readonly(),
-    worstCaseReservationConfig: BenchmarkPricingConfigV1Schema,
-    worstCaseReservationConfigSha256: RealModelBenchmarkReservationConfigSha256Schema,
-    worstCaseReservationScope: z
-      .strictObject({
-        providerKey: ProviderKeySchema,
-        providerModelIdentifier: ModelKeySchema,
-        immutableProviderModelVersion: z.string().regex(providerModelPinPattern),
-        endpoint: BenchmarkEndpointPolicyV1Schema,
-        evidenceSha256: Sha256HexSchema,
-        boundedRequestCostAssertion: z.literal(
-          'selected-bounded-request-cannot-exceed-model-inference-reservation',
-        ),
-        userConfirmation: z.literal(
-          'confirmed-provider-model-endpoint-specific-worst-case-reservation-ceiling',
-        ),
-      })
-      .readonly(),
-    timeoutReplayContract: z
-      .strictObject({
-        providerKey: ProviderKeySchema,
-        providerModelIdentifier: ModelKeySchema,
-        immutableProviderModelVersion: z.string().regex(providerModelPinPattern),
-        endpoint: BenchmarkEndpointPolicyV1Schema,
-        evidenceSha256: Sha256HexSchema,
-        executionAndBillingAssertion: z.literal(
-          'at-most-once-provider-execution-and-billing-for-one-logical-run-after-indeterminate-timeout',
-        ),
-        mechanism: ExternalIdempotencyMechanismV1Schema,
-        userConfirmation: z.literal(
-          'confirmed-provider-model-endpoint-specific-idempotency-replay-and-billing-contract',
-        ),
-      })
-      .readonly(),
-    serverSideSecret: z
-      .strictObject({
-        name: z.literal('BANNER_AI_REAL_MODEL_BENCHMARK_API_KEY'),
-        access: z.literal('server-side-only'),
-        valueStorage: z.literal('not-present-in-profile-or-authorization'),
-      })
-      .readonly(),
-    endpointAllowlist: z.tuple([BenchmarkEndpointPolicyV1Schema]).readonly(),
-  })
-  .superRefine((candidate, context) => {
-    const identity = candidate.model.identity;
-    const requiredCapabilities = ['ocr', 'scene_analysis', 'structured_output'] as const;
-    if (!identity.external) {
-      context.addIssue({ code: 'custom', message: 'A selected real model must be external.' });
-    }
-    for (const capability of requiredCapabilities) {
-      if (!candidate.model.capabilities.capabilities.includes(capability)) {
-        context.addIssue({
-          code: 'custom',
-          message: `Selected candidate lacks required ${capability} capability.`,
-          path: ['model', 'capabilities'],
-        });
-      }
-    }
-    if (identity.modelKey !== candidate.providerModelIdentifier) {
-      context.addIssue({
-        code: 'custom',
-        message: 'Existing model identity must use the exact provider model identifier.',
-      });
-    }
-    const equalityBindings = [
-      candidate.responseIdentityRequirement,
-      candidate.worstCaseReservationScope,
-      candidate.timeoutReplayContract,
-    ];
-    for (const binding of equalityBindings) {
-      if (
-        binding.providerKey !== identity.providerKey ||
-        binding.providerModelIdentifier !== candidate.providerModelIdentifier ||
-        binding.immutableProviderModelVersion !== candidate.immutableProviderModelVersion
-      ) {
-        context.addIssue({
-          code: 'custom',
-          message:
-            'Candidate response/reservation identity must equal the selected provider model pin.',
-        });
-      }
-    }
-    for (const binding of [candidate.worstCaseReservationScope, candidate.timeoutReplayContract]) {
-      if (!exactCanonicalEquality(binding.endpoint, candidate.endpointAllowlist[0])) {
-        context.addIssue({
-          code: 'custom',
-          message: 'Reservation/replay evidence must bind the sole selected endpoint.',
-        });
-      }
-    }
-    if (
-      candidate.worstCaseReservationConfig.productionPriceTruth !== false ||
-      candidate.worstCaseReservationConfig.rates.modelInferenceMicrosPerUnit !== '100000' ||
-      candidate.worstCaseReservationConfig.rates.segmentationComputeMicrosPerUnit !== '0' ||
-      candidate.worstCaseReservationConfig.rates.inpaintingMicrosPerUnit !== '0' ||
-      candidate.worstCaseReservationConfig.rates.storageMicrosPerByteMonth !== '0' ||
-      candidate.worstCaseReservationConfig.rates.retryMicrosPerUnit !== '0' ||
-      candidate.worstCaseReservationConfig.rates.failedAttemptMicrosPerUnit !== '0'
-    ) {
-      context.addIssue({
-        code: 'custom',
-        message:
-          'The proposed benchmark reserves one worst-case model-inference unit per attempted provider call and nothing else.',
-        path: ['worstCaseReservationConfig'],
-      });
-    }
-    if (
-      digestRealModelBenchmarkReservationConfigV1(candidate.worstCaseReservationConfig) !==
-      candidate.worstCaseReservationConfigSha256
-    ) {
-      context.addIssue({
-        code: 'custom',
-        message: 'Reservation configuration digest differs from the exact selected object.',
-        path: ['worstCaseReservationConfigSha256'],
-      });
-    }
-  })
-  .readonly();
-
-const BenchmarkPromptBindingV1Schema = z
+export const BenchmarkPromptBindingV1Schema = z
   .strictObject({
     id: z.literal('scene-analysis-v1'),
     version: z.literal(1),
@@ -483,7 +308,7 @@ const BenchmarkPromptBindingV1Schema = z
   })
   .readonly();
 
-const BenchmarkContentPolicyBindingV1Schema = z
+export const BenchmarkContentPolicyBindingV1Schema = z
   .strictObject({
     definitionId: z.literal('banner-ai-model-dispatch-content-policy-v1'),
     definitionVersion: z.literal(1),
@@ -491,319 +316,225 @@ const BenchmarkContentPolicyBindingV1Schema = z
   })
   .readonly();
 
-const BenchmarkOutputContractV1Schema = z
+export const BenchmarkQualityContractV1Schema = z
   .strictObject({
-    compositionResult: z.literal('CompositionAnalysisResultV1'),
-    textObservations: z.literal('ModelProducedActualTextObservationSetV1'),
-    structuredJson: z.literal('strict-runtime-validation-required'),
-    maximumLayerCount: z.literal(5),
-    successfulProposalPartCount: z
-      .strictObject({ min: z.literal(3), max: z.literal(5) })
-      .readonly(),
-    ocrTextRequirement: z.literal('exact-normalized-observed-text-with-provenance'),
-    boundingBoxRequirement: z.literal('normalized-basis-points-required'),
-  })
-  .readonly();
-
-const BenchmarkCapabilityRequirementsV1Schema = z
-  .strictObject({
-    imageInput: z.literal('required'),
-    strictStructuredJson: z.literal('required'),
-    sceneAnalysis: z.literal('required'),
-    ocrExactTextObservations: z.literal('required'),
-    normalizedBoundingBoxes: z.literal('required'),
-    deterministicRequestMetadata: z.literal('required'),
-  })
-  .readonly();
-
-const BenchmarkAutonomyRestrictionsV1Schema = z
-  .strictObject({
-    tools: z.literal('forbidden'),
-    browsing: z.literal('forbidden'),
-    retrieval: z.literal('forbidden'),
-    urlFetching: z.literal('forbidden'),
-    codeExecution: z.literal('forbidden'),
-    modelDirectedFollowUpCalls: z.literal('forbidden'),
-    autonomousFollowUpCalls: z.literal('forbidden'),
-    timeoutRetry: z.literal(
-      'outcome-helper-never-authorizes-bound-prepare-review-only-with-verified-at-most-once-provider-contract',
-    ),
-  })
-  .readonly();
-
-const BenchmarkFailurePolicyV1Schema = z
-  .strictObject({
-    malformedStructuredOutput: z.literal('terminal-no-retry-inconclusive-kill-switch-engaged'),
-    firstTimeout: z.literal(
-      'counted-pending-bound-prepare-review-retry-authority-false-control-engaged',
-    ),
-    secondTimeout: z.literal('terminal-inconclusive-kill-switch-engaged'),
-    providerPermanentOrPolicyRejection: z.literal(
-      'terminal-no-retry-inconclusive-kill-switch-engaged',
-    ),
-    transientRateLimitOrTransportFailure: z.literal(
-      'terminal-no-autonomous-retry-inconclusive-kill-switch-engaged',
-    ),
-    indeterminateResultOrWorkerLoss: z.literal(
-      'terminal-no-retry-inconclusive-kill-switch-engaged',
-    ),
-    insufficientRemainingWallTime: z.literal('stop-before-call-inconclusive'),
-    preCallCapBreach: z.literal('stop-before-call-inconclusive'),
-    actualPostCallCostOverrun: z.literal(
-      'record-full-actual-cost-inconclusive-engage-kill-switch-forbid-later-calls',
-    ),
-    failedAndIndeterminateAttemptCosts: z.literal('count-and-record-without-clipping'),
-    noTextFixture: z.literal('exactly-zero-model-produced-text-observations'),
-    modelSelfConfidence: z.literal('recorded-never-oracle-truth'),
-  })
-  .readonly();
-
-const BenchmarkFutureBoundaryV1Schema = z
-  .strictObject({
-    browserProviderCalls: z.literal('forbidden'),
-    secretAccess: z.literal('server-side-only'),
-    secretValuesInConfig: z.literal('forbidden'),
-    environmentPresenceAuthorizes: z.literal(false),
-    defaultNetworkAccess: z.literal('disabled'),
-    defaultKillSwitch: z.literal('engaged'),
-    redirects: z.literal('forbidden'),
-    requestLogging: z
-      .strictObject({
-        imageBytes: z.literal('forbidden'),
-        filenames: z.literal('forbidden'),
-        ocrText: z.literal('forbidden'),
-        secrets: z.literal('forbidden'),
-        rawProviderBodies: z.literal('forbidden'),
-        rawProviderErrors: z.literal('forbidden'),
-        fullLinkableCorpusSourceRequestIdsOrHashes: z.literal('forbidden'),
-        endpointQuery: z.literal('forbidden'),
-      })
-      .readonly(),
-    redactedTelemetryAllowlist: z.tuple([
-      z.literal('profile-id'),
-      z.literal('model-identity-id'),
-      z.literal('reservation-config-id'),
-      z.literal('run-ordinal'),
-      z.literal('status-class'),
-      z.literal('counts'),
-      z.literal('latency-ms'),
-      z.literal('exact-cost-micros'),
-      z.literal('opaque-redacted-correlation-id'),
+    structuredSuccesses: z.literal('six-of-six-valid-structured-results'),
+    visibleEvidenceOnly: z.literal('only-directly-visible-objects-and-text-may-be-reported'),
+    layerProposalContract: z.literal('CompositionAnalysisResultV1-three-to-five-useful-max-five'),
+    ocrContract: z.literal('TextObservationV1-with-server-constructed-actual-model-provenance'),
+    terminalFailures: z.tuple([
+      z.literal('invalid-json-or-schema'),
+      z.literal('missing-ocr-evidence'),
+      z.literal('timeout'),
+      z.literal('cap-breach'),
+      z.literal('identity-mismatch'),
     ]),
+    retryLimits: z.literal('strict-authorization-union-and-existing-call-cost-time-ceilings'),
+    proposalDisposition: z.literal('user-review-required-never-automatic-cutout-or-export'),
   })
   .readonly();
 
-const profileCommonShape = {
-  profileVersion: z.literal(1),
-  profileId: z.literal(REAL_MODEL_BENCHMARK_PROFILE_ID),
-  purpose: z.literal('benchmark-only-design-not-execution'),
-  workload: z.literal('single-image-scene-analysis-plus-ocr-in-one-model-call'),
-  prompt: BenchmarkPromptBindingV1Schema,
-  contentPolicy: BenchmarkContentPolicyBindingV1Schema,
-  workflow: BannerAiWorkflowRefV1Schema,
-  requestOptions: z
-    .strictObject({
-      maxParts: z.literal(5),
-      includeBackground: z.literal(true),
-      preserveVisibleText: z.literal(true),
-    })
-    .readonly(),
-  capabilities: BenchmarkCapabilityRequirementsV1Schema,
-  outputContract: BenchmarkOutputContractV1Schema,
-  autonomyRestrictions: BenchmarkAutonomyRestrictionsV1Schema,
-  caps: RealModelBenchmarkCapsV1Schema,
-  qualityFormulas: z
-    .strictObject({
-      strictSuccessfulRuns: z.literal('six-of-six-runs-pass-strict-output-validation'),
-      successfulProposalParts: z.literal(
-        'each-successful-run-has-three-to-five-human-useful-parts',
-      ),
-      requiredLayerRecall: z.literal(
-        'matched-required-human-oracle-layer-occurrences/all-required-oracle-occurrences-across-six-runs',
-      ),
-      usefulProposalPrecision: z.literal(
-        'human-accepted-useful-proposed-part-occurrences/all-proposed-occurrences-across-six-runs',
-      ),
-      textPrecisionRecall: z.literal(
-        'duplicate-aware-exact-normalized-text-multiset-intersection-over-actual-and-expected',
-      ),
-      textBoundingBoxes: z.literal(
-        'deterministic-one-to-one-exact-text-matching-with-integer-rational-iou',
-      ),
-    })
-    .readonly(),
-  failurePolicy: BenchmarkFailurePolicyV1Schema,
-  futureBoundary: BenchmarkFutureBoundaryV1Schema,
-  execution: z
-    .strictObject({
-      state: z.literal('disabled-by-default'),
-      networkAccess: z.literal('disabled'),
-      killSwitch: z.literal('engaged'),
-      committedAuthorization: z.literal('none'),
-      retryAuthority: z.literal('none'),
-      dispatcherOrClient: z.literal('not-implemented'),
-    })
-    .readonly(),
-} as const;
+export const REAL_MODEL_BENCHMARK_QUALITY_CONTRACT_V1 = BenchmarkQualityContractV1Schema.parse({
+  structuredSuccesses: 'six-of-six-valid-structured-results',
+  visibleEvidenceOnly: 'only-directly-visible-objects-and-text-may-be-reported',
+  layerProposalContract: 'CompositionAnalysisResultV1-three-to-five-useful-max-five',
+  ocrContract: 'TextObservationV1-with-server-constructed-actual-model-provenance',
+  terminalFailures: [
+    'invalid-json-or-schema',
+    'missing-ocr-evidence',
+    'timeout',
+    'cap-breach',
+    'identity-mismatch',
+  ],
+  retryLimits: 'strict-authorization-union-and-existing-call-cost-time-ceilings',
+  proposalDisposition: 'user-review-required-never-automatic-cutout-or-export',
+});
 
-const BlockedRealModelBenchmarkProfileV1Schema = z
-  .strictObject({
-    ...profileCommonShape,
-    candidateStatus: z.literal('blocked-unselected'),
-    candidateSelection: z
-      .strictObject({
-        selectionState: z.literal('blocking-user-decision-required'),
-        providerAndExactModelSelected: z.literal(false),
-        immutableModelVersionOrSnapshotSelected: z.literal(false),
-        exactEndpointSelected: z.literal(false),
-        worstCaseReservationEvidenceConfirmed: z.literal(false),
-        atMostOnceTimeoutReplayAndBillingContractConfirmed: z.literal(false),
-        endpointAllowlist: z.tuple([]),
-      })
-      .readonly(),
-  })
-  .readonly();
-
-export const SelectedRealModelBenchmarkProfileV1Schema = z
-  .strictObject({
-    ...profileCommonShape,
-    candidateStatus: z.literal('selected-future-caller-input-only'),
-    candidateSelection: SelectedRealModelBenchmarkCandidateV1Schema,
-  })
-  .readonly();
-
-export const RealModelBenchmarkProfileV1Schema = z.union([
-  BlockedRealModelBenchmarkProfileV1Schema,
-  SelectedRealModelBenchmarkProfileV1Schema,
-]);
-
-const commonProfileValues = {
-  profileVersion: 1,
+const profileCommonValues = {
+  profileVersion: 2 as const,
   profileId: REAL_MODEL_BENCHMARK_PROFILE_ID,
-  purpose: 'benchmark-only-design-not-execution',
-  workload: 'single-image-scene-analysis-plus-ocr-in-one-model-call',
+  purpose: 'benchmark-only-design-not-execution' as const,
+  workload: 'single-local-image-scene-analysis-plus-ocr-in-one-responses-call' as const,
   prompt: {
-    id: 'scene-analysis-v1',
-    version: 1,
+    id: 'scene-analysis-v1' as const,
+    version: 1 as const,
     contentSha256: SCENE_ANALYSIS_PROMPT_V1.contentSha256,
   },
   contentPolicy: {
-    definitionId: 'banner-ai-model-dispatch-content-policy-v1',
-    definitionVersion: 1,
+    definitionId: 'banner-ai-model-dispatch-content-policy-v1' as const,
+    definitionVersion: 1 as const,
     definitionSha256: BANNER_AI_MODEL_DISPATCH_CONTENT_POLICY_V1_DEFINITION_SHA256,
   },
   workflow: INITIAL_BANNER_ANALYZE_WORKFLOW_REF_V1,
-  requestOptions: { maxParts: 5, includeBackground: true, preserveVisibleText: true },
-  capabilities: {
-    imageInput: 'required',
-    strictStructuredJson: 'required',
-    sceneAnalysis: 'required',
-    ocrExactTextObservations: 'required',
-    normalizedBoundingBoxes: 'required',
-    deterministicRequestMetadata: 'required',
+  requestOptions: {
+    maxParts: 5 as const,
+    includeBackground: true as const,
+    preserveVisibleText: true as const,
   },
   outputContract: {
-    compositionResult: 'CompositionAnalysisResultV1',
-    textObservations: 'ModelProducedActualTextObservationSetV1',
-    structuredJson: 'strict-runtime-validation-required',
-    maximumLayerCount: 5,
-    successfulProposalPartCount: { min: 3, max: 5 },
-    ocrTextRequirement: 'exact-normalized-observed-text-with-provenance',
-    boundingBoxRequirement: 'normalized-basis-points-required',
+    compositionResult: 'CompositionAnalysisResultV1' as const,
+    textObservations:
+      'TextObservationV1-provider-array-server-wraps-actual-model-provenance' as const,
+    structuredJson: 'strict-json-schema-and-runtime-validation-required' as const,
+    maximumLayerCount: 5 as const,
+    imageDetail: 'original' as const,
+    maxOutputTokens: OPENAI_REAL_MODEL_MAX_OUTPUT_TOKENS,
   },
   autonomyRestrictions: {
-    tools: 'forbidden',
-    browsing: 'forbidden',
-    retrieval: 'forbidden',
-    urlFetching: 'forbidden',
-    codeExecution: 'forbidden',
-    modelDirectedFollowUpCalls: 'forbidden',
-    autonomousFollowUpCalls: 'forbidden',
-    timeoutRetry:
-      'outcome-helper-never-authorizes-bound-prepare-review-only-with-verified-at-most-once-provider-contract',
+    tools: 'forbidden' as const,
+    browsing: 'forbidden' as const,
+    retrieval: 'forbidden' as const,
+    urlFetching: 'forbidden' as const,
+    codeExecution: 'forbidden' as const,
+    providerSideBackgroundWork: 'forbidden' as const,
+    previousResponseOrConversation: 'forbidden' as const,
+    modelDirectedFollowUpCalls: 'forbidden' as const,
+    autonomousFollowUpCalls: 'forbidden' as const,
   },
   caps: REAL_MODEL_BENCHMARK_CAPS_V1,
-  qualityFormulas: {
-    strictSuccessfulRuns: 'six-of-six-runs-pass-strict-output-validation',
-    successfulProposalParts: 'each-successful-run-has-three-to-five-human-useful-parts',
-    requiredLayerRecall:
-      'matched-required-human-oracle-layer-occurrences/all-required-oracle-occurrences-across-six-runs',
-    usefulProposalPrecision:
-      'human-accepted-useful-proposed-part-occurrences/all-proposed-occurrences-across-six-runs',
-    textPrecisionRecall:
-      'duplicate-aware-exact-normalized-text-multiset-intersection-over-actual-and-expected',
-    textBoundingBoxes: 'deterministic-one-to-one-exact-text-matching-with-integer-rational-iou',
-  },
-  failurePolicy: {
-    malformedStructuredOutput: 'terminal-no-retry-inconclusive-kill-switch-engaged',
-    firstTimeout: 'counted-pending-bound-prepare-review-retry-authority-false-control-engaged',
-    secondTimeout: 'terminal-inconclusive-kill-switch-engaged',
-    providerPermanentOrPolicyRejection: 'terminal-no-retry-inconclusive-kill-switch-engaged',
-    transientRateLimitOrTransportFailure:
-      'terminal-no-autonomous-retry-inconclusive-kill-switch-engaged',
-    indeterminateResultOrWorkerLoss: 'terminal-no-retry-inconclusive-kill-switch-engaged',
-    insufficientRemainingWallTime: 'stop-before-call-inconclusive',
-    preCallCapBreach: 'stop-before-call-inconclusive',
-    actualPostCallCostOverrun:
-      'record-full-actual-cost-inconclusive-engage-kill-switch-forbid-later-calls',
-    failedAndIndeterminateAttemptCosts: 'count-and-record-without-clipping',
-    noTextFixture: 'exactly-zero-model-produced-text-observations',
-    modelSelfConfidence: 'recorded-never-oracle-truth',
-  },
+  qualityContract: REAL_MODEL_BENCHMARK_QUALITY_CONTRACT_V1,
   futureBoundary: {
-    browserProviderCalls: 'forbidden',
-    secretAccess: 'server-side-only',
-    secretValuesInConfig: 'forbidden',
-    environmentPresenceAuthorizes: false,
-    defaultNetworkAccess: 'disabled',
-    defaultKillSwitch: 'engaged',
-    redirects: 'forbidden',
+    browserProviderCalls: 'forbidden' as const,
+    browserActivationOrConfiguration: 'forbidden' as const,
+    secretAccess: 'server-side-only-reference-name-never-value' as const,
+    environmentPresenceAuthorizes: false as const,
+    defaultNetworkAccess: 'disabled' as const,
+    defaultKillSwitch: 'engaged' as const,
+    manualControlAuthority:
+      'future-opaque-server-only-capability-required-before-every-call' as const,
     requestLogging: {
-      imageBytes: 'forbidden',
-      filenames: 'forbidden',
-      ocrText: 'forbidden',
-      secrets: 'forbidden',
-      rawProviderBodies: 'forbidden',
-      rawProviderErrors: 'forbidden',
-      fullLinkableCorpusSourceRequestIdsOrHashes: 'forbidden',
-      endpointQuery: 'forbidden',
+      imageBytesOrDataUri: 'forbidden' as const,
+      filenames: 'forbidden' as const,
+      ocrText: 'forbidden' as const,
+      promptBody: 'forbidden' as const,
+      secretValuesOrHeaders: 'forbidden' as const,
+      rawProviderBodiesOrErrors: 'forbidden' as const,
+      fullLinkableCorpusSourceRequestIdsOrHashes: 'forbidden' as const,
     },
-    redactedTelemetryAllowlist: [
-      'profile-id',
-      'model-identity-id',
-      'reservation-config-id',
-      'run-ordinal',
-      'status-class',
-      'counts',
-      'latency-ms',
-      'exact-cost-micros',
-      'opaque-redacted-correlation-id',
-    ],
   },
   execution: {
-    state: 'disabled-by-default',
-    networkAccess: 'disabled',
-    killSwitch: 'engaged',
-    committedAuthorization: 'none',
-    retryAuthority: 'none',
-    dispatcherOrClient: 'not-implemented',
+    state: 'disabled-by-default' as const,
+    networkAccess: 'disabled' as const,
+    killSwitch: 'engaged' as const,
+    corpus: 'blocked-empty-production-registry' as const,
+    committedAuthorization: 'none' as const,
+    retryAuthority: 'none' as const,
+    dispatcherOrClient: 'non-networking-refusal-stub-only' as const,
   },
-} as const;
+};
 
-export const BLOCKED_REAL_MODEL_BENCHMARK_PROFILE_V1 =
-  BlockedRealModelBenchmarkProfileV1Schema.parse({
-    ...commonProfileValues,
-    candidateStatus: 'blocked-unselected',
-    candidateSelection: {
-      selectionState: 'blocking-user-decision-required',
-      providerAndExactModelSelected: false,
-      immutableModelVersionOrSnapshotSelected: false,
-      exactEndpointSelected: false,
-      worstCaseReservationEvidenceConfirmed: false,
-      atMostOnceTimeoutReplayAndBillingContractConfirmed: false,
-      endpointAllowlist: [],
-    },
+export const SelectedRealModelBenchmarkProfileV1Schema = z
+  .strictObject({
+    profileVersion: z.literal(2),
+    profileId: z.literal(REAL_MODEL_BENCHMARK_PROFILE_ID),
+    purpose: z.literal('benchmark-only-design-not-execution'),
+    workload: z.literal('single-local-image-scene-analysis-plus-ocr-in-one-responses-call'),
+    candidateStatus: z.literal('proposed-unverified-execution-blocked'),
+    candidateSelection: SelectedRealModelBenchmarkCandidateV1Schema,
+    prompt: BenchmarkPromptBindingV1Schema,
+    contentPolicy: BenchmarkContentPolicyBindingV1Schema,
+    workflow: BannerAiWorkflowRefV1Schema,
+    requestOptions: z
+      .strictObject({
+        maxParts: z.literal(5),
+        includeBackground: z.literal(true),
+        preserveVisibleText: z.literal(true),
+      })
+      .readonly(),
+    outputContract: z
+      .strictObject({
+        compositionResult: z.literal('CompositionAnalysisResultV1'),
+        textObservations: z.literal(
+          'TextObservationV1-provider-array-server-wraps-actual-model-provenance',
+        ),
+        structuredJson: z.literal('strict-json-schema-and-runtime-validation-required'),
+        maximumLayerCount: z.literal(5),
+        imageDetail: z.literal('original'),
+        maxOutputTokens: z.literal(OPENAI_REAL_MODEL_MAX_OUTPUT_TOKENS),
+      })
+      .readonly(),
+    autonomyRestrictions: z
+      .strictObject({
+        tools: z.literal('forbidden'),
+        browsing: z.literal('forbidden'),
+        retrieval: z.literal('forbidden'),
+        urlFetching: z.literal('forbidden'),
+        codeExecution: z.literal('forbidden'),
+        providerSideBackgroundWork: z.literal('forbidden'),
+        previousResponseOrConversation: z.literal('forbidden'),
+        modelDirectedFollowUpCalls: z.literal('forbidden'),
+        autonomousFollowUpCalls: z.literal('forbidden'),
+      })
+      .readonly(),
+    caps: RealModelBenchmarkCapsV1Schema,
+    qualityContract: BenchmarkQualityContractV1Schema,
+    futureBoundary: z
+      .strictObject({
+        browserProviderCalls: z.literal('forbidden'),
+        browserActivationOrConfiguration: z.literal('forbidden'),
+        secretAccess: z.literal('server-side-only-reference-name-never-value'),
+        environmentPresenceAuthorizes: z.literal(false),
+        defaultNetworkAccess: z.literal('disabled'),
+        defaultKillSwitch: z.literal('engaged'),
+        manualControlAuthority: z.literal(
+          'future-opaque-server-only-capability-required-before-every-call',
+        ),
+        requestLogging: z
+          .strictObject({
+            imageBytesOrDataUri: z.literal('forbidden'),
+            filenames: z.literal('forbidden'),
+            ocrText: z.literal('forbidden'),
+            promptBody: z.literal('forbidden'),
+            secretValuesOrHeaders: z.literal('forbidden'),
+            rawProviderBodiesOrErrors: z.literal('forbidden'),
+            fullLinkableCorpusSourceRequestIdsOrHashes: z.literal('forbidden'),
+          })
+          .readonly(),
+      })
+      .readonly(),
+    execution: z
+      .strictObject({
+        state: z.literal('disabled-by-default'),
+        networkAccess: z.literal('disabled'),
+        killSwitch: z.literal('engaged'),
+        corpus: z.literal('blocked-empty-production-registry'),
+        committedAuthorization: z.literal('none'),
+        retryAuthority: z.literal('none'),
+        dispatcherOrClient: z.literal('non-networking-refusal-stub-only'),
+      })
+      .readonly(),
+  })
+  .superRefine((profile, context) => {
+    if (
+      !exactCanonicalEquality(
+        profile.candidateSelection,
+        OPENAI_REAL_MODEL_BENCHMARK_CANDIDATE_V1,
+      ) ||
+      !exactCanonicalEquality(profile.prompt, profileCommonValues.prompt) ||
+      !exactCanonicalEquality(profile.contentPolicy, profileCommonValues.contentPolicy) ||
+      !exactCanonicalEquality(profile.workflow, INITIAL_BANNER_ANALYZE_WORKFLOW_REF_V1) ||
+      !exactCanonicalEquality(profile.caps, REAL_MODEL_BENCHMARK_CAPS_V1) ||
+      !exactCanonicalEquality(profile.qualityContract, REAL_MODEL_BENCHMARK_QUALITY_CONTRACT_V1)
+    ) {
+      context.addIssue({
+        code: 'custom',
+        message:
+          'OpenAI benchmark profile identity, evidence, policy, workflow, caps, or quality drifted.',
+      });
+    }
+  })
+  .readonly();
+
+export const OPENAI_REAL_MODEL_BENCHMARK_PROFILE_V1 =
+  SelectedRealModelBenchmarkProfileV1Schema.parse({
+    ...profileCommonValues,
+    candidateStatus: 'proposed-unverified-execution-blocked',
+    candidateSelection: OPENAI_REAL_MODEL_BENCHMARK_CANDIDATE_V1,
   });
+
+/** Compatibility name: blocked now means evidence/corpus/authorization blocked, not unselected. */
+export const BLOCKED_REAL_MODEL_BENCHMARK_PROFILE_V1 = OPENAI_REAL_MODEL_BENCHMARK_PROFILE_V1;
+export const RealModelBenchmarkProfileV1Schema = SelectedRealModelBenchmarkProfileV1Schema;
 
 export type SelectedRealModelBenchmarkProfileV1 = z.infer<
   typeof SelectedRealModelBenchmarkProfileV1Schema
@@ -820,12 +551,62 @@ export const digestSelectedRealModelBenchmarkProfileV1 = (
 
 const authorizationIdPattern = /^[A-Za-z0-9][A-Za-z0-9_.:-]{7,127}$/;
 
+export const AuthorizedRealModelBenchmarkRunBindingV1Schema = z
+  .strictObject({
+    bindingVersion: z.literal(1),
+    fixtureId: RealModelBenchmarkFixtureIdSchema,
+    runOrdinal: z.union([z.literal(1), z.literal(2)]),
+    sourceSha256: Sha256HexSchema,
+    requestFixtureBindingSha256: Sha256HexSchema,
+    requestIdentity: AiModelRequestIdentityV1Schema,
+    inputDigest: AiInputDigestV1Schema,
+    providerRequestSha256: CapabilityRequestSha256Schema,
+  })
+  .superRefine((binding, context) => {
+    if (!exactCanonicalEquality(binding.inputDigest, binding.requestIdentity.inputDigest)) {
+      context.addIssue({
+        code: 'custom',
+        message: 'Authorized input digest must equal its request identity digest.',
+      });
+    }
+  })
+  .readonly();
+
+const AuthorizedRunBindingsV1Schema = z
+  .array(AuthorizedRealModelBenchmarkRunBindingV1Schema)
+  .length(6)
+  .superRefine((bindings, context) => {
+    const fixtureRunKeys = bindings.map((binding) => `${binding.fixtureId}:${binding.runOrdinal}`);
+    const requestIds = bindings.map((binding) => binding.requestIdentity.requestId);
+    if (
+      new Set(fixtureRunKeys).size !== bindings.length ||
+      new Set(requestIds).size !== bindings.length
+    ) {
+      context.addIssue({
+        code: 'custom',
+        message: 'Authorization requires six unique fixture/run and request identities.',
+      });
+    }
+    const fixtureCounts = new Map<string, number>();
+    for (const binding of bindings) {
+      fixtureCounts.set(binding.fixtureId, (fixtureCounts.get(binding.fixtureId) ?? 0) + 1);
+    }
+    if (fixtureCounts.size !== 3 || [...fixtureCounts.values()].some((count) => count !== 2)) {
+      context.addIssue({
+        code: 'custom',
+        message: 'Authorization requires exactly two request bindings for each of three fixtures.',
+      });
+    }
+  })
+  .readonly();
+
 export const RealModelBenchmarkAuthorizationConfirmationsV1Schema = z
   .strictObject({
     licenseAndThirdPartyRights: z.literal('confirmed'),
-    providerTermsAndModelAvailability: z.literal('confirmed'),
-    providerModelEndpointWorstCaseReservationCeiling: z.literal('confirmed'),
-    providerAtMostOnceTimeoutReplayExecutionAndBilling: z.literal('confirmed'),
+    currentOfficialModelAvailabilityAndApiFieldSemantics: z.literal('confirmed'),
+    observedProviderModelVersionAndFingerprintEvidence: z.literal('confirmed'),
+    datedPricingAssertionReconfirmed: z.literal('confirmed'),
+    providerModelEndpointRequestShapeWorstCaseProof: z.literal('confirmed'),
     providerTrainingUse: z.literal('confirmed'),
     providerRetentionAndDeletion: z.literal('confirmed'),
     humanReviewSubprocessorsAndAbuseMonitoring: z.literal('confirmed'),
@@ -834,49 +615,143 @@ export const RealModelBenchmarkAuthorizationConfirmationsV1Schema = z
   })
   .readonly();
 
-const authorizationPayloadShape = {
-  authorizationVersion: z.literal(1),
+const authorizationCoreShape = {
+  authorizationVersion: z.literal(2),
+  authorizationRevision: z.int().min(1).max(2_147_483_647),
   authorizationId: z.string().regex(authorizationIdPattern),
+  issuedAt: CanonicalUtcTimestampSchema,
+  expiresAt: CanonicalUtcTimestampSchema,
+  authorizationRevisionEvidenceSha256: Sha256HexSchema,
   profileId: z.literal(REAL_MODEL_BENCHMARK_PROFILE_ID),
   profileSha256: RealModelBenchmarkProfileSha256Schema,
   admittedCorpusManifestSha256: RealModelBenchmarkCorpusManifestSha256Schema,
+  corpusEvidenceSha256: Sha256HexSchema,
   candidate: SelectedRealModelBenchmarkCandidateV1Schema,
+  responsesRequestShapeSha256: z.literal(
+    PROPOSED_OPENAI_RESPONSES_REQUEST_CONTRACT_V1.requestShapeSha256,
+  ),
+  pricingEvidenceSha256: z.literal(OPENAI_BENCHMARK_PRICING_EVIDENCE_V1.evidenceSha256),
+  worstCaseRequestCostProof: OpenAiWorstCaseRequestCostProofV1Schema,
+  authorizedObservedIdentityEvidence: OpenAiAuthorizedObservedIdentityEvidenceV1Schema,
   prompt: BenchmarkPromptBindingV1Schema,
   contentPolicy: BenchmarkContentPolicyBindingV1Schema,
   workflow: BannerAiWorkflowRefV1Schema,
+  authorizedRunBindings: AuthorizedRunBindingsV1Schema,
   caps: RealModelBenchmarkCapsV1Schema,
+  qualityContract: BenchmarkQualityContractV1Schema,
+  retryPolicy: RealModelBenchmarkRetryPolicyV1Schema,
+  secretReferenceName: z.literal(OPENAI_REAL_MODEL_SECRET_REFERENCE_NAME),
   confirmations: RealModelBenchmarkAuthorizationConfirmationsV1Schema,
+  requiredManualControlReleaseRevision: z.int().min(1).max(2_147_483_647),
   executionRelease: z
     .strictObject({
-      manualKillSwitch: z.literal('manually-released-for-this-bounded-benchmark-only'),
-      serverSideNetwork: z.literal('authorized-only-for-the-exact-allowlisted-endpoint'),
+      manualKillSwitch: z.literal('fresh-exact-revision-release-required'),
+      serverSideNetwork: z.literal('future-only-exact-allowlisted-endpoint'),
       browserNetwork: z.literal('forbidden'),
       environmentSecretPresenceAloneAuthorizes: z.literal(false),
     })
     .readonly(),
 } as const;
 
-const RealModelBenchmarkAuthorizationPayloadV1Schema = z
-  .strictObject(authorizationPayloadShape)
+const RealModelBenchmarkAuthorizationCoreV1Schema = z
+  .strictObject(authorizationCoreShape)
   .readonly();
+
+const digestParsedRealModelBenchmarkAuthorizationCoreV1 = (core: unknown): string =>
+  sha256Hex(Buffer.from(canonicalizeJson(core), 'utf8'));
+
+export const digestRealModelBenchmarkAuthorizationPayloadV1 = (input: unknown): string => {
+  const core = RealModelBenchmarkAuthorizationCoreV1Schema.parse(input);
+  return digestParsedRealModelBenchmarkAuthorizationCoreV1(core);
+};
+
+const RealModelBenchmarkAuthorizationPayloadV1Schema = z
+  .strictObject({
+    ...authorizationCoreShape,
+    authorizationPayloadSha256: Sha256HexSchema,
+  })
+  .superRefine((authorization, context) => {
+    const { authorizationPayloadSha256, ...core } = authorization;
+    if (authorizationPayloadSha256 !== digestParsedRealModelBenchmarkAuthorizationCoreV1(core)) {
+      context.addIssue({
+        code: 'custom',
+        message: 'Authorization payload digest differs from its exact canonical core.',
+        path: ['authorizationPayloadSha256'],
+      });
+    }
+  })
+  .readonly();
+
+const renderParsedRealModelBenchmarkAuthorizationStatementV1 = (payload: unknown): string =>
+  `I explicitly authorize this one bounded Banner AI OpenAI Responses benchmark payload=${canonicalizeJson(payload)}. I authorize no other provider, model alias, observed model version or fingerprint, endpoint, request shape, corpus, prompt, policy, workflow, call, retry, spend, time, data use, or purpose.`;
 
 export const renderRealModelBenchmarkAuthorizationStatementV1 = (input: unknown): string => {
   const payload = RealModelBenchmarkAuthorizationPayloadV1Schema.parse(input);
-  return `I explicitly authorize this one bounded Banner AI real-model benchmark payload=${canonicalizeJson(payload)}. I authorize no other provider, model, version, endpoint, corpus, prompt, policy, workflow, call, retry, spend, time, data use, or purpose.`;
+  return renderParsedRealModelBenchmarkAuthorizationStatementV1(payload);
 };
 
 export const RealModelBenchmarkAuthorizationV1Schema = z
   .strictObject({
-    ...authorizationPayloadShape,
+    ...authorizationCoreShape,
+    authorizationPayloadSha256: Sha256HexSchema,
     renderedUserStatement: z.string(),
+    renderedUserStatementSha256: Sha256HexSchema,
   })
   .superRefine((authorization, context) => {
-    const { renderedUserStatement, ...payload } = authorization;
-    if (renderedUserStatement !== renderRealModelBenchmarkAuthorizationStatementV1(payload)) {
+    const {
+      renderedUserStatement,
+      renderedUserStatementSha256,
+      authorizationPayloadSha256,
+      ...core
+    } = authorization;
+    const expectedPayloadSha = digestParsedRealModelBenchmarkAuthorizationCoreV1(core);
+    const payload = { ...core, authorizationPayloadSha256 };
+    const expectedStatement = renderParsedRealModelBenchmarkAuthorizationStatementV1(payload);
+    const expectedStatementSha = sha256Hex(Buffer.from(expectedStatement, 'utf8'));
+    if (authorizationPayloadSha256 !== expectedPayloadSha) {
       context.addIssue({
         code: 'custom',
-        message: 'Rendered authorization statement must exactly bind the canonical payload.',
+        message: 'Authorization payload digest mismatched.',
+        path: ['authorizationPayloadSha256'],
+      });
+    }
+    if (
+      renderedUserStatement !== expectedStatement ||
+      renderedUserStatementSha256 !== expectedStatementSha
+    ) {
+      context.addIssue({
+        code: 'custom',
+        message: 'Rendered authorization statement or digest must exactly bind the payload.',
         path: ['renderedUserStatement'],
+      });
+    }
+    if (
+      Date.parse(authorization.issuedAt) >= Date.parse(authorization.expiresAt) ||
+      !exactCanonicalEquality(authorization.candidate, OPENAI_REAL_MODEL_BENCHMARK_CANDIDATE_V1) ||
+      authorization.profileSha256 !==
+        digestSelectedRealModelBenchmarkProfileV1(OPENAI_REAL_MODEL_BENCHMARK_PROFILE_V1) ||
+      !exactCanonicalEquality(
+        authorization.prompt,
+        OPENAI_REAL_MODEL_BENCHMARK_PROFILE_V1.prompt,
+      ) ||
+      !exactCanonicalEquality(
+        authorization.contentPolicy,
+        OPENAI_REAL_MODEL_BENCHMARK_PROFILE_V1.contentPolicy,
+      ) ||
+      !exactCanonicalEquality(
+        authorization.workflow,
+        OPENAI_REAL_MODEL_BENCHMARK_PROFILE_V1.workflow,
+      ) ||
+      !exactCanonicalEquality(authorization.caps, REAL_MODEL_BENCHMARK_CAPS_V1) ||
+      !exactCanonicalEquality(
+        authorization.qualityContract,
+        REAL_MODEL_BENCHMARK_QUALITY_CONTRACT_V1,
+      )
+    ) {
+      context.addIssue({
+        code: 'custom',
+        message:
+          'Authorization identity, time, profile, prompt, policy, workflow, caps, or quality drifted.',
       });
     }
   })
@@ -899,17 +774,16 @@ export const digestRealModelBenchmarkAuthorizationV1 = (
 };
 
 const ManualControlCommonShape = {
-  controlVersion: z.literal(1),
+  controlVersion: z.literal(2),
   controlId: z.literal('banner-ai-real-model-benchmark-kill-switch-v1'),
   revision: z.int().min(1).max(2_147_483_647),
-  authoritySource: z.literal('fresh-authoritative-server-side-read-required-before-every-call'),
+  authoritySource: z.literal(
+    'structural-design-input-future-opaque-authoritative-control-capability-required',
+  ),
 } as const;
 
 const EngagedManualControlV1Schema = z
-  .strictObject({
-    ...ManualControlCommonShape,
-    state: z.literal('engaged'),
-  })
+  .strictObject({ ...ManualControlCommonShape, state: z.literal('engaged') })
   .readonly();
 
 const ReengagedManualControlV1Schema = z
@@ -930,6 +804,17 @@ const ReleasedManualControlV1Schema = z
     profileId: z.literal(REAL_MODEL_BENCHMARK_PROFILE_ID),
     profileSha256: RealModelBenchmarkProfileSha256Schema,
     admittedCorpusManifestSha256: RealModelBenchmarkCorpusManifestSha256Schema,
+    releasedAt: CanonicalUtcTimestampSchema,
+    expiresAt: CanonicalUtcTimestampSchema,
+    releaseEvidenceSha256: Sha256HexSchema,
+  })
+  .superRefine((control, context) => {
+    if (Date.parse(control.releasedAt) >= Date.parse(control.expiresAt)) {
+      context.addIssue({
+        code: 'custom',
+        message: 'Manual release must have a positive fresh window.',
+      });
+    }
   })
   .readonly();
 
@@ -941,12 +826,10 @@ export const RealModelBenchmarkManualControlV1Schema = z.discriminatedUnion('sta
 
 export const DEFAULT_REAL_MODEL_BENCHMARK_MANUAL_CONTROL_V1 =
   RealModelBenchmarkManualControlV1Schema.parse({
-    controlVersion: 1,
+    controlVersion: 2,
     controlId: 'banner-ai-real-model-benchmark-kill-switch-v1',
     revision: 1,
-    authoritySource: 'fresh-authoritative-server-side-read-required-before-every-call',
+    authoritySource:
+      'structural-design-input-future-opaque-authoritative-control-capability-required',
     state: 'engaged',
   });
-
-// Execution-state validation and OCR quality evaluation live in their separate trust-boundary
-// modules. This profile module remains configuration, candidate, authorization, and manual control only.
