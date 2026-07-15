@@ -17,6 +17,7 @@ import {
 } from '../evaluation/ai-contracts.js';
 import {
   QWEN3_VL_API_FAMILY,
+  QWEN3_VL_CHAT_COMPLETIONS_ENDPOINT,
   QWEN3_VL_ENDPOINT_METHOD,
   QWEN3_VL_FLASH_MODEL_CONTRACT_V1,
   QWEN3_VL_MAX_OUTPUT_TOKENS,
@@ -27,11 +28,11 @@ import {
   QWEN3_VL_REQUESTED_MODEL_ID,
   QWEN3_VL_REQUEST_SHAPE_SHA256,
   QWEN3_VL_SECRET_REFERENCE_NAME,
+  QWEN3_VL_SERVER_WORKSPACE_ID,
   QWEN_FOUR_FIXTURE_BENCHMARK_CAPS_SHA256,
   QWEN_FOUR_FIXTURE_HUMAN_ORACLE_CORPUS_SHA256,
   QWEN_FOUR_FIXTURE_PENDING_CORPUS_CORE_SHA256,
   QwenProviderUsageV1Schema,
-  QwenServerWorkspaceIdSchema,
   assertQwen3VlOfficialEvidenceFresh,
   calculateQwen3VlListCostMicros,
   deriveQwenFrankfurtChatCompletionsEndpoint,
@@ -57,7 +58,7 @@ const QwenBenchmarkAuthorizationPacketV1Schema = z
     purpose: z.literal('one-capped-four-fixture-sequential-zero-retry-benchmark'),
     issuedAtMs: z.int().min(0),
     expiresAtMs: z.int().min(1),
-    serverWorkspaceId: QwenServerWorkspaceIdSchema,
+    serverWorkspaceId: z.literal(QWEN3_VL_SERVER_WORKSPACE_ID),
     endpoint: z.string().url(),
     endpointMethod: z.literal(QWEN3_VL_ENDPOINT_METHOD),
     apiFamily: z.literal(QWEN3_VL_API_FAMILY),
@@ -141,9 +142,9 @@ export const createQwenDryRunExecutionAuthorization = (input: {
   readonly serverWorkspaceId?: string;
 }): QwenBenchmarkExecutionAuthorization => {
   const nowMs = z.int().min(0).parse(input.nowMs);
-  const serverWorkspaceId = QwenServerWorkspaceIdSchema.parse(
-    input.serverWorkspaceId ?? 'dry-run-workspace',
-  );
+  const serverWorkspaceId = z
+    .literal(QWEN3_VL_SERVER_WORKSPACE_ID)
+    .parse(input.serverWorkspaceId ?? QWEN3_VL_SERVER_WORKSPACE_ID);
   return mintQwenBenchmarkExecutionAuthorization({
     authorizationVersion: 1,
     authorizationId: 'qwen.deterministic.fake.authorization.v1',
@@ -152,7 +153,7 @@ export const createQwenDryRunExecutionAuthorization = (input: {
     issuedAtMs: nowMs,
     expiresAtMs: nowMs + 600_000,
     serverWorkspaceId,
-    endpoint: deriveQwenFrankfurtChatCompletionsEndpoint(serverWorkspaceId),
+    endpoint: QWEN3_VL_CHAT_COMPLETIONS_ENDPOINT,
     endpointMethod: QWEN3_VL_ENDPOINT_METHOD,
     apiFamily: QWEN3_VL_API_FAMILY,
     providerKey: QWEN3_VL_PROVIDER_KEY,

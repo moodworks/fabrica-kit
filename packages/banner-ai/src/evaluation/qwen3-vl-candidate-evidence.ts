@@ -10,14 +10,14 @@ import {
 import { SCENE_ANALYSIS_PROMPT_V1 } from './prompt-catalog.js';
 
 export const QWEN3_VL_PROVIDER_KEY = 'alibaba-cloud-model-studio' as const;
-export const QWEN3_VL_REQUESTED_MODEL_ID = 'qwen3-vl-flash-2026-01-22' as const;
+export const QWEN3_VL_REQUESTED_MODEL_ID = 'qwen3.6-flash-2026-04-16' as const;
+export const QWEN3_VL_SERVER_WORKSPACE_ID = 'ws-vy71dtw49uzef5hz' as const;
 export const QWEN3_VL_API_FAMILY = 'openai-compatible-chat-completions' as const;
 export const QWEN3_VL_SECRET_REFERENCE_NAME = 'DASHSCOPE_API_KEY' as const;
 export const QWEN3_VL_ENDPOINT_METHOD = 'POST' as const;
 export const QWEN3_VL_MAX_OUTPUT_TOKENS = 4_096 as const;
 export const QWEN3_VL_OFFICIAL_EVIDENCE_RETRIEVED_DATE = '2026-07-15' as const;
 export const QWEN3_VL_OFFICIAL_EVIDENCE_FRESH_UNTIL_EXCLUSIVE = '2026-08-15T00:00:00.000Z' as const;
-export const QWEN3_VL_MODEL_DEPRECATION_DATE = '2026-10-10' as const;
 
 export const QWEN3_VL_FLASH_MODEL_CONTRACT_V1 = AiModelContractV1Schema.parse({
   identity: {
@@ -38,6 +38,7 @@ export const QWEN3_VL_OFFICIAL_DOCUMENTATION = Object.freeze({
   chatCompletions:
     'https://www.alibabacloud.com/help/en/model-studio/qwen-api-via-openai-chat-completions',
   visualInput: 'https://www.alibabacloud.com/help/en/model-studio/vision',
+  visualModelCatalog: 'https://www.alibabacloud.com/help/en/model-studio/vision-model',
   structuredOutput: 'https://www.alibabacloud.com/help/en/model-studio/qwen-structured-output',
   contextCache: 'https://www.alibabacloud.com/help/en/model-studio/context-cache',
   pricing: 'https://www.alibabacloud.com/help/en/model-studio/model-pricing',
@@ -57,6 +58,46 @@ export const deriveQwenFrankfurtChatCompletionsEndpoint = (workspaceId: unknown)
   const validatedServerWorkspaceId = QwenServerWorkspaceIdSchema.parse(workspaceId);
   return `https://${validatedServerWorkspaceId}.eu-central-1.maas.aliyuncs.com/compatible-mode/v1/chat/completions`;
 };
+
+export const QWEN3_VL_CHAT_COMPLETIONS_ENDPOINT = deriveQwenFrankfurtChatCompletionsEndpoint(
+  QWEN3_VL_SERVER_WORKSPACE_ID,
+);
+
+export const QWEN3_VL_MODEL_AVAILABILITY_EVIDENCE_V1 = Object.freeze({
+  evidenceVersion: 1 as const,
+  requestedModelId: QWEN3_VL_REQUESTED_MODEL_ID,
+  retrievedDate: QWEN3_VL_OFFICIAL_EVIDENCE_RETRIEVED_DATE,
+  freshUntilExclusive: QWEN3_VL_OFFICIAL_EVIDENCE_FRESH_UNTIL_EXCLUSIVE,
+  releaseScope: 'International' as const,
+  frankfurtDeploymentScope: 'Global' as const,
+  region: 'Germany-Frankfurt' as const,
+  releasedDate: '2026-04-16' as const,
+  inputModalities: Object.freeze(['text', 'image', 'video'] as const),
+  contextWindowTokens: 1_000_000 as const,
+  apiFamily: QWEN3_VL_API_FAMILY,
+  chatCompletionsSupported: true as const,
+  base64ImageInput: 'image-url-data-url' as const,
+  jsonObjectStructuredOutput: 'supported-json-object-schema-not-provider-enforced' as const,
+  nonThinkingModeControl: 'enable_thinking-false' as const,
+  sourceUrls: Object.freeze({
+    releaseAvailability: QWEN3_VL_OFFICIAL_DOCUMENTATION.releaseAvailability,
+    frankfurtPricingAndAvailability: QWEN3_VL_OFFICIAL_DOCUMENTATION.pricing,
+    visualModelCatalog: QWEN3_VL_OFFICIAL_DOCUMENTATION.visualModelCatalog,
+    visualInput: QWEN3_VL_OFFICIAL_DOCUMENTATION.visualInput,
+    chatCompletions: QWEN3_VL_OFFICIAL_DOCUMENTATION.chatCompletions,
+    structuredOutput: QWEN3_VL_OFFICIAL_DOCUMENTATION.structuredOutput,
+  }),
+});
+
+export const QWEN3_VL_MODEL_LIFECYCLE_EVIDENCE_V1 = Object.freeze({
+  evidenceVersion: 1 as const,
+  requestedModelId: QWEN3_VL_REQUESTED_MODEL_ID,
+  retrievedDate: QWEN3_VL_OFFICIAL_EVIDENCE_RETRIEVED_DATE,
+  freshUntilExclusive: QWEN3_VL_OFFICIAL_EVIDENCE_FRESH_UNTIL_EXCLUSIVE,
+  currentDeprecationScheduleStatus: 'not-listed' as const,
+  snapshotSunsetNoticeMinimumDays: 30 as const,
+  sourceUrl: QWEN3_VL_OFFICIAL_DOCUMENTATION.deprecation,
+});
 
 const providerProtocolWrapperPrefix = `Provider protocol wrapper v1.
 The canonical Banner instruction above is unchanged and authoritative.
@@ -136,35 +177,36 @@ export const QWEN_FOUR_FIXTURE_HUMAN_ORACLE_CORPUS_SHA256 =
 
 export const QWEN3_VL_PRICING_TIERS_V1 = Object.freeze([
   Object.freeze({
-    maximumInputTokensInclusive: 32_000,
-    inputMicrosPerMillionTokens: 50_000,
-    outputMicrosPerMillionTokens: 400_000,
-  }),
-  Object.freeze({
-    maximumInputTokensInclusive: 128_000,
-    inputMicrosPerMillionTokens: 75_000,
-    outputMicrosPerMillionTokens: 600_000,
-  }),
-  Object.freeze({
+    minimumInputTokensExclusive: 0,
     maximumInputTokensInclusive: 256_000,
-    inputMicrosPerMillionTokens: 120_000,
-    outputMicrosPerMillionTokens: 960_000,
+    inputMicrosPerMillionTokens: 165_000,
+    outputMicrosPerMillionTokens: 990_000,
+  }),
+  Object.freeze({
+    minimumInputTokensExclusive: 256_000,
+    maximumInputTokensInclusive: 1_000_000,
+    inputMicrosPerMillionTokens: 660_000,
+    outputMicrosPerMillionTokens: 3_961_000,
   }),
 ] as const);
 
 export const QWEN3_VL_PRICING_EVIDENCE_V1 = Object.freeze({
   evidenceVersion: 1 as const,
-  evidenceId: 'alibaba-qwen3-vl-flash-eu-pricing-2026-07-15' as const,
+  evidenceId: 'alibaba-qwen3-6-flash-global-frankfurt-pricing-2026-07-15' as const,
   sourceUrl: QWEN3_VL_OFFICIAL_DOCUMENTATION.pricing,
   retrievedDate: QWEN3_VL_OFFICIAL_EVIDENCE_RETRIEVED_DATE,
   freshUntilExclusive: QWEN3_VL_OFFICIAL_EVIDENCE_FRESH_UNTIL_EXCLUSIVE,
-  region: 'EU-Frankfurt' as const,
+  requestedModelId: QWEN3_VL_REQUESTED_MODEL_ID,
+  documentedAlias: 'qwen3.6-flash' as const,
+  documentedAliasCurrentlyEquivalentToRequestedSnapshot: true as const,
+  region: 'Germany-Frankfurt' as const,
+  pricingScope: 'Global' as const,
   currency: 'USD' as const,
   tierSelection: 'total-input-tokens-for-one-request' as const,
   tierApplication:
     'selected-tier-standard-rates-with-documented-20-percent-implicit-cache-hit-input-rate' as const,
   implicitContextCache: Object.freeze({
-    mode: 'automatic-cannot-be-disabled-for-supported-qwen-visual-models' as const,
+    mode: 'automatic-for-documented-qwen3-6-flash-in-frankfurt' as const,
     hitTokenUsageField: 'prompt_tokens_details.cached_tokens' as const,
     hitTokenInputRateNumerator: 1 as const,
     hitTokenInputRateDenominator: 5 as const,
@@ -184,8 +226,7 @@ export const assertQwen3VlOfficialEvidenceFresh = (nowMs: number): void => {
   const now = z.int().min(0).parse(nowMs);
   const retrievedStart = Date.parse(`${QWEN3_VL_OFFICIAL_EVIDENCE_RETRIEVED_DATE}T00:00:00.000Z`);
   const freshUntil = Date.parse(QWEN3_VL_OFFICIAL_EVIDENCE_FRESH_UNTIL_EXCLUSIVE);
-  const deprecation = Date.parse(`${QWEN3_VL_MODEL_DEPRECATION_DATE}T00:00:00.000Z`);
-  if (now < retrievedStart || now >= freshUntil || now >= deprecation) {
+  if (now < retrievedStart || now >= freshUntil) {
     throw new TypeError('Qwen official model, API, or pricing evidence is stale.');
   }
 };
@@ -222,7 +263,7 @@ export const QwenCompletionTokensDetailsV1Schema = z
 
 export const QwenProviderUsageV1Schema = z
   .strictObject({
-    prompt_tokens: z.int().min(0).max(256_000),
+    prompt_tokens: z.int().min(1).max(256_000),
     completion_tokens: z.int().min(0).max(QWEN3_VL_MAX_OUTPUT_TOKENS),
     total_tokens: z.int().min(0).max(260_096),
     prompt_tokens_details: QwenPromptTokensDetailsV1Schema.nullable().optional(),
@@ -258,37 +299,87 @@ export const QwenProviderUsageV1Schema = z
 
 export type QwenProviderUsageV1 = z.infer<typeof QwenProviderUsageV1Schema>;
 
+const QwenPricingUsageDetailTokenCountSchema = z.int().min(0).max(1_004_096);
+const QwenPricingNullableAudioTokenCountSchema = QwenPricingUsageDetailTokenCountSchema.nullable();
+
+const QwenPricingCacheCreationDetailsV1Schema = z
+  .strictObject({
+    ephemeral_5m_input_tokens: QwenPricingUsageDetailTokenCountSchema,
+    cache_creation_input_tokens: QwenPricingUsageDetailTokenCountSchema,
+    cache_type: z.literal('ephemeral'),
+  })
+  .readonly();
+
+const QwenPricingPromptTokensDetailsV1Schema = z
+  .strictObject({
+    audio_tokens: QwenPricingNullableAudioTokenCountSchema.optional(),
+    cached_tokens: QwenPricingUsageDetailTokenCountSchema.optional(),
+    text_tokens: QwenPricingUsageDetailTokenCountSchema.optional(),
+    image_tokens: QwenPricingUsageDetailTokenCountSchema.optional(),
+    video_tokens: QwenPricingUsageDetailTokenCountSchema.optional(),
+    cache_creation: QwenPricingCacheCreationDetailsV1Schema.optional(),
+  })
+  .readonly();
+
+const QwenPricingCompletionTokensDetailsV1Schema = z
+  .strictObject({
+    audio_tokens: QwenPricingNullableAudioTokenCountSchema.optional(),
+    reasoning_tokens: QwenPricingUsageDetailTokenCountSchema.nullable().optional(),
+    text_tokens: QwenPricingUsageDetailTokenCountSchema.optional(),
+  })
+  .readonly();
+
+export const QwenPricingUsageV1Schema = z
+  .strictObject({
+    prompt_tokens: z.int().min(1).max(1_000_000),
+    completion_tokens: z.int().min(0).max(QWEN3_VL_MAX_OUTPUT_TOKENS),
+    total_tokens: z.int().min(0).max(1_004_096),
+    prompt_tokens_details: QwenPricingPromptTokensDetailsV1Schema.nullable().optional(),
+    completion_tokens_details: QwenPricingCompletionTokensDetailsV1Schema.nullable().optional(),
+  })
+  .superRefine((usage, context) => {
+    if (usage.total_tokens !== usage.prompt_tokens + usage.completion_tokens) {
+      context.addIssue({
+        code: 'custom',
+        message: 'Provider usage token totals are inconsistent.',
+      });
+    }
+    const cachedTokens = usage.prompt_tokens_details?.cached_tokens ?? 0;
+    if (cachedTokens > usage.prompt_tokens) {
+      context.addIssue({
+        code: 'custom',
+        message: 'Provider cached input tokens exceed total prompt tokens.',
+      });
+    }
+    const cacheCreation = usage.prompt_tokens_details?.cache_creation;
+    if (
+      cacheCreation !== undefined &&
+      (cacheCreation.ephemeral_5m_input_tokens !== 0 ||
+        cacheCreation.cache_creation_input_tokens !== 0)
+    ) {
+      context.addIssue({
+        code: 'custom',
+        message: 'Explicit cache creation usage is foreign to the cache-control-free Qwen request.',
+      });
+    }
+  })
+  .readonly();
+
 export const QwenCalculatedListCostV1Schema = z
   .strictObject({
     currency: z.literal('USD'),
     unit: z.literal('micro-USD'),
     calculation: z.literal('official-list-price-not-provider-reported-cost'),
     rounding: z.literal('ceiling-after-combining-input-and-output-rationals'),
-    inputTokenTierMaximumInclusive: z.union([
-      z.literal(32_000),
-      z.literal(128_000),
-      z.literal(256_000),
-    ]),
-    inputMicrosPerMillionTokens: z.union([
-      z.literal(50_000),
-      z.literal(75_000),
-      z.literal(120_000),
-    ]),
-    outputMicrosPerMillionTokens: z.union([
-      z.literal(400_000),
-      z.literal(600_000),
-      z.literal(960_000),
-    ]),
+    inputTokenTierMaximumInclusive: z.union([z.literal(256_000), z.literal(1_000_000)]),
+    inputMicrosPerMillionTokens: z.union([z.literal(165_000), z.literal(660_000)]),
+    outputMicrosPerMillionTokens: z.union([z.literal(990_000), z.literal(3_961_000)]),
     cachedInputRateFractionOfStandard: z
       .strictObject({ numerator: z.literal(1), denominator: z.literal(5) })
       .readonly(),
-    cachedInputMicrosPerMillionTokens: z.union([
-      z.literal(10_000),
-      z.literal(15_000),
-      z.literal(24_000),
-    ]),
-    uncachedPromptTokens: z.int().min(0).max(256_000),
-    cachedPromptTokens: z.int().min(0).max(256_000),
+    cachedInputMicrosPerMillionTokens: z.union([z.literal(33_000), z.literal(132_000)]),
+    uncachedPromptTokens: z.int().min(0).max(1_000_000),
+    cachedPromptTokens: z.int().min(0).max(1_000_000),
     completionTokens: z.int().min(0).max(QWEN3_VL_MAX_OUTPUT_TOKENS),
     calculatedListCostMicros: CanonicalMicrosStringSchema,
   })
@@ -298,8 +389,10 @@ export const QwenCalculatedListCostV1Schema = z
     );
     const selectedTier = QWEN3_VL_PRICING_TIERS_V1.find(
       (candidate) =>
+        cost.uncachedPromptTokens + cost.cachedPromptTokens >
+          candidate.minimumInputTokensExclusive &&
         cost.uncachedPromptTokens + cost.cachedPromptTokens <=
-        candidate.maximumInputTokensInclusive,
+          candidate.maximumInputTokensInclusive,
     );
     const expectedNumerator =
       BigInt(cost.uncachedPromptTokens) * BigInt(cost.inputMicrosPerMillionTokens) +
@@ -321,9 +414,11 @@ export const QwenCalculatedListCostV1Schema = z
   .readonly();
 
 export const calculateQwen3VlListCostMicros = (usageInput: unknown) => {
-  const usage = QwenProviderUsageV1Schema.parse(usageInput);
+  const usage = QwenPricingUsageV1Schema.parse(usageInput);
   const tier = QWEN3_VL_PRICING_TIERS_V1.find(
-    (candidate) => usage.prompt_tokens <= candidate.maximumInputTokensInclusive,
+    (candidate) =>
+      usage.prompt_tokens > candidate.minimumInputTokensExclusive &&
+      usage.prompt_tokens <= candidate.maximumInputTokensInclusive,
   );
   if (tier === undefined) {
     throw new RangeError('Qwen input usage exceeds the evidenced pricing tiers.');

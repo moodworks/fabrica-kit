@@ -11,14 +11,21 @@ import {
   createSceneAnalysisModelRequestV1,
 } from '../src/evaluation/ai-contracts.js';
 import {
+  QWEN3_VL_CHAT_COMPLETIONS_ENDPOINT,
+  QWEN3_VL_MODEL_AVAILABILITY_EVIDENCE_V1,
+  QWEN3_VL_MODEL_LIFECYCLE_EVIDENCE_V1,
   QWEN3_VL_OFFICIAL_EVIDENCE_RETRIEVED_DATE,
+  QWEN3_VL_PRICING_EVIDENCE_V1,
   QWEN3_VL_PRICING_EVIDENCE_SHA256,
   QWEN3_VL_PROVIDER_PROTOCOL_WRAPPER_SHA256,
   QWEN3_VL_REQUESTED_MODEL_ID,
   QWEN3_VL_REQUEST_SHAPE_SHA256,
+  QWEN3_VL_SERVER_WORKSPACE_ID,
   QWEN_FOUR_FIXTURE_BENCHMARK_CAPS_SHA256,
   QWEN_FOUR_FIXTURE_HUMAN_ORACLE_CORPUS_SHA256,
   QWEN_FOUR_FIXTURE_PENDING_CORPUS_CORE_SHA256,
+  QwenPricingUsageV1Schema,
+  QwenProviderUsageV1Schema,
   calculateQwen3VlListCostMicros,
   deriveQwenFrankfurtChatCompletionsEndpoint,
   type QwenProviderUsageV1,
@@ -117,65 +124,123 @@ const collectTypeScriptSources = (directory: string): readonly string[] =>
 
 describe('Qwen3-VL production adapter boundary', () => {
   it('pins the official model, Frankfurt endpoint derivation, request wrapper, and exact tier math', () => {
-    expect(QWEN3_VL_REQUESTED_MODEL_ID).toBe('qwen3-vl-flash-2026-01-22');
-    expect(deriveQwenFrankfurtChatCompletionsEndpoint('workspace-eu-001')).toBe(
-      'https://workspace-eu-001.eu-central-1.maas.aliyuncs.com/compatible-mode/v1/chat/completions',
+    expect(QWEN3_VL_REQUESTED_MODEL_ID).toBe('qwen3.6-flash-2026-04-16');
+    expect(QWEN3_VL_SERVER_WORKSPACE_ID).toBe('ws-vy71dtw49uzef5hz');
+    expect(QWEN3_VL_CHAT_COMPLETIONS_ENDPOINT).toBe(
+      'https://ws-vy71dtw49uzef5hz.eu-central-1.maas.aliyuncs.com/compatible-mode/v1/chat/completions',
+    );
+    expect(deriveQwenFrankfurtChatCompletionsEndpoint(QWEN3_VL_SERVER_WORKSPACE_ID)).toBe(
+      QWEN3_VL_CHAT_COMPLETIONS_ENDPOINT,
     );
     expect(QWEN3_VL_OFFICIAL_EVIDENCE_RETRIEVED_DATE).toBe('2026-07-15');
+    expect(QWEN3_VL_MODEL_AVAILABILITY_EVIDENCE_V1).toMatchObject({
+      requestedModelId: 'qwen3.6-flash-2026-04-16',
+      releaseScope: 'International',
+      frankfurtDeploymentScope: 'Global',
+      region: 'Germany-Frankfurt',
+      releasedDate: '2026-04-16',
+      inputModalities: ['text', 'image', 'video'],
+      contextWindowTokens: 1_000_000,
+      apiFamily: 'openai-compatible-chat-completions',
+      chatCompletionsSupported: true,
+      base64ImageInput: 'image-url-data-url',
+      jsonObjectStructuredOutput: 'supported-json-object-schema-not-provider-enforced',
+      nonThinkingModeControl: 'enable_thinking-false',
+      sourceUrls: {
+        frankfurtPricingAndAvailability:
+          'https://www.alibabacloud.com/help/en/model-studio/model-pricing',
+        visualModelCatalog: 'https://www.alibabacloud.com/help/en/model-studio/vision-model',
+      },
+    });
+    expect(QWEN3_VL_MODEL_LIFECYCLE_EVIDENCE_V1).toMatchObject({
+      requestedModelId: 'qwen3.6-flash-2026-04-16',
+      currentDeprecationScheduleStatus: 'not-listed',
+      snapshotSunsetNoticeMinimumDays: 30,
+    });
+    expect(QWEN3_VL_PRICING_EVIDENCE_V1).toMatchObject({
+      requestedModelId: 'qwen3.6-flash-2026-04-16',
+      documentedAlias: 'qwen3.6-flash',
+      documentedAliasCurrentlyEquivalentToRequestedSnapshot: true,
+      region: 'Germany-Frankfurt',
+      pricingScope: 'Global',
+    });
     expect(QWEN3_VL_PROVIDER_PROTOCOL_WRAPPER_SHA256).toMatch(/^[0-9a-f]{64}$/u);
     expect(QWEN3_VL_REQUEST_SHAPE_SHA256).toMatch(/^[0-9a-f]{64}$/u);
     expect(QWEN3_VL_PRICING_EVIDENCE_SHA256).toMatch(/^[0-9a-f]{64}$/u);
     expect(
       calculateQwen3VlListCostMicros({
-        prompt_tokens: 32_000,
+        prompt_tokens: 256_000,
         completion_tokens: 100,
-        total_tokens: 32_100,
+        total_tokens: 256_100,
       }),
     ).toMatchObject({
-      inputTokenTierMaximumInclusive: 32_000,
-      calculatedListCostMicros: '1640',
+      inputTokenTierMaximumInclusive: 256_000,
+      inputMicrosPerMillionTokens: 165_000,
+      outputMicrosPerMillionTokens: 990_000,
+      calculatedListCostMicros: '42339',
       calculation: 'official-list-price-not-provider-reported-cost',
     });
     expect(
       calculateQwen3VlListCostMicros({
-        prompt_tokens: 32_001,
-        completion_tokens: 100,
-        total_tokens: 32_101,
-      }),
-    ).toMatchObject({
-      inputTokenTierMaximumInclusive: 128_000,
-      calculatedListCostMicros: '2461',
-    });
-    expect(
-      calculateQwen3VlListCostMicros({
-        prompt_tokens: 128_001,
-        completion_tokens: 100,
-        total_tokens: 128_101,
+        prompt_tokens: 256_000,
+        completion_tokens: 0,
+        total_tokens: 256_000,
+        prompt_tokens_details: { cached_tokens: 256_000 },
       }),
     ).toMatchObject({
       inputTokenTierMaximumInclusive: 256_000,
-      calculatedListCostMicros: '15457',
+      cachedInputMicrosPerMillionTokens: 33_000,
+      calculatedListCostMicros: '8448',
+    });
+    expect(
+      calculateQwen3VlListCostMicros({
+        prompt_tokens: 256_001,
+        completion_tokens: 100,
+        total_tokens: 256_101,
+      }),
+    ).toMatchObject({
+      inputTokenTierMaximumInclusive: 1_000_000,
+      inputMicrosPerMillionTokens: 660_000,
+      outputMicrosPerMillionTokens: 3_961_000,
+      calculatedListCostMicros: '169357',
+    });
+    expect(
+      calculateQwen3VlListCostMicros({
+        prompt_tokens: 1_000_000,
+        completion_tokens: 100,
+        total_tokens: 1_000_100,
+      }),
+    ).toMatchObject({
+      inputTokenTierMaximumInclusive: 1_000_000,
+      calculatedListCostMicros: '660397',
     });
     expect(() =>
       calculateQwen3VlListCostMicros({
-        prompt_tokens: 256_001,
+        prompt_tokens: 0,
         completion_tokens: 0,
-        total_tokens: 256_001,
+        total_tokens: 0,
+      }),
+    ).toThrow();
+    expect(() =>
+      calculateQwen3VlListCostMicros({
+        prompt_tokens: 1_000_001,
+        completion_tokens: 0,
+        total_tokens: 1_000_001,
       }),
     ).toThrow();
     expect(
       calculateQwen3VlListCostMicros({
-        prompt_tokens: 32_001,
+        prompt_tokens: 256_001,
         completion_tokens: 0,
-        total_tokens: 32_001,
-        prompt_tokens_details: { cached_tokens: 32_001 },
+        total_tokens: 256_001,
+        prompt_tokens_details: { cached_tokens: 256_001 },
       }),
     ).toMatchObject({
-      inputTokenTierMaximumInclusive: 128_000,
-      cachedInputMicrosPerMillionTokens: 15_000,
+      inputTokenTierMaximumInclusive: 1_000_000,
+      cachedInputMicrosPerMillionTokens: 132_000,
       uncachedPromptTokens: 0,
-      cachedPromptTokens: 32_001,
-      calculatedListCostMicros: '481',
+      cachedPromptTokens: 256_001,
+      calculatedListCostMicros: '33793',
     });
     expect(
       calculateQwen3VlListCostMicros({
@@ -196,6 +261,43 @@ describe('Qwen3-VL production adapter boundary', () => {
         prompt_tokens_details: { cached_tokens: 11 },
       }),
     ).toThrow();
+    expect(
+      QwenPricingUsageV1Schema.safeParse({
+        prompt_tokens: 1_000_000,
+        completion_tokens: 4_096,
+        total_tokens: 1_004_096,
+        prompt_tokens_details: {
+          cached_tokens: 1_000_000,
+          text_tokens: 1_000_000,
+          image_tokens: 0,
+          video_tokens: 0,
+          cache_creation: {
+            ephemeral_5m_input_tokens: 0,
+            cache_creation_input_tokens: 0,
+            cache_type: 'ephemeral',
+          },
+        },
+        completion_tokens_details: {
+          reasoning_tokens: 4_096,
+          text_tokens: 4_096,
+        },
+      }).success,
+    ).toBe(true);
+    expect(
+      QwenProviderUsageV1Schema.safeParse({
+        prompt_tokens: 256_001,
+        completion_tokens: 0,
+        total_tokens: 256_001,
+      }).success,
+    ).toBe(false);
+    expect(
+      QwenProviderUsageV1Schema.safeParse({
+        prompt_tokens: 256_000,
+        completion_tokens: 0,
+        total_tokens: 256_000,
+        prompt_tokens_details: { text_tokens: 260_097 },
+      }).success,
+    ).toBe(false);
   });
 
   it('accepts one trusted local PNG and returns strict proposal, usage, latency, and list cost', async () => {
@@ -211,11 +313,11 @@ describe('Qwen3-VL production adapter boundary', () => {
     expect(transport.getCallCount()).toBe(1);
     expect(result).toMatchObject({
       providerKey: 'alibaba-cloud-model-studio',
-      requestedModelId: 'qwen3-vl-flash-2026-01-22',
-      observedModelId: 'qwen3-vl-flash-2026-01-22',
+      requestedModelId: 'qwen3.6-flash-2026-04-16',
+      observedModelId: 'qwen3.6-flash-2026-04-16',
       finishReason: 'stop',
       usage: { prompt_tokens: 1_000, completion_tokens: 200, total_tokens: 1_200 },
-      calculatedListCost: { calculatedListCostMicros: '130' },
+      calculatedListCost: { calculatedListCostMicros: '363' },
       latencyMs: 7,
     });
     expect(result.proposal.composition).toMatchObject({
@@ -417,6 +519,26 @@ describe('Qwen3-VL production adapter boundary', () => {
     expect(transport.getCallCount()).toBe(1);
   });
 
+  it.each(['qwen3-vl-flash-2026-01-22', 'qwen3.6-flash'] as const)(
+    'rejects the non-pinned observed model identity %s',
+    async (model) => {
+      const transport = createDeterministicQwenTransport([{ kind: 'unexpected-model', model }]);
+      const adapter = createQwen3VlSceneAnalysisAdapter({
+        transport,
+        clock: clockWithLatency(),
+      });
+      await expectReason(
+        adapter.analyze(
+          await analyzeInput({
+            authorization: createQwenDryRunExecutionAuthorization({ nowMs: fixedNowMs }),
+          }),
+        ),
+        'unexpected-model',
+      );
+      expect(transport.getCallCount()).toBe(1);
+    },
+  );
+
   it('classifies non-JSON non-2xx as HTTP failure and only strict error JSON as provider failure', async () => {
     for (const [kind, reason] of [
       ['http-error', 'http-error'],
@@ -462,7 +584,7 @@ describe('Qwen3-VL production adapter boundary', () => {
         status: 'complete',
         latencyMs: 7,
         usage: { prompt_tokens: 1_000, completion_tokens: 200, total_tokens: 1_200 },
-        calculatedListCost: { calculatedListCostMicros: '130' },
+        calculatedListCost: { calculatedListCostMicros: '363' },
       });
     }
   });
@@ -579,6 +701,15 @@ describe('Qwen3-VL production adapter boundary', () => {
     expect(staleTransport.getCallCount()).toBe(0);
   });
 
+  it('rejects a foreign workspace before minting dry-run authority', () => {
+    expect(() =>
+      createQwenDryRunExecutionAuthorization({
+        nowMs: fixedNowMs,
+        serverWorkspaceId: 'workspace-eu-001',
+      }),
+    ).toThrow();
+  });
+
   it('keeps native fetch inert without opaque live authorization and keeps Qwen off public/web surfaces', async () => {
     const fetchImplementation = vi.fn();
     const nativeTransport = createQwen3VlNativeFetchTransport({
@@ -605,7 +736,7 @@ describe('Qwen3-VL production adapter boundary', () => {
     for (const sourcePath of collectTypeScriptSources(webSourceRoot)) {
       const source = readFileSync(sourcePath, 'utf8');
       expect(source, sourcePath).not.toMatch(
-        /qwen3-vl|qwen-four-fixture|dashscope_api_key|aliyuncs\.com|executionAuthorized/iu,
+        /qwen3(?:-vl|[._-]6)|qwen-four-fixture|dashscope_api_key|aliyuncs\.com|executionAuthorized/iu,
       );
     }
   });
@@ -625,11 +756,29 @@ describe('Qwen3-VL production adapter boundary', () => {
       oracle: 'aa499d5560a97a2bf7df84fd0240f39941a82f485f804a42a608d96cb9acba51',
       policy: BANNER_AI_MODEL_DISPATCH_CONTENT_POLICY_V1_DEFINITION_SHA256,
       workflow: INITIAL_BANNER_ANALYZE_WORKFLOW_REF_V1.definitionSha256,
-      orderedInputs: QWEN_FOUR_FIXTURE_ORDERED_MODEL_INPUT_DIGESTS_SHA256,
-      request: QWEN3_VL_REQUEST_SHAPE_SHA256,
-      pricing: QWEN3_VL_PRICING_EVIDENCE_SHA256,
+      orderedInputs: '4dc9f1265bf0494784026836f42506f0b8f42e045862376318e905b437629041',
+      request: '06963aab79297adf81adb33f1c3c97b070ab5f30feb7ce6982d4e751afdf1fbf',
+      pricing: '67896b153548b82d6a16ba711ef452d7827b9d530bc9d8498b03f0c2a6ea71c9',
       caps: QWEN_FOUR_FIXTURE_BENCHMARK_CAPS_SHA256,
     });
+    expect(QWEN_FOUR_FIXTURE_ORDERED_MODEL_INPUT_DIGESTS_V1).toEqual([
+      {
+        algorithm: 'sha256',
+        sha256: '37587bbb606959667e5bf7aa411d5537b6e508212e4385945307d95d6b623a4b',
+      },
+      {
+        algorithm: 'sha256',
+        sha256: '3a27f576e1a62f9a4192b53f6aa0192a1d68bb4663dd39a9510a3b652d88e6f0',
+      },
+      {
+        algorithm: 'sha256',
+        sha256: 'cee2b1998a993e5fca997274609180ebbd8c0dd24875ebeb4b82faf16e72f1f4',
+      },
+      {
+        algorithm: 'sha256',
+        sha256: '7f4adffd88f5b8ad7e2b814b8841634a029464c5c059a2cb36cfbbc7f59cd006',
+      },
+    ]);
     expect(QWEN_FOUR_FIXTURE_ORDERED_MODEL_INPUT_DIGESTS_V1).toEqual(
       QWEN_FOUR_FIXTURE_CANONICAL_REQUEST_CATALOG_V1.map((entry) => entry.inputDigest),
     );

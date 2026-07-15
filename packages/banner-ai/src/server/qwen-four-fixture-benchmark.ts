@@ -1,6 +1,7 @@
 import { z } from 'zod';
 
 import {
+  QWEN3_VL_CHAT_COMPLETIONS_ENDPOINT,
   QWEN3_VL_OFFICIAL_EVIDENCE_RETRIEVED_DATE,
   QWEN3_VL_PRICING_EVIDENCE_SHA256,
   QWEN3_VL_PROVIDER_KEY,
@@ -214,7 +215,7 @@ export const QwenFourFixtureBenchmarkReportV1Schema = z
     providerNetworkUsed: z.boolean(),
     providerKey: z.literal(QWEN3_VL_PROVIDER_KEY),
     requestedModelId: z.literal(QWEN3_VL_REQUESTED_MODEL_ID),
-    endpoint: z.string().url().nullable(),
+    endpoint: z.literal(QWEN3_VL_CHAT_COMPLETIONS_ENDPOINT).nullable(),
     officialEvidenceRetrievedDate: z.literal(QWEN3_VL_OFFICIAL_EVIDENCE_RETRIEVED_DATE),
     pricingEvidenceSha256: z.literal(QWEN3_VL_PRICING_EVIDENCE_SHA256),
     requestShapeSha256: z.literal(QWEN3_VL_REQUEST_SHAPE_SHA256),

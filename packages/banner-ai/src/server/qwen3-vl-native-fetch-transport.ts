@@ -1,6 +1,7 @@
 import { z } from 'zod';
 
 import {
+  QWEN3_VL_CHAT_COMPLETIONS_ENDPOINT,
   QWEN3_VL_ENDPOINT_METHOD,
   QWEN3_VL_SECRET_REFERENCE_NAME,
 } from '../evaluation/qwen3-vl-candidate-evidence.js';
@@ -15,6 +16,7 @@ const MAX_PROVIDER_RESPONSE_BYTES = 2_097_152;
 const assertPinnedFrankfurtEndpoint = (input: string): void => {
   const endpoint = new URL(input);
   if (
+    input !== QWEN3_VL_CHAT_COMPLETIONS_ENDPOINT ||
     endpoint.protocol !== 'https:' ||
     endpoint.username !== '' ||
     endpoint.password !== '' ||

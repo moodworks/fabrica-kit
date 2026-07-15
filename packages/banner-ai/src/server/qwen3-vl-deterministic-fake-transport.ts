@@ -1,6 +1,7 @@
 import { z } from 'zod';
 
 import {
+  QWEN3_VL_CHAT_COMPLETIONS_ENDPOINT,
   QWEN3_VL_ENDPOINT_METHOD,
   QWEN3_VL_REQUESTED_MODEL_ID,
   type QwenProviderUsageV1,
@@ -25,7 +26,7 @@ export type DeterministicQwenTransportStep =
   | { readonly kind: 'http-error' }
   | { readonly kind: 'provider-error' }
   | { readonly kind: 'missing-usage' }
-  | { readonly kind: 'unexpected-model' }
+  | { readonly kind: 'unexpected-model'; readonly model?: string }
   | { readonly kind: 'unexpected-finish' }
   | { readonly kind: 'unknown-response-field' }
   | { readonly kind: 'wait-for-abort' };
@@ -58,9 +59,7 @@ const assertFakeRequestBoundary = (request: QwenTransportRequest): void => {
     request.method !== QWEN3_VL_ENDPOINT_METHOD ||
     request.secret !== null ||
     request.signal.aborted ||
-    !request.endpoint.endsWith(
-      '.eu-central-1.maas.aliyuncs.com/compatible-mode/v1/chat/completions',
-    )
+    request.endpoint !== QWEN3_VL_CHAT_COMPLETIONS_ENDPOINT
   ) {
     throw new TypeError('Deterministic Qwen transport received a foreign dispatch boundary.');
   }
@@ -173,7 +172,7 @@ const responseForStep = (
     case 'unexpected-model':
       return {
         status: 200,
-        bodyText: envelope({ index, content: '{}', model: 'qwen-unexpected-model' }),
+        bodyText: envelope({ index, content: '{}', model: step.model ?? 'qwen-unexpected-model' }),
       };
     case 'unexpected-finish':
       return {

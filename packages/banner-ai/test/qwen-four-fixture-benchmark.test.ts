@@ -10,6 +10,7 @@ import {
 } from '../src/evaluation/ai-contracts.js';
 import {
   QWEN3_VL_API_FAMILY,
+  QWEN3_VL_CHAT_COMPLETIONS_ENDPOINT,
   QWEN3_VL_ENDPOINT_METHOD,
   QWEN3_VL_OFFICIAL_EVIDENCE_RETRIEVED_DATE,
   QWEN3_VL_PRICING_EVIDENCE_SHA256,
@@ -17,6 +18,7 @@ import {
   QWEN3_VL_REQUESTED_MODEL_ID,
   QWEN3_VL_REQUEST_SHAPE_SHA256,
   QWEN3_VL_SECRET_REFERENCE_NAME,
+  QWEN3_VL_SERVER_WORKSPACE_ID,
   QWEN_FOUR_FIXTURE_BENCHMARK_CAPS_SHA256,
   QWEN_FOUR_FIXTURE_BENCHMARK_CAPS_V1,
   QWEN_FOUR_FIXTURE_HUMAN_ORACLE_CORPUS_SHA256,
@@ -80,7 +82,7 @@ const runDryBenchmark = async () => {
 };
 
 const liveAuthorizationPacket = () => {
-  const serverWorkspaceId = 'workspace-eu-001';
+  const serverWorkspaceId = QWEN3_VL_SERVER_WORKSPACE_ID;
   return {
     authorizationVersion: 1 as const,
     authorizationId: 'qwen.live.execution.authorization.2026-07-15',
@@ -123,9 +125,12 @@ describe('Qwen four-fixture benchmark runner', () => {
       retryCount: 0,
       totalCalculatedListCost: {
         accountingStatus: 'complete',
-        knownAttemptCostMicros: '520',
+        knownAttemptCostMicros: '1452',
         indeterminateAttemptCount: 0,
       },
+      requestedModelId: 'qwen3.6-flash-2026-04-16',
+      endpoint:
+        'https://ws-vy71dtw49uzef5hz.eu-central-1.maas.aliyuncs.com/compatible-mode/v1/chat/completions',
       stoppedEarly: false,
       terminalFailureReason: 'none',
       overallPass: true,
@@ -186,7 +191,7 @@ describe('Qwen four-fixture benchmark runner', () => {
         ? {
             accountingStatus: 'complete',
             usage: { prompt_tokens: 1_000, completion_tokens: 200, total_tokens: 1_200 },
-            calculatedListCost: { calculatedListCostMicros: '130' },
+            calculatedListCost: { calculatedListCostMicros: '363' },
           }
         : {
             accountingStatus: 'indeterminate',
@@ -198,7 +203,7 @@ describe('Qwen four-fixture benchmark runner', () => {
       kind === 'schema-invalid'
         ? {
             accountingStatus: 'complete',
-            knownAttemptCostMicros: '130',
+            knownAttemptCostMicros: '363',
             indeterminateAttemptCount: 0,
           }
         : {
@@ -371,7 +376,12 @@ describe('Qwen four-fixture benchmark runner', () => {
     ).toThrow();
 
     for (const mutation of [
-      { requestedModelId: 'qwen-drifted' },
+      { requestedModelId: 'qwen3-vl-flash-2026-01-22' },
+      { requestedModelId: 'qwen3.6-flash' },
+      {
+        serverWorkspaceId: 'workspace-eu-001',
+        endpoint: deriveQwenFrankfurtChatCompletionsEndpoint('workspace-eu-001'),
+      },
       { endpoint: 'https://example.invalid/chat/completions' },
       { pendingCorpusCoreSha256: 'f'.repeat(64) },
       { humanOracleCorpusSha256: 'f'.repeat(64) },
@@ -406,6 +416,13 @@ describe('Qwen four-fixture benchmark runner', () => {
     expect(() =>
       serializeQwenFourFixtureBenchmarkReport({ ...report, rawResponse: 'must-not-serialize' }),
     ).toThrow();
+    expect(() =>
+      serializeQwenFourFixtureBenchmarkReport({
+        ...report,
+        endpoint:
+          'https://foreign-workspace.eu-central-1.maas.aliyuncs.com/compatible-mode/v1/chat/completions',
+      }),
+    ).toThrow();
 
     const packageRoot = fileURLToPath(new URL('..', import.meta.url));
     const cliSource = readFileSync(
@@ -421,5 +438,13 @@ describe('Qwen four-fixture benchmark runner', () => {
     expect(authorizationCheck).toBeGreaterThan(cleanTreeCheck);
     expect(nativeImport).toBeGreaterThan(authorizationCheck);
     expect(cliSource).not.toMatch(/(?:readFile|writeFile|dotenv)[^\n]*\.env/iu);
+    const dryRunSource = cliSource.slice(
+      cliSource.indexOf('const runDry ='),
+      cliSource.indexOf('const authorizationPathFromArguments'),
+    );
+    expect(dryRunSource).not.toContain('process.env');
+    expect(QWEN3_VL_CHAT_COMPLETIONS_ENDPOINT).toBe(
+      deriveQwenFrankfurtChatCompletionsEndpoint(QWEN3_VL_SERVER_WORKSPACE_ID),
+    );
   });
 });

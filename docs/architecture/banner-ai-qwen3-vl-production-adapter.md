@@ -1,11 +1,13 @@
-# Banner AI Qwen3-VL production adapter and benchmark readiness
+# Banner AI Qwen production adapter and benchmark readiness
 
 Status: implemented, server-only, inactive by default, and not live-benchmark authorized.
 
-Qwen3-VL Flash is the first cost candidate because the pinned EU snapshot combines visual input,
-OCR, JSON mode, and non-thinking operation with low documented list rates. The exact candidate is
-`qwen3-vl-flash-2026-01-22`. It is scheduled for deprecation on 2026-10-10, so a later benchmark
-must recheck availability and pricing rather than silently moving to another model.
+Qwen3.6 Flash is the first cost candidate because the pinned Global-scope Frankfurt snapshot
+combines visual input, OCR, JSON mode, and non-thinking operation with low documented list rates.
+The exact candidate is `qwen3.6-flash-2026-04-16`; the documented `qwen3.6-flash` alias is currently
+equivalent to that snapshot but is not accepted by Fabrica's identity boundary. The snapshot is
+available to the configured Germany/Frankfurt workspace and is not listed in Alibaba's current
+deprecation schedule. Alibaba's snapshot policy promises notice at least 30 days before sunset.
 
 ## Official evidence
 
@@ -13,22 +15,25 @@ The following official documentation was retrieved on 2026-07-15:
 
 - [Frankfurt workspace base URL](https://www.alibabacloud.com/help/en/model-studio/base-url)
 - [OpenAI-compatible Chat request, response, Base64 image, tool, search, thinking, seed, and usage fields](https://www.alibabacloud.com/help/en/model-studio/qwen-api-via-openai-chat-completions)
-- [Visual input limits and Qwen3-VL positioning](https://www.alibabacloud.com/help/en/model-studio/vision)
-- [JSON mode and supported Qwen3-VL Flash family](https://www.alibabacloud.com/help/en/model-studio/qwen-structured-output)
+- [Qwen3.6 Flash visual model catalog, availability, modalities, context, and structured-output support](https://www.alibabacloud.com/help/en/model-studio/vision-model)
+- [JSON-object mode and supported Qwen3.6 Flash family](https://www.alibabacloud.com/help/en/model-studio/qwen-structured-output)
 - [Automatic context-cache behavior, usage accounting, and hit pricing](https://www.alibabacloud.com/help/en/model-studio/context-cache)
-- [EU model pricing](https://www.alibabacloud.com/help/en/model-studio/model-pricing)
+- [Global-scope Frankfurt model pricing](https://www.alibabacloud.com/help/en/model-studio/model-pricing)
 - [Snapshot availability](https://www.alibabacloud.com/help/en/model-studio/newly-released-models)
 - [Model deprecation schedule](https://www.alibabacloud.com/help/en/model-studio/model-depreciation)
 
 The only endpoint is derived server-side from a validated server workspace ID:
 
 ```text
-POST https://{validatedServerWorkspaceId}.eu-central-1.maas.aliyuncs.com/compatible-mode/v1/chat/completions
+workspace ws-vy71dtw49uzef5hz
+POST https://ws-vy71dtw49uzef5hz.eu-central-1.maas.aliyuncs.com/compatible-mode/v1/chat/completions
 ```
 
-No caller can provide an endpoint. The only secret reference is `DASHSCOPE_API_KEY`; there is no
-key value, example value, `.env` file, browser environment variable, route, or UI control in the
-repository.
+The endpoint is still computed from the validated server workspace ID, and both values must equal
+those exact pins. A foreign workspace is rejected even when paired with its correctly derived
+Frankfurt endpoint. No caller can select an endpoint. The only secret reference is
+`DASHSCOPE_API_KEY`; there is no key value, example value, `.env` file, browser environment
+variable, route, or UI control in the repository.
 
 ### Pricing pin
 
@@ -38,23 +43,26 @@ input and output tokens in the request.
 Here `K` is decimal (`1K = 1,000` tokens), matching the official pricing table rather than binary
 token boundaries.
 
-| Input-token tier   | Standard input USD / million | Cached-hit input USD / million | Output USD / million |
-| ------------------ | ---------------------------: | -----------------------------: | -------------------: |
-| 0 to 32,000        |                        $0.05 |                          $0.01 |                $0.40 |
-| 32,001 to 128,000  |                       $0.075 |                         $0.015 |                $0.60 |
-| 128,001 to 256,000 |                        $0.12 |                         $0.024 |                $0.96 |
+| Input-token tier            | Standard input USD / million | Cached-hit input USD / million | Output USD / million |
+| --------------------------- | ---------------------------: | -----------------------------: | -------------------: |
+| 0 < input ≤ 256,000         |                       $0.165 |                         $0.033 |                $0.99 |
+| 256,000 < input ≤ 1,000,000 |                        $0.66 |                         $0.132 |               $3.961 |
 
 Alibaba's documented Chat response reports tokens, not a monetary charge. Its implicit context
-cache is automatic for supported Qwen visual models and cannot be disabled. Hit tokens are
+cache is automatic for documented Qwen3.6 Flash requests in Frankfurt. Hit tokens are
 reported in `prompt_tokens_details.cached_tokens` and cost 20% of the selected tier's standard
 input rate. Fabrica therefore retains exact provider usage, prices uncached prompt tokens at 100%,
 cached prompt tokens at 20%, and output tokens at the selected output rate with integer micro-USD
 arithmetic. The combined rational is rounded up once to a whole micro-USD. Cached tokens may not
 exceed prompt tokens. This request sends no explicit `cache_control`, so nonzero explicit-cache
-creation counts are rejected as foreign rather than guessed into the bill.
+creation counts are rejected as foreign rather than guessed into the bill. The standalone official
+price calculator covers both published tiers through 1,000,000 input tokens. The fixed benchmark
+response envelope retains its narrower 256,000 prompt-token safety ceiling, so the established
+pre-dispatch reservation and 500,000 micro-USD benchmark cap remain unchanged.
 
-Evidence is fail-closed after 2026-08-15T00:00:00Z or the model deprecation boundary, whichever is
-earlier. A later live benchmark must refresh and independently review the dated evidence.
+Evidence is fail-closed after 2026-08-15T00:00:00Z. The new snapshot has no announced sunset in the
+current schedule; a later live benchmark must nevertheless refresh and independently review the
+dated availability, lifecycle, API, and pricing evidence.
 
 ## Request and response boundary
 
@@ -157,8 +165,9 @@ self-hosted Qwen deployment through [vLLM's OpenAI-compatible server](https://qw
 without changing Fabrica's strict scene-analysis schema. That transport would require its own
 endpoint, identity, authorization, and pricing/compute evidence.
 
-Qwen3-VL's semantic boxes will later be converted from the validated normalized coordinate space
-to source pixels and supplied as prompts to SAM 2.1. The future bounded pipeline is:
+The pinned Qwen model's semantic boxes will later be converted from the validated normalized
+coordinate space to source pixels and supplied as prompts to SAM 2.1. The future bounded pipeline
+is:
 
 ```text
 normalized image
@@ -171,3 +180,7 @@ normalized image
 
 SAM, PaddleOCR, cutout generation, preview, animation, deployment, UI activation, and the live
 benchmark remain separate future milestones.
+
+The existing `qwen3-vl` source filenames, exported abstraction names, and local report path are
+retained to keep this correction narrow. Renaming those internal abstractions is optional future
+cleanup and is not required for the exact Qwen3.6 model identity.
