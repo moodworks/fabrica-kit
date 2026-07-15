@@ -1,0 +1,425 @@
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+import { describe, expect, it, vi } from 'vitest';
+
+import {
+  BANNER_AI_MODEL_DISPATCH_CONTENT_POLICY_V1_DEFINITION_SHA256,
+  INITIAL_BANNER_ANALYZE_WORKFLOW_REF_V1,
+} from '../src/evaluation/ai-contracts.js';
+import {
+  QWEN3_VL_API_FAMILY,
+  QWEN3_VL_ENDPOINT_METHOD,
+  QWEN3_VL_OFFICIAL_EVIDENCE_RETRIEVED_DATE,
+  QWEN3_VL_PRICING_EVIDENCE_SHA256,
+  QWEN3_VL_PROVIDER_KEY,
+  QWEN3_VL_REQUESTED_MODEL_ID,
+  QWEN3_VL_REQUEST_SHAPE_SHA256,
+  QWEN3_VL_SECRET_REFERENCE_NAME,
+  QWEN_FOUR_FIXTURE_BENCHMARK_CAPS_SHA256,
+  QWEN_FOUR_FIXTURE_BENCHMARK_CAPS_V1,
+  QWEN_FOUR_FIXTURE_HUMAN_ORACLE_CORPUS_SHA256,
+  QWEN_FOUR_FIXTURE_PENDING_CORPUS_CORE_SHA256,
+  deriveQwenFrankfurtChatCompletionsEndpoint,
+} from '../src/evaluation/qwen3-vl-candidate-evidence.js';
+import {
+  QwenBenchmarkFixtureIdSchema,
+  createDeterministicOracleMatchingQwenOutputV1,
+} from '../src/evaluation/qwen-four-fixture-quality.js';
+import { createDeterministicQwenTransport } from '../src/server/qwen3-vl-deterministic-fake-transport.js';
+import { QWEN_FOUR_FIXTURE_ORDERED_MODEL_INPUT_DIGESTS_SHA256 } from '../src/server/qwen-four-fixture-request-catalog.js';
+import {
+  createQwenDryRunExecutionAuthorization,
+  preflightQwenLiveExecutionAuthorization,
+  type QwenAdapterClockPort,
+} from '../src/server/qwen3-vl-scene-analysis-adapter.js';
+import {
+  QWEN_FOUR_FIXTURE_REPORT_PATH,
+  runQwenFourFixtureBenchmark,
+  serializeQwenFourFixtureBenchmarkReport,
+} from '../src/server/qwen-four-fixture-benchmark.js';
+
+const fixedNowMs = Date.parse('2026-07-15T12:00:00.000Z');
+
+const cancellation = Object.freeze({
+  cancelled: false,
+  throwIfCancelled(): void {},
+});
+
+const deterministicClock = (): QwenAdapterClockPort => {
+  let monotonicMs = 0;
+  return Object.freeze({
+    nowEpochMs: () => fixedNowMs,
+    nowMonotonicMs: () => {
+      const value = monotonicMs;
+      monotonicMs += 5;
+      return value;
+    },
+  });
+};
+
+const successSteps = () =>
+  QwenBenchmarkFixtureIdSchema.options.map((fixtureId) => ({
+    kind: 'success' as const,
+    output: createDeterministicOracleMatchingQwenOutputV1(fixtureId),
+  }));
+
+const runDryBenchmark = async () => {
+  const transport = createDeterministicQwenTransport(successSteps());
+  const authorization = createQwenDryRunExecutionAuthorization({ nowMs: fixedNowMs });
+  const report = await runQwenFourFixtureBenchmark({
+    mode: 'deterministic-fake',
+    transport,
+    authorization,
+    secret: null,
+    cancellation,
+    clock: deterministicClock(),
+  });
+  return { report, transport };
+};
+
+const liveAuthorizationPacket = () => {
+  const serverWorkspaceId = 'workspace-eu-001';
+  return {
+    authorizationVersion: 1 as const,
+    authorizationId: 'qwen.live.execution.authorization.2026-07-15',
+    mode: 'live-provider' as const,
+    purpose: 'one-capped-four-fixture-sequential-zero-retry-benchmark' as const,
+    issuedAtMs: fixedNowMs - 1_000,
+    expiresAtMs: fixedNowMs + 60_000,
+    serverWorkspaceId,
+    endpoint: deriveQwenFrankfurtChatCompletionsEndpoint(serverWorkspaceId),
+    endpointMethod: QWEN3_VL_ENDPOINT_METHOD,
+    apiFamily: QWEN3_VL_API_FAMILY,
+    providerKey: QWEN3_VL_PROVIDER_KEY,
+    requestedModelId: QWEN3_VL_REQUESTED_MODEL_ID,
+    secretReferenceName: QWEN3_VL_SECRET_REFERENCE_NAME,
+    pendingCorpusCoreSha256: QWEN_FOUR_FIXTURE_PENDING_CORPUS_CORE_SHA256,
+    humanOracleCorpusSha256: QWEN_FOUR_FIXTURE_HUMAN_ORACLE_CORPUS_SHA256,
+    pricingEvidenceSha256: QWEN3_VL_PRICING_EVIDENCE_SHA256,
+    pricingEvidenceRetrievedDate: QWEN3_VL_OFFICIAL_EVIDENCE_RETRIEVED_DATE,
+    requestShapeSha256: QWEN3_VL_REQUEST_SHAPE_SHA256,
+    benchmarkCapsSha256: QWEN_FOUR_FIXTURE_BENCHMARK_CAPS_SHA256,
+    contentPolicyDefinitionSha256: BANNER_AI_MODEL_DISPATCH_CONTENT_POLICY_V1_DEFINITION_SHA256,
+    workflowDefinitionSha256: INITIAL_BANNER_ANALYZE_WORKFLOW_REF_V1.definitionSha256,
+    orderedModelInputDigestsSha256: QWEN_FOUR_FIXTURE_ORDERED_MODEL_INPUT_DIGESTS_SHA256,
+    executionAuthorized: true as const,
+  };
+};
+
+describe('Qwen four-fixture benchmark runner', () => {
+  it('runs all four exact fixtures sequentially with one call each and deterministic passing output', async () => {
+    const globalFetch = vi.spyOn(globalThis, 'fetch');
+    const first = await runDryBenchmark();
+    const second = await runDryBenchmark();
+
+    expect(first.transport.getCallCount()).toBe(4);
+    expect(first.report).toMatchObject({
+      mode: 'deterministic-fake',
+      providerNetworkUsed: false,
+      providerCallCount: 4,
+      successfulRunCount: 4,
+      retryCount: 0,
+      totalCalculatedListCost: {
+        accountingStatus: 'complete',
+        knownAttemptCostMicros: '520',
+        indeterminateAttemptCount: 0,
+      },
+      stoppedEarly: false,
+      terminalFailureReason: 'none',
+      overallPass: true,
+      productionAdmissionAuthority: false,
+      webRouteActivated: false,
+      humanOracleModified: false,
+    });
+    expect(first.report.fixtureResults.map((result) => result.fixtureId)).toEqual(
+      QwenBenchmarkFixtureIdSchema.options,
+    );
+    expect(first.report.fixtureResults.every((result) => result.status === 'pass')).toBe(true);
+    expect(first.report.fixtureResults.every((result) => result.providerCallCount === 1)).toBe(
+      true,
+    );
+    expect(first.report.fixtureResults.every((result) => result.retryCount === 0)).toBe(true);
+    expect(
+      first.report.fixtureResults.every((result) => result.accountingStatus === 'complete'),
+    ).toBe(true);
+    expect(serializeQwenFourFixtureBenchmarkReport(first.report)).toBe(
+      serializeQwenFourFixtureBenchmarkReport(second.report),
+    );
+    expect(globalFetch).not.toHaveBeenCalled();
+    globalFetch.mockRestore();
+  });
+
+  it.each([
+    ['schema-invalid', 'schema-invalid'],
+    ['timeout', 'timeout'],
+    ['provider-error', 'provider-error'],
+  ] as const)('stops immediately after terminal %s failure with no retry', async (kind, reason) => {
+    const transport = createDeterministicQwenTransport([{ kind }, ...successSteps()]);
+    const authorization = createQwenDryRunExecutionAuthorization({ nowMs: fixedNowMs });
+    const report = await runQwenFourFixtureBenchmark({
+      mode: 'deterministic-fake',
+      transport,
+      authorization,
+      secret: null,
+      cancellation,
+      clock: deterministicClock(),
+    });
+
+    expect(transport.getCallCount()).toBe(1);
+    expect(report).toMatchObject({
+      providerCallCount: 1,
+      successfulRunCount: 0,
+      retryCount: 0,
+      stoppedEarly: true,
+      terminalFailureReason: reason,
+      overallPass: false,
+    });
+    expect(report.fixtureResults).toHaveLength(1);
+    expect(report.fixtureResults[0]).toMatchObject({
+      fixtureId: 'banner-person-v1',
+      status: 'fail',
+      classifiedFailureReason: reason,
+      retryCount: 0,
+      ...(kind === 'schema-invalid'
+        ? {
+            accountingStatus: 'complete',
+            usage: { prompt_tokens: 1_000, completion_tokens: 200, total_tokens: 1_200 },
+            calculatedListCost: { calculatedListCostMicros: '130' },
+          }
+        : {
+            accountingStatus: 'indeterminate',
+            usage: null,
+            calculatedListCost: null,
+          }),
+    });
+    expect(report.totalCalculatedListCost).toMatchObject(
+      kind === 'schema-invalid'
+        ? {
+            accountingStatus: 'complete',
+            knownAttemptCostMicros: '130',
+            indeterminateAttemptCount: 0,
+          }
+        : {
+            accountingStatus: 'indeterminate',
+            knownAttemptCostMicros: '0',
+            indeterminateAttemptCount: 1,
+          },
+    );
+  });
+
+  it('recomputes every remaining time cap immediately before dispatch and refuses an exhausted call', async () => {
+    const monotonicValues = [0, 0, 0, 60_000, 60_000, 60_000] as const;
+    let monotonicIndex = 0;
+    const clock: QwenAdapterClockPort = Object.freeze({
+      nowEpochMs: () => fixedNowMs,
+      nowMonotonicMs: () =>
+        monotonicValues[Math.min(monotonicIndex++, monotonicValues.length - 1)]!,
+    });
+    const transport = createDeterministicQwenTransport(successSteps());
+    const report = await runQwenFourFixtureBenchmark({
+      mode: 'deterministic-fake',
+      transport,
+      authorization: createQwenDryRunExecutionAuthorization({ nowMs: fixedNowMs }),
+      secret: null,
+      cancellation,
+      clock,
+    });
+
+    expect(transport.getCallCount()).toBe(0);
+    expect(report).toMatchObject({
+      providerCallCount: 0,
+      successfulRunCount: 0,
+      stoppedEarly: true,
+      terminalFailureReason: 'call-time-limit-exceeded',
+      overallPass: false,
+    });
+    expect(report.fixtureResults).toEqual([
+      expect.objectContaining({
+        fixtureId: 'banner-person-v1',
+        providerCallCount: 0,
+        accountingStatus: 'not-dispatched',
+        latencyMs: null,
+        usage: null,
+        calculatedListCost: null,
+        classifiedFailureReason: 'call-time-limit-exceeded',
+      }),
+    ]);
+  });
+
+  it('aborts a signal-waiting fixture on cancellation and starts no later fixture', async () => {
+    let cancelled = false;
+    const mutableCancellation = {
+      get cancelled() {
+        return cancelled;
+      },
+      throwIfCancelled(): void {
+        if (cancelled) throw new Error('cancelled');
+      },
+    };
+    const transport = createDeterministicQwenTransport([{ kind: 'wait-for-abort' }]);
+    const reportPromise = runQwenFourFixtureBenchmark({
+      mode: 'deterministic-fake',
+      transport,
+      authorization: createQwenDryRunExecutionAuthorization({ nowMs: fixedNowMs }),
+      secret: null,
+      cancellation: mutableCancellation,
+      clock: Object.freeze({
+        nowEpochMs: () => fixedNowMs,
+        nowMonotonicMs: () => performance.now(),
+      }),
+    });
+    const cancelPoll = setInterval(() => {
+      if (transport.getCallCount() === 1) cancelled = true;
+    }, 1);
+    const report = await reportPromise;
+    clearInterval(cancelPoll);
+
+    expect(transport.getCallCount()).toBe(1);
+    expect(transport.getAbortCount()).toBe(1);
+    expect(report).toMatchObject({
+      providerCallCount: 1,
+      successfulRunCount: 0,
+      stoppedEarly: true,
+      terminalFailureReason: 'cancellation',
+      totalCalculatedListCost: {
+        accountingStatus: 'indeterminate',
+        knownAttemptCostMicros: '0',
+        indeterminateAttemptCount: 1,
+      },
+    });
+    expect(report.fixtureResults).toHaveLength(1);
+  });
+
+  it('records a quality failure without silently admitting the model', async () => {
+    const outputs = QwenBenchmarkFixtureIdSchema.options.map((fixtureId) =>
+      createDeterministicOracleMatchingQwenOutputV1(fixtureId),
+    );
+    const firstValid = outputs[0]!;
+    if (firstValid.composition.kind !== 'composition_proposal') {
+      throw new Error('Invalid test output.');
+    }
+    const first = {
+      ...firstValid,
+      composition: {
+        ...firstValid.composition,
+        parts: firstValid.composition.parts.map((part, index) =>
+          index === 0 ? { ...part, role: 'other' as const } : part,
+        ),
+      },
+    };
+    const transport = createDeterministicQwenTransport([
+      { kind: 'success', output: first },
+      ...outputs.slice(1).map((output) => ({ kind: 'success' as const, output })),
+    ]);
+    const report = await runQwenFourFixtureBenchmark({
+      mode: 'deterministic-fake',
+      transport,
+      authorization: createQwenDryRunExecutionAuthorization({ nowMs: fixedNowMs }),
+      secret: null,
+      cancellation,
+      clock: deterministicClock(),
+    });
+
+    expect(report.providerCallCount).toBe(4);
+    expect(report.successfulRunCount).toBe(4);
+    expect(report.stoppedEarly).toBe(false);
+    expect(report.overallPass).toBe(false);
+    expect(report.fixtureResults[0]).toMatchObject({
+      status: 'fail',
+      classifiedFailureReason: 'layer-quality-failed',
+    });
+    expect(report.productionAdmissionAuthority).toBe(false);
+  });
+
+  it('freezes every requested benchmark cap and exact integer cost ceiling', () => {
+    expect(QWEN_FOUR_FIXTURE_BENCHMARK_CAPS_V1).toEqual({
+      capsVersion: 1,
+      fixtureCount: 4,
+      successfulRunsPerFixtureMaximum: 1,
+      successfulRunsMaximum: 4,
+      providerCallsMaximum: 4,
+      retryCount: 0,
+      perCallTimeoutMs: 60_000,
+      perFixtureTimeoutMs: 120_000,
+      totalWallTimeMs: 600_000,
+      totalCalculatedListCostMaximumMicroUsd: '500000',
+    });
+    expect(BigInt(QWEN_FOUR_FIXTURE_BENCHMARK_CAPS_V1.totalCalculatedListCostMaximumMicroUsd)).toBe(
+      500_000n,
+    );
+  });
+
+  it('fails live authorization preflight on absent authority, stale time, or identity/cap drift', () => {
+    expect(() =>
+      preflightQwenLiveExecutionAuthorization({
+        packet: liveAuthorizationPacket(),
+        secretPresent: false,
+        nowMs: fixedNowMs,
+      }),
+    ).toThrow();
+
+    const stale = liveAuthorizationPacket();
+    stale.expiresAtMs = fixedNowMs;
+    expect(() =>
+      preflightQwenLiveExecutionAuthorization({
+        packet: stale,
+        secretPresent: true,
+        nowMs: fixedNowMs,
+      }),
+    ).toThrow();
+
+    for (const mutation of [
+      { requestedModelId: 'qwen-drifted' },
+      { endpoint: 'https://example.invalid/chat/completions' },
+      { pendingCorpusCoreSha256: 'f'.repeat(64) },
+      { humanOracleCorpusSha256: 'f'.repeat(64) },
+      { pricingEvidenceSha256: 'f'.repeat(64) },
+      { requestShapeSha256: 'f'.repeat(64) },
+      { benchmarkCapsSha256: 'f'.repeat(64) },
+      { contentPolicyDefinitionSha256: 'f'.repeat(64) },
+      { workflowDefinitionSha256: 'f'.repeat(64) },
+      { orderedModelInputDigestsSha256: 'f'.repeat(64) },
+    ]) {
+      expect(() =>
+        preflightQwenLiveExecutionAuthorization({
+          packet: { ...liveAuthorizationPacket(), ...mutation },
+          secretPresent: true,
+          nowMs: fixedNowMs,
+        }),
+      ).toThrow();
+    }
+  });
+
+  it('keeps the report local/redacted and orders every live preflight before native transport import', async () => {
+    const { report } = await runDryBenchmark();
+    const reportText = serializeQwenFourFixtureBenchmarkReport(report);
+    expect(QWEN_FOUR_FIXTURE_REPORT_PATH).toBe(
+      '.local-data/banner-ai/qwen3-vl-four-fixture-benchmark.json',
+    );
+    expect(reportText).not.toMatch(/data:image|Bearer |DASHSCOPE_API_KEY|scene-analysis stage/iu);
+    expect(reportText).not.toContain('rawResponse');
+    expect(reportText).not.toContain('actualObservations');
+    expect(reportText).not.toContain('extraObservations');
+    expect(reportText.endsWith('\n')).toBe(true);
+    expect(() =>
+      serializeQwenFourFixtureBenchmarkReport({ ...report, rawResponse: 'must-not-serialize' }),
+    ).toThrow();
+
+    const packageRoot = fileURLToPath(new URL('..', import.meta.url));
+    const cliSource = readFileSync(
+      join(packageRoot, 'src/server/qwen-four-fixture-benchmark-cli.ts'),
+      'utf8',
+    );
+    const secretCheck = cliSource.indexOf('process.env.DASHSCOPE_API_KEY');
+    const cleanTreeCheck = cliSource.indexOf('assertCleanWorkingTree();');
+    const authorizationCheck = cliSource.indexOf('preflightQwenLiveExecutionAuthorization({');
+    const nativeImport = cliSource.indexOf("'./qwen3-vl-native-fetch-transport.js'");
+    expect(secretCheck).toBeGreaterThan(0);
+    expect(cleanTreeCheck).toBeGreaterThan(secretCheck);
+    expect(authorizationCheck).toBeGreaterThan(cleanTreeCheck);
+    expect(nativeImport).toBeGreaterThan(authorizationCheck);
+    expect(cliSource).not.toMatch(/(?:readFile|writeFile|dotenv)[^\n]*\.env/iu);
+  });
+});

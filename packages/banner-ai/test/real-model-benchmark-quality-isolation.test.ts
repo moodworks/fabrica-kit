@@ -238,10 +238,14 @@ describe('provider-free and web isolation', () => {
         if (entry.isDirectory()) return collectTypeScript(path);
         return entry.isFile() && entry.name.endsWith('.ts') ? [path] : [];
       });
-    const source = collectTypeScript(join(packageRoot, 'src'))
+    const sourceRoot = join(packageRoot, 'src');
+    const nativeQwenTransportPath = join(sourceRoot, 'server/qwen3-vl-native-fetch-transport.ts');
+    const source = collectTypeScript(sourceRoot)
+      .filter((path) => path !== nativeQwenTransportPath)
       .toSorted()
       .map((path) => readFileSync(path, 'utf8'))
       .join('\n');
+    const nativeQwenTransportSource = readFileSync(nativeQwenTransportPath, 'utf8');
     const packageJson = JSON.parse(readFileSync(join(packageRoot, 'package.json'), 'utf8')) as {
       readonly dependencies?: Readonly<Record<string, string>>;
       readonly devDependencies?: Readonly<Record<string, string>>;
@@ -260,6 +264,8 @@ describe('provider-free and web isolation', () => {
     expect(source).not.toMatch(
       /from\s+['"](?:node:)?(?:http|https|http2|net|dns|dgram|tls)(?:\/[^'"]*)?['"]|\b(?:fetch|WebSocket|XMLHttpRequest)\s*\(/u,
     );
+    expect(nativeQwenTransportSource).toContain('globalThis.fetch');
+    expect(nativeQwenTransportSource).toContain('fetchImplementation(request.endpoint');
 
     const routes = collectTypeScript(join(repositoryRoot, 'apps/web/src')).filter((path) =>
       path.endsWith('/route.ts'),

@@ -63,7 +63,7 @@ const OpenAiOcrCompletionV1Schema = z.discriminatedUnion('kind', [
  * Provider-produced JSON only. Request, provider, model, policy, authorization, and provenance
  * fields are deliberately absent and rejected by strict-object validation.
  */
-export const OpenAiProposedSceneAnalysisOcrOutputV1Schema = z
+export const ProposedSceneAnalysisOcrOutputV1Schema = z
   .strictObject({
     outputVersion: z.literal(1),
     visibleContentConstraint: z.literal('only-directly-visible-objects-and-text'),
@@ -111,8 +111,8 @@ export const OpenAiProposedSceneAnalysisOcrOutputV1Schema = z
   })
   .readonly();
 
-export type OpenAiProposedSceneAnalysisOcrOutputV1 = z.infer<
-  typeof OpenAiProposedSceneAnalysisOcrOutputV1Schema
+export type ProposedSceneAnalysisOcrOutputV1 = z.infer<
+  typeof ProposedSceneAnalysisOcrOutputV1Schema
 >;
 
 const deepFreezeJson = <Value>(value: Value): Readonly<Value> => {
@@ -125,28 +125,39 @@ const deepFreezeJson = <Value>(value: Value): Readonly<Value> => {
   return value;
 };
 
-export const createDetachedOpenAiSceneAnalysisOcrJsonSchemaV1 = (): Readonly<unknown> => {
-  const projected = z.toJSONSchema(OpenAiProposedSceneAnalysisOcrOutputV1Schema);
+export const createDetachedSceneAnalysisOcrJsonSchemaV1 = (): Readonly<unknown> => {
+  const projected = z.toJSONSchema(ProposedSceneAnalysisOcrOutputV1Schema);
   const detached = JSON.parse(canonicalizeJson(projected)) as unknown;
   return deepFreezeJson(detached);
 };
 
-export const OPENAI_SCENE_ANALYSIS_OCR_OUTPUT_JSON_SCHEMA_V1 =
-  createDetachedOpenAiSceneAnalysisOcrJsonSchemaV1();
+export const SCENE_ANALYSIS_OCR_OUTPUT_JSON_SCHEMA_V1 =
+  createDetachedSceneAnalysisOcrJsonSchemaV1();
 
-export const OPENAI_SCENE_ANALYSIS_OCR_OUTPUT_JSON_SCHEMA_SHA256 = sha256Hex(
-  Buffer.from(canonicalizeJson(OPENAI_SCENE_ANALYSIS_OCR_OUTPUT_JSON_SCHEMA_V1), 'utf8'),
+export const SCENE_ANALYSIS_OCR_OUTPUT_JSON_SCHEMA_SHA256 = sha256Hex(
+  Buffer.from(canonicalizeJson(SCENE_ANALYSIS_OCR_OUTPUT_JSON_SCHEMA_V1), 'utf8'),
 );
 
-export const parseOpenAiProposedSceneAnalysisOcrJsonV1 = (
+export const parseProposedSceneAnalysisOcrJsonV1 = (
   jsonText: unknown,
-): OpenAiProposedSceneAnalysisOcrOutputV1 => {
+): ProposedSceneAnalysisOcrOutputV1 => {
   const text = z.string().min(1).parse(jsonText);
   let parsed: unknown;
   try {
     parsed = JSON.parse(text) as unknown;
   } catch {
-    throw new TypeError('OpenAI scene-analysis output must be one valid JSON value.');
+    throw new TypeError('Scene-analysis output must be one valid JSON value.');
   }
-  return OpenAiProposedSceneAnalysisOcrOutputV1Schema.parse(parsed);
+  return ProposedSceneAnalysisOcrOutputV1Schema.parse(parsed);
 };
+
+/** Compatibility aliases retained for the earlier inactive OpenAI boundary. */
+export const OpenAiProposedSceneAnalysisOcrOutputV1Schema = ProposedSceneAnalysisOcrOutputV1Schema;
+export type OpenAiProposedSceneAnalysisOcrOutputV1 = ProposedSceneAnalysisOcrOutputV1;
+export const createDetachedOpenAiSceneAnalysisOcrJsonSchemaV1 =
+  createDetachedSceneAnalysisOcrJsonSchemaV1;
+export const OPENAI_SCENE_ANALYSIS_OCR_OUTPUT_JSON_SCHEMA_V1 =
+  SCENE_ANALYSIS_OCR_OUTPUT_JSON_SCHEMA_V1;
+export const OPENAI_SCENE_ANALYSIS_OCR_OUTPUT_JSON_SCHEMA_SHA256 =
+  SCENE_ANALYSIS_OCR_OUTPUT_JSON_SCHEMA_SHA256;
+export const parseOpenAiProposedSceneAnalysisOcrJsonV1 = parseProposedSceneAnalysisOcrJsonV1;

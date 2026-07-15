@@ -1757,10 +1757,13 @@ describe('provider-free dependency boundary', () => {
         if (entry.isDirectory()) return collectTypeScript(path);
         return entry.isFile() && entry.name.endsWith('.ts') ? [path] : [];
       });
+    const nativeQwenTransportPath = join(sourceRoot, 'server/qwen3-vl-native-fetch-transport.ts');
     const source = collectTypeScript(sourceRoot)
+      .filter((path) => path !== nativeQwenTransportPath)
       .toSorted()
       .map((path) => readFileSync(path, 'utf8'))
       .join('\n');
+    const nativeQwenTransportSource = readFileSync(nativeQwenTransportPath, 'utf8');
     const packageJson = JSON.parse(readFileSync(join(packageRoot, 'package.json'), 'utf8')) as {
       readonly dependencies?: Readonly<Record<string, string>>;
       readonly devDependencies?: Readonly<Record<string, string>>;
@@ -1794,6 +1797,11 @@ describe('provider-free dependency boundary', () => {
     ).toEqual([]);
     expect(source).not.toMatch(
       /from\s+['"](?:node:)?(?:http|https|http2|net|dns|dgram|tls)(?:\/[^'"]*)?['"]|\b(?:fetch|WebSocket|XMLHttpRequest)\s*\(/u,
+    );
+    expect(nativeQwenTransportSource).toContain('globalThis.fetch');
+    expect(nativeQwenTransportSource).toContain('fetchImplementation(request.endpoint');
+    expect(nativeQwenTransportSource).not.toMatch(
+      /from\s+['"](?:node:)?(?:http|https|http2|net|dns|dgram|tls)(?:\/[^'"]*)?['"]/u,
     );
     for (const dependency of forbiddenDependencyPrefixes) {
       expect(source).not.toContain(`from '${dependency}'`);

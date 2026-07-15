@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import { parseBannerAnalysisEnvelope } from '../../../../features/banner-ai/banner-ai-contract';
 import { createRasterFile } from '../../../../server/banner-ai/raster.test-fixtures';
@@ -14,26 +14,34 @@ const postForm = (formData: FormData): Promise<Response> =>
 
 describe('POST /api/banner-ai/analyze', () => {
   it('authoritatively validates and analyzes one supported upload', async () => {
+    const outboundFetch = vi.spyOn(globalThis, 'fetch').mockImplementation(() => {
+      throw new Error('The existing analyze route attempted forbidden outbound network access.');
+    });
     const formData = new FormData();
     formData.append('file', createRasterFile('png'));
 
-    const response = await postForm(formData);
-    expect(response.status).toBe(200);
-    const envelope = parseBannerAnalysisEnvelope(await response.json());
-    expect(envelope.ok).toBe(true);
-    if (!envelope.ok) throw new Error('Expected successful analysis response.');
-    expect(envelope.data.proposal.parts.map((part) => part.label)).toEqual([
-      'Background',
-      'Angel body',
-      'Left wing',
-      'Right wing',
-    ]);
-    expect(envelope.data.provenance).toMatchObject({
-      external: false,
-      outboundNetworkEnabled: false,
-      estimatedCostMicros: '0',
-      ownership: { mode: 'development-local' },
-    });
+    try {
+      const response = await postForm(formData);
+      expect(response.status).toBe(200);
+      const envelope = parseBannerAnalysisEnvelope(await response.json());
+      expect(envelope.ok).toBe(true);
+      if (!envelope.ok) throw new Error('Expected successful analysis response.');
+      expect(envelope.data.proposal.parts.map((part) => part.label)).toEqual([
+        'Background',
+        'Angel body',
+        'Left wing',
+        'Right wing',
+      ]);
+      expect(envelope.data.provenance).toMatchObject({
+        external: false,
+        outboundNetworkEnabled: false,
+        estimatedCostMicros: '0',
+        ownership: { mode: 'development-local' },
+      });
+      expect(outboundFetch).not.toHaveBeenCalled();
+    } finally {
+      outboundFetch.mockRestore();
+    }
   });
 
   it('returns a clear trusted-boundary error for invalid raster bytes', async () => {
