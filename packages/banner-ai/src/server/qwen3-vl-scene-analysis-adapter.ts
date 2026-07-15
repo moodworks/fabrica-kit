@@ -10,10 +10,8 @@ import { canonicalizeJson, sha256Hex } from '../scene/canonical-scene-json.js';
 import {
   BANNER_AI_MODEL_DISPATCH_CONTENT_POLICY_V1_DEFINITION_SHA256,
   INITIAL_BANNER_ANALYZE_WORKFLOW_REF_V1,
-  createModelProducedActualTextObservationSetV1,
   validateSceneAnalysisModelDispatchContentPolicyV1,
   validateSceneAnalysisRequestContextV1,
-  type SceneAnalysisModelRequestV1,
 } from '../evaluation/ai-contracts.js';
 import {
   QWEN3_VL_API_FAMILY,
@@ -32,23 +30,62 @@ import {
   QWEN_FOUR_FIXTURE_BENCHMARK_CAPS_SHA256,
   QWEN_FOUR_FIXTURE_HUMAN_ORACLE_CORPUS_SHA256,
   QWEN_FOUR_FIXTURE_PENDING_CORPUS_CORE_SHA256,
-  QwenProviderUsageV1Schema,
   assertQwen3VlOfficialEvidenceFresh,
   calculateQwen3VlListCostMicros,
   deriveQwenFrankfurtChatCompletionsEndpoint,
   type QwenProviderUsageV1,
 } from '../evaluation/qwen3-vl-candidate-evidence.js';
-import {
-  parseProposedSceneAnalysisOcrJsonV1,
-  type ProposedSceneAnalysisOcrOutputV1,
-} from '../evaluation/openai-scene-analysis-output.js';
 import { SCENE_ANALYSIS_PROMPT_V1 } from '../evaluation/prompt-catalog.js';
-import { validateCompositionAnalysisResultV1 } from '../workflows/composition-contracts.js';
 import {
   QWEN_FOUR_FIXTURE_CANONICAL_REQUEST_CATALOG_V1,
   QWEN_FOUR_FIXTURE_ORDERED_MODEL_INPUT_DIGESTS_SHA256,
   requireCanonicalQwenBenchmarkRequestV1,
 } from './qwen-four-fixture-request-catalog.js';
+import {
+  QwenResponseBoundaryFailure,
+  createSyntheticQwenValidationDiagnosticV1,
+  validateQwenProviderResponseBoundaryV1,
+  type QwenValidationDiagnosticV1,
+} from './qwen3-vl-response-boundary.js';
+import {
+  QwenDiagnosticCaptureError,
+  QwenDiagnosticReportRelativePathV1Schema,
+  QwenDiagnosticResponseRelativePathV1Schema,
+  abortQwenDiagnosticArtifactReservationsV1,
+  captureSanitizedQwenResponseV1,
+  finalizeReservedQwenDiagnosticReportV1,
+  reserveQwenDiagnosticArtifactFilesV1,
+  verifyQwenDiagnosticArtifactReservationsV1,
+  type QwenDiagnosticArtifactMetadataV1,
+  type QwenDiagnosticReservationSetV1,
+} from './qwen3-vl-response-diagnostics.js';
+
+const QwenDiagnosticCaptureAuthorizationV1Schema = z
+  .strictObject({
+    diagnosticVersion: z.literal(1),
+    mode: z.literal('single-fixture-response-capture'),
+    fixtureId: z.literal('banner-person-v1'),
+    providerCallsMaximum: z.literal(1),
+    retryCount: z.literal(0),
+    responseArtifactRelativePath: QwenDiagnosticResponseRelativePathV1Schema,
+    diagnosticReportRelativePath: QwenDiagnosticReportRelativePathV1Schema,
+    productionAdmissionAuthority: z.literal(false),
+  })
+  .superRefine((diagnostic, context) => {
+    if (
+      diagnostic.responseArtifactRelativePath === diagnostic.diagnosticReportRelativePath ||
+      diagnostic.responseArtifactRelativePath.endsWith('qwen3-vl-four-fixture-benchmark.json') ||
+      diagnostic.diagnosticReportRelativePath.endsWith('qwen3-vl-four-fixture-benchmark.json') ||
+      diagnostic.responseArtifactRelativePath.endsWith('qwen-live-execution-authorization.json') ||
+      diagnostic.diagnosticReportRelativePath.endsWith('qwen-live-execution-authorization.json')
+    ) {
+      context.addIssue({
+        code: 'custom',
+        message: 'Qwen diagnostic paths must be unique and new.',
+      });
+    }
+  })
+  .readonly();
 
 const QwenBenchmarkAuthorizationPacketV1Schema = z
   .strictObject({
@@ -76,6 +113,7 @@ const QwenBenchmarkAuthorizationPacketV1Schema = z
     ),
     workflowDefinitionSha256: z.literal(INITIAL_BANNER_ANALYZE_WORKFLOW_REF_V1.definitionSha256),
     orderedModelInputDigestsSha256: z.literal(QWEN_FOUR_FIXTURE_ORDERED_MODEL_INPUT_DIGESTS_SHA256),
+    diagnosticCapture: QwenDiagnosticCaptureAuthorizationV1Schema.optional(),
     executionAuthorized: z.literal(true),
   })
   .superRefine((authorization, context) => {
@@ -87,6 +125,12 @@ const QwenBenchmarkAuthorizationPacketV1Schema = z
       context.addIssue({
         code: 'custom',
         message: 'Qwen authorization timing or derived endpoint is stale or foreign.',
+      });
+    }
+    if (authorization.diagnosticCapture !== undefined && authorization.mode !== 'live-provider') {
+      context.addIssue({
+        code: 'custom',
+        message: 'Qwen response capture requires an exact live-provider authorization.',
       });
     }
   })
@@ -103,6 +147,7 @@ export interface QwenBenchmarkExecutionAuthorization {
   readonly providerKey: typeof QWEN3_VL_PROVIDER_KEY;
   readonly requestedModelId: typeof QWEN3_VL_REQUESTED_MODEL_ID;
   readonly endpoint: string;
+  readonly diagnosticCapture: z.infer<typeof QwenDiagnosticCaptureAuthorizationV1Schema> | null;
   readonly dispatchAuthority: true;
 }
 
@@ -110,6 +155,7 @@ interface PrivateAuthorizationState {
   readonly packet: QwenBenchmarkAuthorizationPacketV1;
   readonly claimedInvocationKeys: Set<string>;
   readonly claimedFixtureIds: Set<string>;
+  diagnosticReservations: QwenDiagnosticReservationSetV1 | null;
 }
 
 const validAuthorizations = new WeakSet<object>();
@@ -126,6 +172,7 @@ export const mintQwenBenchmarkExecutionAuthorization = (
     providerKey: QWEN3_VL_PROVIDER_KEY,
     requestedModelId: QWEN3_VL_REQUESTED_MODEL_ID,
     endpoint: packet.endpoint,
+    diagnosticCapture: packet.diagnosticCapture ?? null,
     dispatchAuthority: true as const,
   });
   validAuthorizations.add(authorization);
@@ -133,6 +180,7 @@ export const mintQwenBenchmarkExecutionAuthorization = (
     packet,
     claimedInvocationKeys: new Set<string>(),
     claimedFixtureIds: new Set<string>(),
+    diagnosticReservations: null,
   });
   return authorization;
 };
@@ -197,6 +245,57 @@ const requireAuthorizationState = (input: unknown, nowMs: number): PrivateAuthor
     throw new QwenSceneAnalysisError('authorization-stale');
   }
   return state;
+};
+
+const requireOpaqueAuthorizationState = (input: unknown): PrivateAuthorizationState => {
+  if (typeof input !== 'object' || input === null || !validAuthorizations.has(input)) {
+    throw new QwenSceneAnalysisError('authorization-missing');
+  }
+  const state = privateAuthorizationState.get(input);
+  if (state === undefined) throw new QwenSceneAnalysisError('authorization-missing');
+  return state;
+};
+
+export const reserveQwenDiagnosticArtifactsForAuthorizationV1 = async (
+  authorization: QwenBenchmarkExecutionAuthorization,
+): Promise<void> => {
+  const state = requireOpaqueAuthorizationState(authorization);
+  const diagnostic = state.packet.diagnosticCapture;
+  if (
+    diagnostic === undefined ||
+    state.diagnosticReservations !== null ||
+    state.claimedFixtureIds.size !== 0
+  ) {
+    throw new QwenSceneAnalysisError('authorization-missing');
+  }
+  state.diagnosticReservations = await reserveQwenDiagnosticArtifactFilesV1({
+    responseArtifactRelativePath: diagnostic.responseArtifactRelativePath,
+    diagnosticReportRelativePath: diagnostic.diagnosticReportRelativePath,
+  });
+};
+
+export const finalizeQwenDiagnosticReportForAuthorizationV1 = async (input: {
+  readonly authorization: QwenBenchmarkExecutionAuthorization;
+  readonly bytes: Uint8Array;
+}): Promise<void> => {
+  const state = requireOpaqueAuthorizationState(input.authorization);
+  if (state.diagnosticReservations === null) {
+    throw new QwenSceneAnalysisError('authorization-missing');
+  }
+  await finalizeReservedQwenDiagnosticReportV1({
+    reservations: state.diagnosticReservations,
+    bytes: input.bytes,
+  });
+};
+
+export const releaseQwenDiagnosticArtifactsForAuthorizationV1 = async (
+  authorization: QwenBenchmarkExecutionAuthorization,
+): Promise<void> => {
+  const state = requireOpaqueAuthorizationState(authorization);
+  const reservations = state.diagnosticReservations;
+  if (reservations === null) return;
+  await abortQwenDiagnosticArtifactReservationsV1(reservations);
+  state.diagnosticReservations = null;
 };
 
 export type QwenSceneAnalysisFailureReason =
@@ -269,15 +368,21 @@ const safeMessageByReason: Readonly<Record<QwenSceneAnalysisFailureReason, strin
 export class QwenSceneAnalysisError extends Error {
   readonly reason: QwenSceneAnalysisFailureReason;
   readonly accounting: QwenAttemptAccounting;
+  readonly diagnostic: QwenValidationDiagnosticV1 | null;
+  readonly diagnosticArtifact: QwenDiagnosticArtifactMetadataV1 | null;
 
   constructor(
     reason: QwenSceneAnalysisFailureReason,
     accounting: QwenAttemptAccounting = NOT_DISPATCHED_ACCOUNTING,
+    diagnostic: QwenValidationDiagnosticV1 | null = null,
+    diagnosticArtifact: QwenDiagnosticArtifactMetadataV1 | null = null,
   ) {
     super(safeMessageByReason[reason]);
     this.name = 'QwenSceneAnalysisError';
     this.reason = reason;
     this.accounting = accounting;
+    this.diagnostic = diagnostic;
+    this.diagnosticArtifact = diagnosticArtifact;
   }
 }
 
@@ -310,58 +415,6 @@ const defaultClock: QwenAdapterClockPort = Object.freeze({
   nowMonotonicMs: () => performance.now(),
 });
 
-const QwenProviderErrorPayloadSchema = z
-  .strictObject({
-    error: z
-      .strictObject({
-        message: z.string().min(1).max(4_096),
-        type: z.string().min(1).max(256),
-        param: z.string().max(256).nullable().optional(),
-        code: z.union([z.string().min(1).max(256), z.int()]),
-      })
-      .readonly(),
-    request_id: z.string().min(1).max(256).optional(),
-  })
-  .readonly();
-
-const QwenSuccessEnvelopeSchema = z
-  .strictObject({
-    id: z.string().min(1).max(256),
-    object: z.literal('chat.completion'),
-    created: z.int().min(0),
-    model: z.string().min(1).max(256),
-    choices: z
-      .tuple([
-        z
-          .strictObject({
-            index: z.literal(0),
-            message: z
-              .strictObject({
-                role: z.literal('assistant'),
-                content: z.string().min(1).max(2_000_000),
-                refusal: z.null().optional(),
-                audio: z.null().optional(),
-                function_call: z.null().optional(),
-                tool_calls: z.null().optional(),
-              })
-              .readonly(),
-            finish_reason: z
-              .enum(['stop', 'length', 'tool_calls', 'content_filter', 'function_call'])
-              .nullable(),
-            logprobs: z.null().optional(),
-          })
-          .readonly(),
-      ])
-      .readonly(),
-    usage: QwenProviderUsageV1Schema,
-    system_fingerprint: z.string().max(256).nullable().optional(),
-    service_tier: z.null().optional(),
-  })
-  .readonly();
-
-const isRecord = (value: unknown): value is Readonly<Record<string, unknown>> =>
-  typeof value === 'object' && value !== null && !Array.isArray(value);
-
 const indeterminateAccounting = (latencyMs: number): QwenAttemptAccounting =>
   Object.freeze({
     status: 'indeterminate' as const,
@@ -381,48 +434,8 @@ const completeAccounting = (
     calculatedListCost: calculateQwen3VlListCostMicros(usage),
   });
 
-const parseProviderEnvelope = (response: QwenTransportResponse, latencyMs: number) => {
-  if (response.status < 200 || response.status >= 300) {
-    try {
-      const parsedError = JSON.parse(response.bodyText) as unknown;
-      if (QwenProviderErrorPayloadSchema.safeParse(parsedError).success) {
-        throw new QwenSceneAnalysisError('provider-error', indeterminateAccounting(latencyMs));
-      }
-    } catch (error) {
-      if (error instanceof QwenSceneAnalysisError) throw error;
-    }
-    throw new QwenSceneAnalysisError('http-error', indeterminateAccounting(latencyMs));
-  }
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(response.bodyText) as unknown;
-  } catch {
-    throw new QwenSceneAnalysisError('malformed-json', indeterminateAccounting(latencyMs));
-  }
-  if (QwenProviderErrorPayloadSchema.safeParse(parsed).success) {
-    throw new QwenSceneAnalysisError('provider-error', indeterminateAccounting(latencyMs));
-  }
-  if (!isRecord(parsed) || !Object.hasOwn(parsed, 'usage')) {
-    throw new QwenSceneAnalysisError('missing-usage', indeterminateAccounting(latencyMs));
-  }
-  const parsedUsage = QwenProviderUsageV1Schema.safeParse(parsed.usage);
-  if (!parsedUsage.success) {
-    throw new QwenSceneAnalysisError('schema-invalid', indeterminateAccounting(latencyMs));
-  }
-  const accounting = completeAccounting(latencyMs, parsedUsage.data);
-  const envelope = QwenSuccessEnvelopeSchema.safeParse(parsed);
-  if (!envelope.success) throw new QwenSceneAnalysisError('schema-invalid', accounting);
-  if (envelope.data.model !== QWEN3_VL_REQUESTED_MODEL_ID) {
-    throw new QwenSceneAnalysisError('unexpected-model', accounting);
-  }
-  if (envelope.data.choices[0].finish_reason !== 'stop') {
-    throw new QwenSceneAnalysisError('unexpected-finish', accounting);
-  }
-  return envelope.data;
-};
-
 const validateTrustedNormalizedBytes = (
-  request: SceneAnalysisModelRequestV1,
+  request: Parameters<typeof validateQwenProviderResponseBoundaryV1>[0]['request'],
   normalizedImageBytes: Uint8Array,
 ): void => {
   const raster = assertCanonicalNormalizedPng(normalizedImageBytes);
@@ -472,52 +485,6 @@ const buildPrivateRequestBody = (
     seed: 0 as const,
     max_tokens: QWEN3_VL_MAX_OUTPUT_TOKENS,
   });
-
-const materializeValidatedProposal = (input: {
-  readonly request: SceneAnalysisModelRequestV1;
-  readonly providerOutput: ProposedSceneAnalysisOcrOutputV1;
-}) => {
-  const composition = validateCompositionAnalysisResultV1({
-    request: {
-      sourceAsset: input.request.input.sourceAsset,
-      maxParts: input.request.input.options.maxParts,
-      includeBackground: input.request.input.options.includeBackground,
-    },
-    result: input.providerOutput.composition,
-  });
-  if (
-    composition.kind !== 'composition_proposal' ||
-    composition.parts.length < 3 ||
-    composition.parts.length > 5
-  ) {
-    throw new QwenSceneAnalysisError('schema-invalid');
-  }
-  const isNoTextFixture =
-    input.request.input.fixture.repositoryPath.endsWith('/banner-no-text-v1.png');
-  if (
-    (isNoTextFixture &&
-      (input.providerOutput.ocrCompletion.kind !== 'no-visible-text-observed' ||
-        input.providerOutput.textObservations.length !== 0)) ||
-    (!isNoTextFixture &&
-      (input.providerOutput.ocrCompletion.kind !== 'visible-text-observations-complete' ||
-        input.providerOutput.textObservations.length === 0))
-  ) {
-    throw new QwenSceneAnalysisError('identity-mismatch');
-  }
-  const textObservations = createModelProducedActualTextObservationSetV1({
-    request: input.request,
-    observations: input.providerOutput.textObservations,
-  });
-  return Object.freeze({
-    composition,
-    layerEvidence: input.providerOutput.layerEvidence,
-    ocrCompletion: input.providerOutput.ocrCompletion,
-    textObservations,
-    reviewFlags: input.providerOutput.reviewFlags,
-    humanReview: input.providerOutput.humanReview,
-    decisionAuthority: 'proposal-requires-user-review' as const,
-  });
-};
 
 const cancellationError = (): QwenSceneAnalysisError => new QwenSceneAnalysisError('cancellation');
 
@@ -594,6 +561,27 @@ export const createQwen3VlSceneAnalysisAdapter = (input: {
         throw new QwenSceneAnalysisError('identity-mismatch');
       }
       const fixtureId = canonicalRequest.fixtureId;
+      const diagnosticCapture = authorizationState.packet.diagnosticCapture ?? null;
+      if (
+        diagnosticCapture !== null &&
+        (fixtureId !== diagnosticCapture.fixtureId ||
+          authorizationState.claimedFixtureIds.size >= diagnosticCapture.providerCallsMaximum ||
+          authorizationState.diagnosticReservations === null)
+      ) {
+        throw new QwenSceneAnalysisError('authorization-missing');
+      }
+      if (authorizationState.diagnosticReservations !== null) {
+        try {
+          await verifyQwenDiagnosticArtifactReservationsV1(
+            authorizationState.diagnosticReservations,
+          );
+        } catch (error) {
+          if (error instanceof QwenDiagnosticCaptureError) {
+            throw new QwenSceneAnalysisError('authorization-missing');
+          }
+          throw error;
+        }
+      }
       validateTrustedNormalizedBytes(request, analyzeInput.normalizedImageBytes);
 
       const invocationKey = sha256Hex(
@@ -610,7 +598,8 @@ export const createQwen3VlSceneAnalysisAdapter = (input: {
         authorizationState.claimedInvocationKeys.has(invocationKey) ||
         authorizationState.claimedFixtureIds.has(fixtureId) ||
         authorizationState.claimedFixtureIds.size >=
-          QWEN_FOUR_FIXTURE_CANONICAL_REQUEST_CATALOG_V1.length
+          (diagnosticCapture?.providerCallsMaximum ??
+            QWEN_FOUR_FIXTURE_CANONICAL_REQUEST_CATALOG_V1.length)
       ) {
         throw new QwenSceneAnalysisError('duplicate-invocation');
       }
@@ -672,26 +661,76 @@ export const createQwen3VlSceneAnalysisAdapter = (input: {
       if (context.cancellation.cancelled) {
         throw new QwenSceneAnalysisError('cancellation', indeterminateAccounting(latencyMs));
       }
-      const envelope = parseProviderEnvelope(transportResponse, latencyMs);
+      let boundaryResult: ReturnType<typeof validateQwenProviderResponseBoundaryV1> | null = null;
+      let boundaryFailure: QwenResponseBoundaryFailure | null = null;
+      try {
+        boundaryResult = validateQwenProviderResponseBoundaryV1({
+          response: transportResponse,
+          request,
+        });
+      } catch (error) {
+        if (error instanceof QwenResponseBoundaryFailure) {
+          boundaryFailure = error;
+        } else {
+          throw error;
+        }
+      }
+      let diagnosticArtifact: QwenDiagnosticArtifactMetadataV1 | null = null;
+      if (diagnosticCapture !== null) {
+        try {
+          diagnosticArtifact = await captureSanitizedQwenResponseV1({
+            reservations: authorizationState.diagnosticReservations!,
+            capturedAtMs: z.int().min(0).parse(clock.nowEpochMs()),
+            fixtureId: diagnosticCapture.fixtureId,
+            response: transportResponse,
+            failure: boundaryFailure,
+          });
+        } catch (error) {
+          if (error instanceof QwenDiagnosticCaptureError) {
+            const usage = boundaryFailure?.usage ?? boundaryResult?.envelope.usage ?? null;
+            const accounting =
+              usage === null
+                ? indeterminateAccounting(latencyMs)
+                : completeAccounting(latencyMs, usage);
+            if (boundaryFailure !== null) {
+              throw new QwenSceneAnalysisError(
+                boundaryFailure.reason,
+                accounting,
+                boundaryFailure.diagnostic,
+              );
+            }
+            throw new QwenSceneAnalysisError(
+              'schema-invalid',
+              accounting,
+              createSyntheticQwenValidationDiagnosticV1({
+                stage: 'request-relative-identity',
+                path: ['diagnosticCapture'],
+                validatorIssueCode: 'request-constraint',
+                classification: 'identity-mismatch',
+                expectedType: 'object',
+                receivedType: 'object',
+              }),
+            );
+          }
+          throw error;
+        }
+      }
+      if (boundaryFailure !== null) {
+        const accounting =
+          boundaryFailure.usage === null
+            ? indeterminateAccounting(latencyMs)
+            : completeAccounting(latencyMs, boundaryFailure.usage);
+        throw new QwenSceneAnalysisError(
+          boundaryFailure.reason,
+          accounting,
+          boundaryFailure.diagnostic,
+          diagnosticArtifact,
+        );
+      }
+      if (boundaryResult === null) throw new QwenSceneAnalysisError('schema-invalid');
+      const envelope = boundaryResult.envelope;
+      const proposal = boundaryResult.proposal;
       const accounting = completeAccounting(latencyMs, envelope.usage);
-      let providerOutput: ProposedSceneAnalysisOcrOutputV1;
-      try {
-        providerOutput = parseProposedSceneAnalysisOcrJsonV1(envelope.choices[0].message.content);
-      } catch (error) {
-        if (error instanceof z.ZodError) {
-          throw new QwenSceneAnalysisError('schema-invalid', accounting);
-        }
-        throw new QwenSceneAnalysisError('malformed-json', accounting);
-      }
-      let proposal;
-      try {
-        proposal = materializeValidatedProposal({ request, providerOutput });
-      } catch (error) {
-        if (error instanceof QwenSceneAnalysisError) {
-          throw new QwenSceneAnalysisError(error.reason, accounting);
-        }
-        throw new QwenSceneAnalysisError('identity-mismatch', accounting);
-      }
       return Object.freeze({
         resultVersion: 1 as const,
         providerKey: QWEN3_VL_PROVIDER_KEY,
@@ -704,6 +743,7 @@ export const createQwen3VlSceneAnalysisAdapter = (input: {
         usage: envelope.usage,
         calculatedListCost: accounting.calculatedListCost,
         latencyMs,
+        diagnosticArtifact,
         proposal,
       });
     },

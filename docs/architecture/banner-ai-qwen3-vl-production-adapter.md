@@ -133,6 +133,91 @@ the known attempt costs, so zero is never presented as a complete cost for an un
 strict report schema rejects unknown fields and omits raw OCR observations. It grants no production
 admission and changes neither the oracle nor a web surface.
 
+### Accepted first live-call result and response diagnostics
+
+The separately authorized first live execution stopped after the `banner-person-v1` call because
+the provider response failed the strict response boundary. The preserved evidence does not identify
+which internal schema stage rejected it. The run made one provider call with zero retries,
+recorded 1,703 input tokens and 2,184 output tokens (3,887 total), calculated 2,444 micro-USD of
+list cost, and produced no quality score. Its exit status was 1 and its classified result was
+`schema-invalid`. The accepted authorization and benchmark report remain preserved as the two
+original mode-0600 local artifacts; this diagnostics work does not rewrite either artifact and does
+not reinterpret that response as a provider or quality success.
+
+Response validation now emits a closed, versioned diagnostic with a validation stage, JSON-pointer
+paths, closed issue classifications, expected and received value types when known, sorted unknown
+field-name pseudonyms, actual/retained/truncated counts, and a canonical SHA-256 issue digest. Every
+unknown name, including otherwise benign-looking header or key names, becomes an idempotent one-way
+pseudonym; arbitrary unknown names are never retained. Root is the empty RFC 6901 pointer, and
+ordering uses locale-independent code-unit comparison. It never includes rejected values,
+validator messages, raw response bodies, image bytes, prompts, authorization headers, or secret
+values. The adapter and offline replay use the same response-boundary implementation, so a captured
+rejection cannot be diagnosed by a more permissive parser.
+
+Failure accounting keeps the accepted response order. Only a strictly valid provider-error envelope
+is `provider-error` with indeterminate usage. A malformed `error` on a non-2xx response remains
+`http-error`; on a 2xx response, missing or invalid usage is classified first, while valid usage
+makes the malformed envelope `schema-invalid` with complete usage and exact calculated cost. The
+diagnostic stage may still identify `provider-error-envelope` without changing those reasons.
+
+Diagnostic capture is disabled by default. A future, separately reviewed live authorization may opt
+into only `single-fixture-response-capture`, bound to `banner-person-v1`, one call maximum, zero
+retries, production admission false, and two distinct new local response/report paths. Both files
+are atomically reserved before native transport import or dispatch with exclusive, no-follow,
+mode-0600 handles. Canonical containment, non-symlink components, regular-file identity, mode,
+device, and inode are rechecked through final sync and close; the canonical root, `.local-data`, and
+`banner-ai` parent paths and directory device/inode identities are stored at reservation and the
+whole chain is re-lstatted and re-realpathed before and after reservation verification and each
+same-handle response/report finalization. Response and report writers retain those handles and never
+reopen the paths. A collision, escape, symlink, parent rename/replacement, containment drift, file
+swap, mode drift, or unsafe parent therefore fails closed.
+
+The response artifact is a self-digesting sanitized structural projection that retains only
+allowlisted fields and safe leaves needed to reproduce the strict boundary result. Wrong-typed
+objects, arrays, and strings become type-preserving placeholders. Valid assistant JSON is projected
+through the closed scene shape; malformed assistant JSON becomes a fixed malformed sentinel.
+Every provider array is deterministically bounded at its validator maximum plus one, while unknown
+fields and validation issues use finite caps and truthful retained/generated overflow counts. Valid
+part keys are replaced by consistent valid pseudonyms and invalid keys by consistent invalid
+pseudonyms, preserving equality, uniqueness, and format behavior. Labels and normalized OCR text
+become safe validator-class pseudonyms or invalid sentinels. Only the exact committed
+`banner-person-v1` source SHA may survive: a valid foreign SHA becomes a fixed valid unequal digest,
+and an invalid SHA becomes an invalid sentinel. Provider strings, malformed or wrong-typed strings,
+unknown values, image or Base64 material, prompt fragments, URLs, raw-key-like strings, bearer or
+authorization material, secret names, and execution-authorization fragments are discarded,
+structurally pseudonymized, or replaced by closed sentinels. Arbitrary leaves and field names are
+never retained, so safety does not depend on a blacklist.
+
+Before the one-fixture report is completed, the captured artifact is replayed provider-free. The
+report records `reproduced` only when the actual reason, stage, counts, and issue digest match, and
+the replayed file SHA-256 still equals the SHA-256 captured in the artifact metadata. It records
+`mismatch` otherwise; a different self-valid file cannot satisfy the report binding, and the report
+never writes a speculative false value merely because replay was not run. The diagnostic report
+remains non-admitting even if the replayed response is parser-valid.
+
+An authorized diagnostic run would use the unchanged live command with a fresh one-person
+diagnostic authorization; it is intentionally not executed by this milestone:
+
+```bash
+pnpm --filter @fabrica/banner-ai benchmark:qwen:live -- --authorization-file /absolute/path/to/fresh-one-person-diagnostic-authorization.json
+```
+
+The resulting sanitized response artifact can be replayed locally without a provider secret,
+native transport, image transmission, or network access. An absolute path is accepted only when it
+resolves to an allowed diagnostic location inside this repository (the strict mode-0600 local
+diagnostic namespace or a package-owned diagnostic test fixture):
+
+```bash
+pnpm --filter @fabrica/banner-ai benchmark:qwen:replay -- --response-file /absolute/path/to/qwen-response-diagnostic-unique.json
+```
+
+Replay reads and validates through one no-follow handle with before/after file-identity checks. It
+reports zero provider calls, `networkUsed: false`, whether the exact rejection reason, stage, issue
+counts, and digest were reproduced, and explicit false provider-success and production-admission
+authority. A parser-valid replay is only `replay-valid`; it is not evidence that Alibaba accepted a
+request or that the output passed the committed human oracle. Prompt tuning, schema tuning, and any
+second live call remain separate future work.
+
 ### Provider-free dry run
 
 ```bash

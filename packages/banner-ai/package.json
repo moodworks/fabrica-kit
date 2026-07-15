@@ -13,7 +13,8 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "build": "tsc -p tsconfig.json --noEmit",
     "benchmark:qwen:dry-run": "node --import tsx src/server/qwen-four-fixture-benchmark-cli.ts --dry-run",
-    "benchmark:qwen:live": "node --import tsx src/server/qwen-four-fixture-benchmark-cli.ts --live"
+    "benchmark:qwen:live": "node --import tsx src/server/qwen-four-fixture-benchmark-cli.ts --live",
+    "benchmark:qwen:replay": "node --import tsx src/server/qwen-response-replay-cli.ts"
   },
   "dependencies": {
     "sharp": "0.35.3",

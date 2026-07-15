@@ -49,6 +49,12 @@ import {
   type QwenTransportPort,
   type QwenTransportRequest,
 } from './qwen3-vl-scene-analysis-adapter.js';
+import { QwenValidationDiagnosticV1Schema } from './qwen3-vl-response-boundary.js';
+import {
+  QwenDiagnosticArtifactMetadataV1Schema,
+  QwenDiagnosticReportRelativePathV1Schema,
+  replaySanitizedQwenResponseV1,
+} from './qwen3-vl-response-diagnostics.js';
 
 export const QWEN_FOUR_FIXTURE_REPORT_PATH =
   '.local-data/banner-ai/qwen3-vl-four-fixture-benchmark.json' as const;
@@ -135,6 +141,9 @@ const QwenFixtureBenchmarkResultV1Schema = z
     usage: QwenProviderUsageV1Schema.nullable(),
     calculatedListCost: QwenCalculatedListCostV1Schema.nullable(),
     quality: QwenFixtureQualitySummaryV1Schema.nullable(),
+    diagnostic: QwenValidationDiagnosticV1Schema.nullable().optional(),
+    diagnosticArtifact: QwenDiagnosticArtifactMetadataV1Schema.optional(),
+    diagnosticReplayStatus: z.enum(['reproduced', 'mismatch']).optional(),
     status: z.enum(['pass', 'fail']),
     classifiedFailureReason: QwenBenchmarkClassifiedFailureReasonSchema,
   })
@@ -163,7 +172,10 @@ const QwenFixtureBenchmarkResultV1Schema = z
         result.quality?.pass === true &&
         result.accountingStatus === 'complete') ||
       (result.status === 'fail' && result.classifiedFailureReason !== 'none');
-    if (!accountingIsConsistent || !statusIsConsistent) {
+    const diagnosticIsConsistent =
+      (result.diagnosticArtifact === undefined && result.diagnosticReplayStatus === undefined) ||
+      (result.diagnosticArtifact !== undefined && result.diagnosticReplayStatus !== undefined);
+    if (!accountingIsConsistent || !statusIsConsistent || !diagnosticIsConsistent) {
       context.addIssue({
         code: 'custom',
         message:
@@ -236,6 +248,8 @@ export const QwenFourFixtureBenchmarkReportV1Schema = z
     productionAdmissionAuthority: z.literal(false),
     webRouteActivated: z.literal(false),
     humanOracleModified: z.literal(false),
+    diagnosticOneFixtureMode: z.literal(true).optional(),
+    diagnosticReportRelativePath: QwenDiagnosticReportRelativePathV1Schema.optional(),
   })
   .superRefine((report, context) => {
     const knownCost = report.fixtureResults.reduce(
@@ -250,6 +264,14 @@ export const QwenFourFixtureBenchmarkReportV1Schema = z
       (fixture, index) =>
         fixture.fixtureId === QWEN_FOUR_FIXTURE_CANONICAL_REQUEST_CATALOG_V1[index]?.fixtureId,
     );
+    const diagnosticModeIsConsistent =
+      report.diagnosticOneFixtureMode === true
+        ? report.mode === 'live-provider' &&
+          report.fixtureResults.length === 1 &&
+          report.providerCallCount <= 1 &&
+          report.overallPass === false &&
+          report.diagnosticReportRelativePath !== undefined
+        : report.diagnosticReportRelativePath === undefined;
     if (
       report.providerCallCount !==
         report.fixtureResults.reduce((total, fixture) => total + fixture.providerCallCount, 0) ||
@@ -268,7 +290,8 @@ export const QwenFourFixtureBenchmarkReportV1Schema = z
           report.fixtureResults.length === QWEN_FOUR_FIXTURE_BENCHMARK_CAPS_V1.fixtureCount &&
           report.fixtureResults.every((fixture) => fixture.status === 'pass')) ||
       (report.stoppedEarly && report.terminalFailureReason === 'none') ||
-      (!report.stoppedEarly && report.terminalFailureReason !== 'none')
+      (!report.stoppedEarly && report.terminalFailureReason !== 'none') ||
+      !diagnosticModeIsConsistent
     ) {
       context.addIssue({
         code: 'custom',
@@ -381,6 +404,20 @@ const deadlineFailureReason = (remaining: {
 export const serializeQwenFourFixtureBenchmarkReport = (report: unknown): string =>
   `${canonicalizeJson(QwenFourFixtureBenchmarkReportV1Schema.parse(report))}\n`;
 
+export const replayQwenDiagnosticArtifactStatusV1 = async (
+  artifactInput: unknown,
+): Promise<'reproduced' | 'mismatch'> => {
+  try {
+    const artifact = QwenDiagnosticArtifactMetadataV1Schema.parse(artifactInput);
+    const replay = await replaySanitizedQwenResponseV1({ responseFile: artifact.relativePath });
+    return replay.replayReproduced && replay.sourceRawFileSha256 === artifact.rawFileSha256
+      ? 'reproduced'
+      : 'mismatch';
+  } catch {
+    return 'mismatch';
+  }
+};
+
 export const runQwenFourFixtureBenchmark = async (input: {
   readonly mode: 'deterministic-fake' | 'live-provider';
   readonly transport: QwenTransportPort;
@@ -391,11 +428,15 @@ export const runQwenFourFixtureBenchmark = async (input: {
 }): Promise<QwenFourFixtureBenchmarkReportV1> => {
   const clock = input.clock ?? defaultClock;
   const benchmarkStartedAt = clock.nowMonotonicMs();
+  const diagnosticCapture = input.authorization?.diagnosticCapture ?? null;
   if (
     (input.mode === 'live-provider' && input.transport.transportKind !== 'native-fetch') ||
     (input.mode === 'deterministic-fake' && input.transport.transportKind !== 'deterministic-fake')
   ) {
     throw new TypeError('Qwen benchmark mode and injected transport differ.');
+  }
+  if (diagnosticCapture !== null && input.mode !== 'live-provider') {
+    throw new TypeError('Qwen diagnostic capture is live-provider-only.');
   }
   if (
     PENDING_REAL_MODEL_BENCHMARK_CORPUS_CORE_V2_SHA256 !==
@@ -421,7 +462,11 @@ export const runQwenFourFixtureBenchmark = async (input: {
   const boundedTransport: QwenTransportPort = Object.freeze({
     transportKind: input.transport.transportKind,
     async dispatch(request: QwenTransportRequest) {
-      if (providerCallCount >= QWEN_FOUR_FIXTURE_BENCHMARK_CAPS_V1.providerCallsMaximum) {
+      if (
+        providerCallCount >=
+        (diagnosticCapture?.providerCallsMaximum ??
+          QWEN_FOUR_FIXTURE_BENCHMARK_CAPS_V1.providerCallsMaximum)
+      ) {
         throw new QwenSceneAnalysisError('duplicate-invocation');
       }
       providerCallCount += 1;
@@ -440,11 +485,13 @@ export const runQwenFourFixtureBenchmark = async (input: {
     const fixtureStartedAt = clock.nowMonotonicMs();
     const elapsedBeforeFixture = Math.max(0, Math.ceil(fixtureStartedAt - benchmarkStartedAt));
     const callsBeforeFixture = providerCallCount;
-    const pushFailure = (inputFailure: {
+    const pushFailure = async (inputFailure: {
       readonly reason: QwenBenchmarkClassifiedFailureReason;
       readonly accounting: QwenAttemptAccounting;
       readonly quality?: ReturnType<typeof summarizeQuality> | null;
-    }): void => {
+      readonly diagnostic?: QwenSceneAnalysisError['diagnostic'];
+      readonly diagnosticArtifact?: QwenSceneAnalysisError['diagnosticArtifact'];
+    }): Promise<void> => {
       const callsForFixture = providerCallCount - callsBeforeFixture;
       const accounting =
         callsForFixture === 0
@@ -461,6 +508,10 @@ export const runQwenFourFixtureBenchmark = async (input: {
       } else if (accounting.status === 'indeterminate') {
         indeterminateAttemptCount += 1;
       }
+      const diagnosticReplayStatus =
+        inputFailure.diagnosticArtifact === undefined || inputFailure.diagnosticArtifact === null
+          ? undefined
+          : await replayQwenDiagnosticArtifactStatusV1(inputFailure.diagnosticArtifact);
       fixtureResults.push(
         QwenFixtureBenchmarkResultV1Schema.parse({
           fixtureId: binding.fixtureId,
@@ -474,6 +525,14 @@ export const runQwenFourFixtureBenchmark = async (input: {
           usage: accounting.usage,
           calculatedListCost: accounting.calculatedListCost,
           quality: inputFailure.quality ?? null,
+          ...(inputFailure.diagnostic === undefined ? {} : { diagnostic: inputFailure.diagnostic }),
+          ...(inputFailure.diagnosticArtifact === undefined ||
+          inputFailure.diagnosticArtifact === null
+            ? {}
+            : {
+                diagnosticArtifact: inputFailure.diagnosticArtifact,
+                diagnosticReplayStatus,
+              }),
           status: 'fail',
           classifiedFailureReason: inputFailure.reason,
         }),
@@ -483,7 +542,7 @@ export const runQwenFourFixtureBenchmark = async (input: {
     };
 
     if (elapsedBeforeFixture >= QWEN_FOUR_FIXTURE_BENCHMARK_CAPS_V1.totalWallTimeMs) {
-      pushFailure({
+      await pushFailure({
         reason: 'total-time-limit-exceeded',
         accounting: notDispatchedAccounting(),
       });
@@ -496,7 +555,10 @@ export const runQwenFourFixtureBenchmark = async (input: {
         parseMicros(maximumSingleCallListCost.calculatedListCostMicros) >
         parseMicros(QWEN_FOUR_FIXTURE_BENCHMARK_CAPS_V1.totalCalculatedListCostMaximumMicroUsd)
     ) {
-      pushFailure({ reason: 'benchmark-cap-exceeded', accounting: notDispatchedAccounting() });
+      await pushFailure({
+        reason: 'benchmark-cap-exceeded',
+        accounting: notDispatchedAccounting(),
+      });
       break;
     }
     const source = REAL_MODEL_BENCHMARK_PENDING_STATIC_SOURCE_REGISTRY_V2[index];
@@ -538,7 +600,7 @@ export const runQwenFourFixtureBenchmark = async (input: {
       Math.min(remaining.callMs, remaining.fixtureMs, remaining.totalMs),
     );
     if (deadlineFailure !== null || dispatchTimeoutMs < 1) {
-      pushFailure({
+      await pushFailure({
         reason:
           deadlineFailure ??
           (remaining.callMs <= remaining.fixtureMs && remaining.callMs <= remaining.totalMs
@@ -579,7 +641,7 @@ export const runQwenFourFixtureBenchmark = async (input: {
         prospectiveCost >
         parseMicros(QWEN_FOUR_FIXTURE_BENCHMARK_CAPS_V1.totalCalculatedListCostMaximumMicroUsd)
       ) {
-        pushFailure({ reason: 'benchmark-cap-exceeded', accounting: attemptAccounting });
+        await pushFailure({ reason: 'benchmark-cap-exceeded', accounting: attemptAccounting });
         break;
       }
       const quality = evaluateQwenFourFixtureQualityV1({
@@ -594,7 +656,7 @@ export const runQwenFourFixtureBenchmark = async (input: {
       const fixtureElapsedMs = Math.max(0, Math.ceil(afterEvaluation - fixtureStartedAt));
       const totalElapsedMs = Math.max(0, Math.ceil(afterEvaluation - benchmarkStartedAt));
       if (fixtureElapsedMs > QWEN_FOUR_FIXTURE_BENCHMARK_CAPS_V1.perFixtureTimeoutMs) {
-        pushFailure({
+        await pushFailure({
           reason: 'fixture-time-limit-exceeded',
           accounting: attemptAccounting,
           quality: qualitySummary,
@@ -602,7 +664,7 @@ export const runQwenFourFixtureBenchmark = async (input: {
         break;
       }
       if (totalElapsedMs > QWEN_FOUR_FIXTURE_BENCHMARK_CAPS_V1.totalWallTimeMs) {
-        pushFailure({
+        await pushFailure({
           reason: 'total-time-limit-exceeded',
           accounting: attemptAccounting,
           quality: qualitySummary,
@@ -611,6 +673,10 @@ export const runQwenFourFixtureBenchmark = async (input: {
       }
       const classifiedFailureReason = classifyQualityFailure(quality);
       knownCalculatedListCostMicros = prospectiveCost;
+      const diagnosticReplayStatus =
+        result.diagnosticArtifact === null
+          ? undefined
+          : await replayQwenDiagnosticArtifactStatusV1(result.diagnosticArtifact);
       fixtureResults.push(
         QwenFixtureBenchmarkResultV1Schema.parse({
           fixtureId: binding.fixtureId,
@@ -624,6 +690,9 @@ export const runQwenFourFixtureBenchmark = async (input: {
           usage: result.usage,
           calculatedListCost: result.calculatedListCost,
           quality: qualitySummary,
+          ...(result.diagnosticArtifact === null
+            ? {}
+            : { diagnosticArtifact: result.diagnosticArtifact, diagnosticReplayStatus }),
           status: quality.pass ? 'pass' : 'fail',
           classifiedFailureReason,
         }),
@@ -633,13 +702,20 @@ export const runQwenFourFixtureBenchmark = async (input: {
         error instanceof QwenSceneAnalysisError ? error.reason : 'identity-mismatch';
       const accounting =
         error instanceof QwenSceneAnalysisError ? error.accounting : attemptAccounting;
-      pushFailure({
+      await pushFailure({
         reason: classifiedFailureReason,
         accounting,
         quality: qualitySummary,
+        ...(error instanceof QwenSceneAnalysisError
+          ? {
+              diagnostic: error.diagnostic,
+              diagnosticArtifact: error.diagnosticArtifact,
+            }
+          : {}),
       });
       break;
     }
+    if (diagnosticCapture !== null) break;
   }
 
   const totalWallTimeMs = Math.max(0, Math.ceil(clock.nowMonotonicMs() - benchmarkStartedAt));
@@ -686,5 +762,11 @@ export const runQwenFourFixtureBenchmark = async (input: {
     productionAdmissionAuthority: false,
     webRouteActivated: false,
     humanOracleModified: false,
+    ...(diagnosticCapture === null
+      ? {}
+      : {
+          diagnosticOneFixtureMode: true,
+          diagnosticReportRelativePath: diagnosticCapture.diagnosticReportRelativePath,
+        }),
   });
 };

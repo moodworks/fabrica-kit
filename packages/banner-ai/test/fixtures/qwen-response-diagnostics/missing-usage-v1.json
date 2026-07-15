@@ -1,0 +1,49 @@
+{
+  "artifactVersion": 1,
+  "canonicalPayloadSha256": "e68244fdda5ceb8f66fd18df6d799b9df20fa21d497fb504e7ca428a2821ce17",
+  "payload": {
+    "artifactKind": "qwen-sanitized-provider-response-capture",
+    "captureVersion": 1,
+    "capturedAtMs": 1784064000000,
+    "expectedOutcome": {
+      "diagnostic": {
+        "diagnosticVersion": 1,
+        "issueDigestSha256": "9038404a4ef177eb107d84772d9a0f83defd69678d42665a3977f77de9579d9b",
+        "issues": [
+          {
+            "classification": "missing-required",
+            "expectedType": "object",
+            "path": "/usage",
+            "receivedType": "undefined",
+            "validatorIssueCode": "missing-required"
+          }
+        ],
+        "retainedIssueCount": 1,
+        "stage": "usage-accounting",
+        "totalIssueCount": 1,
+        "truncatedIssueCount": 0
+      },
+      "failureReason": "missing-usage",
+      "kind": "rejected"
+    },
+    "fixtureId": "banner-person-v1",
+    "humanOracleModified": false,
+    "productionAdmissionAuthority": false,
+    "providerCallCount": 1,
+    "providerKey": "alibaba-cloud-model-studio",
+    "requestedModelId": "qwen3.6-flash-2026-04-16",
+    "response": {
+      "body": {
+        "actualUnknownFieldCount": 0,
+        "canonicalBodyProjection": "{}",
+        "kind": "json-projection",
+        "retainedUnknownFieldCount": 0,
+        "truncatedUnknownFieldCount": 0,
+        "unknownFieldOverflow": [],
+        "unknownFields": []
+      },
+      "status": 200
+    },
+    "retryCount": 0
+  }
+}
