@@ -22,7 +22,8 @@ import {
   QWEN3_VL_OFFICIAL_EVIDENCE_RETRIEVED_DATE,
   QWEN3_VL_PRICING_EVIDENCE_SHA256,
   QWEN3_VL_PROVIDER_KEY,
-  QWEN3_VL_PROVIDER_PROTOCOL_WRAPPER_V1,
+  QWEN3_VL_PROVIDER_PROTOCOL_WRAPPER_V2,
+  QWEN3_VL_PROVIDER_PROTOCOL_WRAPPER_V2_SHA256,
   QWEN3_VL_REQUESTED_MODEL_ID,
   QWEN3_VL_REQUEST_SHAPE_SHA256,
   QWEN3_VL_SECRET_REFERENCE_NAME,
@@ -38,7 +39,7 @@ import {
 import { SCENE_ANALYSIS_PROMPT_V1 } from '../evaluation/prompt-catalog.js';
 import {
   QWEN_FOUR_FIXTURE_CANONICAL_REQUEST_CATALOG_V1,
-  QWEN_FOUR_FIXTURE_ORDERED_MODEL_INPUT_DIGESTS_SHA256,
+  QWEN_FOUR_FIXTURE_ACTIVE_MODEL_INPUT_DIGESTS_SHA256,
   requireCanonicalQwenBenchmarkRequestV1,
 } from './qwen-four-fixture-request-catalog.js';
 import {
@@ -87,9 +88,9 @@ const QwenDiagnosticCaptureAuthorizationV1Schema = z
   })
   .readonly();
 
-const QwenBenchmarkAuthorizationPacketV1Schema = z
+const QwenBenchmarkAuthorizationPacketV2Schema = z
   .strictObject({
-    authorizationVersion: z.literal(1),
+    authorizationVersion: z.literal(2),
     authorizationId: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_.:-]{7,127}$/u),
     mode: z.enum(['deterministic-fake', 'live-provider']),
     purpose: z.literal('one-capped-four-fixture-sequential-zero-retry-benchmark'),
@@ -106,13 +107,14 @@ const QwenBenchmarkAuthorizationPacketV1Schema = z
     humanOracleCorpusSha256: z.literal(QWEN_FOUR_FIXTURE_HUMAN_ORACLE_CORPUS_SHA256),
     pricingEvidenceSha256: z.literal(QWEN3_VL_PRICING_EVIDENCE_SHA256),
     pricingEvidenceRetrievedDate: z.literal(QWEN3_VL_OFFICIAL_EVIDENCE_RETRIEVED_DATE),
+    providerProtocolWrapperSha256: z.literal(QWEN3_VL_PROVIDER_PROTOCOL_WRAPPER_V2_SHA256),
     requestShapeSha256: z.literal(QWEN3_VL_REQUEST_SHAPE_SHA256),
     benchmarkCapsSha256: z.literal(QWEN_FOUR_FIXTURE_BENCHMARK_CAPS_SHA256),
     contentPolicyDefinitionSha256: z.literal(
       BANNER_AI_MODEL_DISPATCH_CONTENT_POLICY_V1_DEFINITION_SHA256,
     ),
     workflowDefinitionSha256: z.literal(INITIAL_BANNER_ANALYZE_WORKFLOW_REF_V1.definitionSha256),
-    orderedModelInputDigestsSha256: z.literal(QWEN_FOUR_FIXTURE_ORDERED_MODEL_INPUT_DIGESTS_SHA256),
+    orderedModelInputDigestsSha256: z.literal(QWEN_FOUR_FIXTURE_ACTIVE_MODEL_INPUT_DIGESTS_SHA256),
     diagnosticCapture: QwenDiagnosticCaptureAuthorizationV1Schema.optional(),
     executionAuthorized: z.literal(true),
   })
@@ -136,12 +138,12 @@ const QwenBenchmarkAuthorizationPacketV1Schema = z
   })
   .readonly();
 
-export type QwenBenchmarkAuthorizationPacketV1 = z.infer<
-  typeof QwenBenchmarkAuthorizationPacketV1Schema
+export type QwenBenchmarkAuthorizationPacketV2 = z.infer<
+  typeof QwenBenchmarkAuthorizationPacketV2Schema
 >;
 
 export interface QwenBenchmarkExecutionAuthorization {
-  readonly authorizationVersion: 1;
+  readonly authorizationVersion: 2;
   readonly authorizationId: string;
   readonly mode: 'deterministic-fake' | 'live-provider';
   readonly providerKey: typeof QWEN3_VL_PROVIDER_KEY;
@@ -152,7 +154,7 @@ export interface QwenBenchmarkExecutionAuthorization {
 }
 
 interface PrivateAuthorizationState {
-  readonly packet: QwenBenchmarkAuthorizationPacketV1;
+  readonly packet: QwenBenchmarkAuthorizationPacketV2;
   readonly claimedInvocationKeys: Set<string>;
   readonly claimedFixtureIds: Set<string>;
   diagnosticReservations: QwenDiagnosticReservationSetV1 | null;
@@ -164,9 +166,9 @@ const privateAuthorizationState = new WeakMap<object, PrivateAuthorizationState>
 export const mintQwenBenchmarkExecutionAuthorization = (
   input: unknown,
 ): QwenBenchmarkExecutionAuthorization => {
-  const packet = QwenBenchmarkAuthorizationPacketV1Schema.parse(input);
+  const packet = QwenBenchmarkAuthorizationPacketV2Schema.parse(input);
   const authorization = Object.freeze({
-    authorizationVersion: 1 as const,
+    authorizationVersion: 2 as const,
     authorizationId: packet.authorizationId,
     mode: packet.mode,
     providerKey: QWEN3_VL_PROVIDER_KEY,
@@ -194,8 +196,8 @@ export const createQwenDryRunExecutionAuthorization = (input: {
     .literal(QWEN3_VL_SERVER_WORKSPACE_ID)
     .parse(input.serverWorkspaceId ?? QWEN3_VL_SERVER_WORKSPACE_ID);
   return mintQwenBenchmarkExecutionAuthorization({
-    authorizationVersion: 1,
-    authorizationId: 'qwen.deterministic.fake.authorization.v1',
+    authorizationVersion: 2,
+    authorizationId: 'qwen.deterministic.fake.authorization.v2',
     mode: 'deterministic-fake',
     purpose: 'one-capped-four-fixture-sequential-zero-retry-benchmark',
     issuedAtMs: nowMs,
@@ -211,11 +213,12 @@ export const createQwenDryRunExecutionAuthorization = (input: {
     humanOracleCorpusSha256: QWEN_FOUR_FIXTURE_HUMAN_ORACLE_CORPUS_SHA256,
     pricingEvidenceSha256: QWEN3_VL_PRICING_EVIDENCE_SHA256,
     pricingEvidenceRetrievedDate: QWEN3_VL_OFFICIAL_EVIDENCE_RETRIEVED_DATE,
+    providerProtocolWrapperSha256: QWEN3_VL_PROVIDER_PROTOCOL_WRAPPER_V2_SHA256,
     requestShapeSha256: QWEN3_VL_REQUEST_SHAPE_SHA256,
     benchmarkCapsSha256: QWEN_FOUR_FIXTURE_BENCHMARK_CAPS_SHA256,
     contentPolicyDefinitionSha256: BANNER_AI_MODEL_DISPATCH_CONTENT_POLICY_V1_DEFINITION_SHA256,
     workflowDefinitionSha256: INITIAL_BANNER_ANALYZE_WORKFLOW_REF_V1.definitionSha256,
-    orderedModelInputDigestsSha256: QWEN_FOUR_FIXTURE_ORDERED_MODEL_INPUT_DIGESTS_SHA256,
+    orderedModelInputDigestsSha256: QWEN_FOUR_FIXTURE_ACTIVE_MODEL_INPUT_DIGESTS_SHA256,
     executionAuthorized: true,
   });
 };
@@ -228,7 +231,7 @@ export const preflightQwenLiveExecutionAuthorization = (input: {
   const nowMs = z.int().min(0).parse(input.nowMs);
   z.literal(true).parse(input.secretPresent);
   assertQwen3VlOfficialEvidenceFresh(nowMs);
-  const packet = QwenBenchmarkAuthorizationPacketV1Schema.parse(input.packet);
+  const packet = QwenBenchmarkAuthorizationPacketV2Schema.parse(input.packet);
   if (packet.mode !== 'live-provider' || nowMs < packet.issuedAtMs || nowMs >= packet.expiresAtMs) {
     throw new QwenSceneAnalysisError('authorization-stale');
   }
@@ -458,7 +461,7 @@ const buildPrivateRequestBody = (
     messages: Object.freeze([
       Object.freeze({
         role: 'system' as const,
-        content: QWEN3_VL_PROVIDER_PROTOCOL_WRAPPER_V1.content,
+        content: QWEN3_VL_PROVIDER_PROTOCOL_WRAPPER_V2.content,
       }),
       Object.freeze({
         role: 'user' as const,

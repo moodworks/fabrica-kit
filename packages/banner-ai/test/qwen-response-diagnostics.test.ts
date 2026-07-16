@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto';
+import { existsSync } from 'node:fs';
 import {
   chmod,
   lstat,
@@ -28,6 +30,7 @@ import {
   QWEN3_VL_OFFICIAL_EVIDENCE_RETRIEVED_DATE,
   QWEN3_VL_PRICING_EVIDENCE_SHA256,
   QWEN3_VL_PROVIDER_KEY,
+  QWEN3_VL_PROVIDER_PROTOCOL_WRAPPER_V2_SHA256,
   QWEN3_VL_REQUESTED_MODEL_ID,
   QWEN3_VL_REQUEST_SHAPE_SHA256,
   QWEN3_VL_SECRET_REFERENCE_NAME,
@@ -39,7 +42,7 @@ import {
 import { createDeterministicOracleMatchingQwenOutputV1 } from '../src/evaluation/qwen-four-fixture-quality.js';
 import { EpochMillisecondsSchema } from '../src/jobs/timing.js';
 import {
-  QWEN_FOUR_FIXTURE_ORDERED_MODEL_INPUT_DIGESTS_SHA256,
+  QWEN_FOUR_FIXTURE_ACTIVE_MODEL_INPUT_DIGESTS_SHA256,
   createCanonicalQwenBenchmarkRequestV1,
 } from '../src/server/qwen-four-fixture-request-catalog.js';
 import {
@@ -71,6 +74,7 @@ import {
 } from '../src/server/qwen3-vl-response-diagnostics.js';
 import {
   QwenFourFixtureBenchmarkReportV1Schema,
+  QwenFourFixtureBenchmarkReportV2Schema,
   replayQwenDiagnosticArtifactStatusV1,
   runQwenFourFixtureBenchmark,
   serializeQwenFourFixtureBenchmarkReport,
@@ -83,6 +87,55 @@ import {
 const fixedNowMs = Date.parse('2026-07-15T12:00:00.000Z');
 const repositoryRoot = fileURLToPath(new URL('../../..', import.meta.url));
 const localRelativePaths = new Set<string>();
+const historicalLocalEvidence = Object.freeze([
+  {
+    relativePath: '.local-data/banner-ai/qwen-live-execution-authorization.json',
+    sha256: '32a15344da976fbd4c21712103b409edecf41f5b81fe327dc02f5e37380a4153',
+  },
+  {
+    relativePath:
+      '.local-data/banner-ai/qwen-response-diagnostic-report-banner-person-v1-20260716-resumed-call-0002.json',
+    sha256: '8282acee2c3159f15007a601c72f787f72e410873f88d6f42f7bfa941968e4a5',
+  },
+  {
+    relativePath: '.local-data/banner-ai/qwen-live-diagnostic-execution-authorization.json',
+    sha256: '48714c64c67e2d1cf0d8018cb5a491507f66636a6923c452b44a04e772428900',
+  },
+  {
+    relativePath:
+      '.local-data/banner-ai/qwen-response-diagnostic-banner-person-v1-20260716-envelope-correction-call-0003.json',
+    sha256: '0cb1534ff14d471cff0bb5ebf74e9e0080c27cf1e2dd7d99bf8432774db64d2a',
+  },
+  {
+    relativePath:
+      '.local-data/banner-ai/qwen-live-diagnostic-manual-release-20260716-envelope-correction-call-0003.json',
+    sha256: '6236239af377bf007e3834fbd0c081034b9acfd24b3fc078485d7b24026fcb43',
+  },
+  {
+    relativePath:
+      '.local-data/banner-ai/qwen-response-diagnostic-report-banner-person-v1-20260716-envelope-correction-call-0003.json',
+    sha256: '89cd9b30653c0d91db46a0c5e2dd4f5dcd80eb20c63e7cada13177812bbb14c9',
+  },
+  {
+    relativePath: '.local-data/banner-ai/qwen3-vl-four-fixture-benchmark.json',
+    sha256: '26c88f5316f0fadbc496ecc937df8d621f5bbbd1d513aae173765beec72adda3',
+  },
+  {
+    relativePath:
+      '.local-data/banner-ai/qwen-response-diagnostic-banner-person-v1-20260716-resumed-call-0002.json',
+    sha256: 'ad85a335a9dc2836546eef712b17dd7f6dcc9a18048a04e515180e00ba1959d2',
+  },
+  {
+    relativePath:
+      '.local-data/banner-ai/qwen-live-diagnostic-execution-authorization-20260716-envelope-correction-call-0003.json',
+    sha256: 'd6323f9f1ec588668617e40c78152294e530029d9e66320bf9edf6f0f8906276',
+  },
+] as const);
+const historicalLocalEvidencePresentCount = historicalLocalEvidence.filter((evidence) =>
+  existsSync(join(repositoryRoot, evidence.relativePath)),
+).length;
+const historicalLocalEvidencePresent =
+  historicalLocalEvidencePresentCount === historicalLocalEvidence.length;
 
 afterEach(async () => {
   await Promise.all(
@@ -178,7 +231,7 @@ const diagnosticPaths = (token: string) => {
 };
 
 const livePacket = (token: string) => ({
-  authorizationVersion: 1 as const,
+  authorizationVersion: 2 as const,
   authorizationId: `qwen.live.diagnostic.${token}`,
   mode: 'live-provider' as const,
   purpose: 'one-capped-four-fixture-sequential-zero-retry-benchmark' as const,
@@ -195,11 +248,12 @@ const livePacket = (token: string) => ({
   humanOracleCorpusSha256: QWEN_FOUR_FIXTURE_HUMAN_ORACLE_CORPUS_SHA256,
   pricingEvidenceSha256: QWEN3_VL_PRICING_EVIDENCE_SHA256,
   pricingEvidenceRetrievedDate: QWEN3_VL_OFFICIAL_EVIDENCE_RETRIEVED_DATE,
+  providerProtocolWrapperSha256: QWEN3_VL_PROVIDER_PROTOCOL_WRAPPER_V2_SHA256,
   requestShapeSha256: QWEN3_VL_REQUEST_SHAPE_SHA256,
   benchmarkCapsSha256: QWEN_FOUR_FIXTURE_BENCHMARK_CAPS_SHA256,
   contentPolicyDefinitionSha256: BANNER_AI_MODEL_DISPATCH_CONTENT_POLICY_V1_DEFINITION_SHA256,
   workflowDefinitionSha256: INITIAL_BANNER_ANALYZE_WORKFLOW_REF_V1.definitionSha256,
-  orderedModelInputDigestsSha256: QWEN_FOUR_FIXTURE_ORDERED_MODEL_INPUT_DIGESTS_SHA256,
+  orderedModelInputDigestsSha256: QWEN_FOUR_FIXTURE_ACTIVE_MODEL_INPUT_DIGESTS_SHA256,
   diagnosticCapture: {
     diagnosticVersion: 1 as const,
     mode: 'single-fixture-response-capture' as const,
@@ -248,6 +302,248 @@ const liveLikeTransport = (
 };
 
 describe('Qwen response diagnostics and offline replay', () => {
+  it('allows zero or all historical local files but rejects partial evidence presence', () => {
+    expect([0, historicalLocalEvidence.length]).toContain(historicalLocalEvidencePresentCount);
+  });
+
+  it.runIf(historicalLocalEvidencePresent)(
+    'hash-pins the nine historical local files and replays the latest response provider-free',
+    async () => {
+      for (const evidence of historicalLocalEvidence) {
+        const bytes = await readFile(join(repositoryRoot, evidence.relativePath));
+        expect(createHash('sha256').update(bytes).digest('hex')).toBe(evidence.sha256);
+      }
+      for (const reportRelativePath of [
+        '.local-data/banner-ai/qwen-response-diagnostic-report-banner-person-v1-20260716-envelope-correction-call-0003.json',
+        '.local-data/banner-ai/qwen3-vl-four-fixture-benchmark.json',
+      ]) {
+        const historicalReport = QwenFourFixtureBenchmarkReportV1Schema.parse(
+          JSON.parse(await readFile(join(repositoryRoot, reportRelativePath), 'utf8')),
+        );
+        expect(historicalReport).toMatchObject({
+          reportVersion: 1,
+          productionAdmissionAuthority: false,
+          overallPass: false,
+        });
+        expect(historicalReport).not.toHaveProperty('providerProtocolWrapperSha256');
+        expect(historicalReport).not.toHaveProperty('providerSuccessAuthority');
+        expect(() =>
+          QwenFourFixtureBenchmarkReportV1Schema.parse({
+            ...historicalReport,
+            providerSuccessAuthority: true,
+          }),
+        ).toThrow();
+      }
+      const fetchSpy = vi.spyOn(globalThis, 'fetch');
+      const replay = await replaySanitizedQwenResponseV1({
+        responseFile:
+          '.local-data/banner-ai/qwen-response-diagnostic-banner-person-v1-20260716-envelope-correction-call-0003.json',
+      });
+      expect(replay).toMatchObject({
+        sourceRawFileSha256: '0cb1534ff14d471cff0bb5ebf74e9e0080c27cf1e2dd7d99bf8432774db64d2a',
+        validationStatus: 'replay-rejected',
+        failureReason: 'schema-invalid',
+        diagnostic: {
+          issueDigestSha256: 'da4a2caade6c45bdbcef3d478577886225bc57a61e31a81fa19089222b5acb83',
+        },
+        providerCallCount: 0,
+        networkUsed: false,
+        replayReproduced: true,
+        providerSuccessAuthority: false,
+        productionAdmissionAuthority: false,
+      });
+      expect(fetchSpy).not.toHaveBeenCalled();
+    },
+  );
+
+  it('accepts the corrected person response with five parts and exactly matching five-part evidence', () => {
+    const result = validateQwenProviderResponseBoundaryV1({
+      response: responseFor(validEnvelope()),
+      request: personRequest(),
+    });
+    expect(result.proposal.composition.kind).toBe('composition_proposal');
+    if (result.proposal.composition.kind !== 'composition_proposal') {
+      throw new TypeError('Expected the deterministic person composition proposal.');
+    }
+    expect(result.proposal.composition.parts).toHaveLength(5);
+    expect(result.proposal.layerEvidence).toHaveLength(5);
+    expect(result.proposal.layerEvidence.map((entry) => entry.partKey)).toEqual(
+      result.proposal.composition.parts.map((part) => part.partKey),
+    );
+  });
+
+  it.each([
+    { name: 'seven characters', observationId: 'text001', accepted: false },
+    { name: 'eight valid characters', observationId: 'text0001', accepted: true },
+    { name: 'spaces', observationId: 'text 001', accepted: false },
+    { name: 'forbidden punctuation', observationId: 'text.001', accepted: false },
+    { name: 'numeric-only', observationId: '12345678', accepted: false },
+  ] as const)('enforces the Qwen observation ID contract for $name', (testCase) => {
+    const envelope = structuredClone(validEnvelope());
+    mutateAssistantOutput(envelope, (output) => {
+      const observations = output.textObservations as Record<string, unknown>[];
+      observations[0]!.observationId = testCase.observationId;
+    });
+    const failure = boundaryFailureOrNull(responseFor(envelope));
+    if (testCase.accepted) {
+      expect(failure).toBeNull();
+      return;
+    }
+    expect(failure).toMatchObject({
+      reason: 'schema-invalid',
+      diagnostic: { stage: 'ocr-observation-schema' },
+    });
+  });
+
+  it('rejects duplicate observation IDs within one response', () => {
+    const envelope = structuredClone(validEnvelope());
+    mutateAssistantOutput(envelope, (output) => {
+      const observations = output.textObservations as Record<string, unknown>[];
+      observations[1]!.observationId = observations[0]!.observationId;
+    });
+    expect(captureBoundaryFailure(responseFor(envelope))).toMatchObject({
+      reason: 'schema-invalid',
+      diagnostic: { stage: 'ocr-observation-schema' },
+    });
+  });
+
+  it('captures and exactly replays a pseudonymized numeric-only observation ID', async () => {
+    const rawNumericObservationId = '9876543212345678';
+    const secondRawNumericObservationId = '1234567898765432';
+    const envelope = structuredClone(validEnvelope());
+    mutateAssistantOutput(envelope, (output) => {
+      const observations = output.textObservations as Record<string, unknown>[];
+      observations[0]!.observationId = rawNumericObservationId;
+      observations[1]!.observationId = secondRawNumericObservationId;
+      observations[2]!.observationId = rawNumericObservationId;
+    });
+    const response = responseFor(envelope);
+    const failure = captureBoundaryFailure(response);
+    expect(failure).toMatchObject({
+      reason: 'schema-invalid',
+      diagnostic: { stage: 'ocr-observation-schema' },
+    });
+    const paths = diagnosticPaths('numeric-only-observation-0001');
+    const reservations = await reserveQwenDiagnosticArtifactFilesV1(paths);
+    await captureSanitizedQwenResponseV1({
+      reservations,
+      capturedAtMs: fixedNowMs,
+      fixtureId: 'banner-person-v1',
+      response,
+      failure,
+    });
+    const artifactText = await readFile(
+      join(repositoryRoot, paths.responseArtifactRelativePath),
+      'utf8',
+    );
+    expect(artifactText).not.toContain(rawNumericObservationId);
+    expect(artifactText).not.toContain(secondRawNumericObservationId);
+    const artifact = JSON.parse(artifactText) as Record<string, unknown>;
+    const payload = artifact.payload as Record<string, unknown>;
+    const projectedResponse = payload.response as Record<string, unknown>;
+    const projectedBody = projectedResponse.body as Record<string, unknown>;
+    const projectedEnvelope = JSON.parse(String(projectedBody.canonicalBodyProjection)) as Record<
+      string,
+      unknown
+    >;
+    const projectedChoices = projectedEnvelope.choices as Record<string, unknown>[];
+    const projectedMessage = projectedChoices[0]!.message as Record<string, unknown>;
+    const projectedOutput = JSON.parse(String(projectedMessage.content)) as Record<string, unknown>;
+    const projectedObservations = projectedOutput.textObservations as Record<string, unknown>[];
+    const projectedIds = projectedObservations
+      .slice(0, 3)
+      .map((observation) => String(observation.observationId));
+    expect(projectedIds[0]).toMatch(/^[0-9]{32}$/u);
+    expect(projectedIds[1]).toMatch(/^[0-9]{32}$/u);
+    expect(projectedIds[0]).not.toBe(projectedIds[1]);
+    expect(projectedIds[2]).toBe(projectedIds[0]);
+    const replay = await replaySanitizedQwenResponseV1({
+      responseFile: paths.responseArtifactRelativePath,
+    });
+    expect(replay).toMatchObject({
+      validationStatus: 'replay-rejected',
+      failureReason: failure.reason,
+      diagnostic: {
+        stage: failure.diagnostic.stage,
+        issueDigestSha256: failure.diagnostic.issueDigestSha256,
+      },
+      replayReproduced: true,
+      providerCallCount: 0,
+      networkUsed: false,
+      providerSuccessAuthority: false,
+      productionAdmissionAuthority: false,
+    });
+    await abortQwenDiagnosticArtifactReservationsV1(reservations);
+  });
+
+  it.each([
+    {
+      name: 'six composition parts',
+      mutate(output: Record<string, unknown>): void {
+        const composition = output.composition as Record<string, unknown>;
+        const parts = composition.parts as Record<string, unknown>[];
+        const sixth = structuredClone(parts[0]!);
+        sixth.partKey = 'layer_1_6';
+        composition.parts = [...parts, sixth];
+      },
+    },
+    {
+      name: 'six evidence entries',
+      mutate(output: Record<string, unknown>): void {
+        const evidence = output.layerEvidence as Record<string, unknown>[];
+        const sixth = structuredClone(evidence[0]!);
+        sixth.partKey = 'layer_1_6';
+        output.layerEvidence = [...evidence, sixth];
+      },
+    },
+    {
+      name: 'missing evidence',
+      mutate(output: Record<string, unknown>): void {
+        const evidence = output.layerEvidence as Record<string, unknown>[];
+        output.layerEvidence = evidence.slice(0, -1);
+      },
+    },
+    {
+      name: 'duplicate evidence for one part without exceeding five entries',
+      mutate(output: Record<string, unknown>): void {
+        const evidence = output.layerEvidence as Record<string, unknown>[];
+        evidence[1]!.partKey = evidence[0]!.partKey;
+      },
+    },
+    {
+      name: 'foreign part evidence reference',
+      mutate(output: Record<string, unknown>): void {
+        const evidence = output.layerEvidence as Record<string, unknown>[];
+        evidence[2]!.partKey = 'foreign_1';
+      },
+    },
+    {
+      name: 'reordered evidence',
+      mutate(output: Record<string, unknown>): void {
+        const evidence = output.layerEvidence as Record<string, unknown>[];
+        [evidence[0], evidence[1]] = [evidence[1]!, evidence[0]!];
+      },
+    },
+  ] as const)('rejects $name at the layer schema boundary', (testCase) => {
+    const envelope = structuredClone(validEnvelope());
+    mutateAssistantOutput(envelope, testCase.mutate);
+    expect(captureBoundaryFailure(responseFor(envelope))).toMatchObject({
+      reason: 'schema-invalid',
+      diagnostic: { stage: 'layer-schema' },
+    });
+  });
+
+  it('rejects an unknown assistant scene field', () => {
+    const envelope = structuredClone(validEnvelope());
+    mutateAssistantOutput(envelope, (output) => {
+      output.unknownSceneField = true;
+    });
+    expect(captureBoundaryFailure(responseFor(envelope))).toMatchObject({
+      reason: 'schema-invalid',
+      diagnostic: { stage: 'unknown-field-rejection' },
+    });
+  });
+
   it.each([
     {
       name: 'HTTP envelope',
@@ -2091,13 +2387,20 @@ describe('Qwen response diagnostics and offline replay', () => {
       /data:image|assistant.*content|Bearer|unit-test-secret/iu,
     );
 
-    const legacyShape = structuredClone(report) as Record<string, unknown>;
-    delete legacyShape.diagnosticOneFixtureMode;
-    delete legacyShape.diagnosticReportRelativePath;
-    const fixtureResults = legacyShape.fixtureResults as Record<string, unknown>[];
+    expect(QwenFourFixtureBenchmarkReportV2Schema.parse(report)).toBeDefined();
+    const historicalShape = structuredClone(report) as Record<string, unknown>;
+    historicalShape.reportVersion = 1;
+    historicalShape.requestShapeSha256 =
+      '06963aab79297adf81adb33f1c3c97b070ab5f30feb7ce6982d4e751afdf1fbf';
+    historicalShape.orderedModelInputDigestsSha256 =
+      '4dc9f1265bf0494784026836f42506f0b8f42e045862376318e905b437629041';
+    delete historicalShape.providerProtocolWrapperSha256;
+    delete historicalShape.diagnosticOneFixtureMode;
+    delete historicalShape.diagnosticReportRelativePath;
+    const fixtureResults = historicalShape.fixtureResults as Record<string, unknown>[];
     delete fixtureResults[0]!.diagnosticArtifact;
     delete fixtureResults[0]!.diagnosticReplayStatus;
-    expect(QwenFourFixtureBenchmarkReportV1Schema.parse(legacyShape)).toBeDefined();
+    expect(QwenFourFixtureBenchmarkReportV1Schema.parse(historicalShape)).toBeDefined();
     await releaseQwenDiagnosticArtifactsForAuthorizationV1(authorization);
   });
 

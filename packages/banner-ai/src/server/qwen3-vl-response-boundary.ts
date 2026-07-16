@@ -924,6 +924,21 @@ export const validateQwenProviderResponseBoundaryV1 = (input: {
       receivedRoot: parsedAssistant,
     });
   }
+  const numericOnlyObservationIndex = providerOutput.data.textObservations.findIndex(
+    (observation) => /^[0-9]+$/u.test(observation.observationId),
+  );
+  if (numericOnlyObservationIndex !== -1) {
+    throw syntheticFailure({
+      reason: 'schema-invalid',
+      usage,
+      stage: 'ocr-observation-schema',
+      path: ['textObservations', numericOnlyObservationIndex, 'observationId'],
+      validatorIssueCode: 'invalid-format',
+      classification: 'format-constraint',
+      expectedType: 'string',
+      receivedType: 'string',
+    });
+  }
   try {
     const proposal = materializeValidatedProposal({
       request: input.request,

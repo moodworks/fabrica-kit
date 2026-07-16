@@ -836,9 +836,14 @@ const projectString = (
       : 'invalid-sha';
   }
   if (mode === 'opaque-id') {
-    return /^[A-Za-z0-9][A-Za-z0-9_-]{7,63}$/u.test(value)
-      ? `obs-${sha256Hex(Buffer.from(value, 'utf8')).slice(0, 24)}`
-      : `invalid id ${sha256Hex(Buffer.from(value, 'utf8')).slice(0, 16)}`;
+    const digest = sha256Hex(Buffer.from(value, 'utf8'));
+    const baseFormatIsValid = /^[A-Za-z0-9][A-Za-z0-9_-]{7,63}$/u.test(value);
+    if (baseFormatIsValid && /^[0-9]+$/u.test(value)) {
+      return [...digest.slice(0, 32)]
+        .map((hexCharacter) => String(Number.parseInt(hexCharacter, 16) % 10))
+        .join('');
+    }
+    return baseFormatIsValid ? `obs-${digest.slice(0, 24)}` : `invalid id ${digest.slice(0, 16)}`;
   }
   if (mode === 'part-key') {
     const digest = sha256Hex(Buffer.from(value, 'utf8'));

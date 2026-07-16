@@ -3,6 +3,8 @@ import { z } from 'zod';
 import {
   QWEN3_VL_CHAT_COMPLETIONS_ENDPOINT,
   QWEN3_VL_ENDPOINT_METHOD,
+  QWEN3_VL_PROVIDER_PROTOCOL_WRAPPER_V2,
+  QWEN3_VL_MAX_OUTPUT_TOKENS,
   QWEN3_VL_REQUESTED_MODEL_ID,
   type QwenProviderUsageV1,
 } from '../evaluation/qwen3-vl-candidate-evidence.js';
@@ -76,6 +78,8 @@ const assertFakeRequestBoundary = (request: QwenTransportRequest): void => {
     body.n !== 1 ||
     body.temperature !== 0 ||
     body.seed !== 0 ||
+    body.max_tokens !== QWEN3_VL_MAX_OUTPUT_TOKENS ||
+    JSON.stringify(body.response_format) !== JSON.stringify({ type: 'json_object' }) ||
     !Array.isArray(body.tools) ||
     body.tools.length !== 0
   ) {
@@ -89,7 +93,7 @@ const assertFakeRequestBoundary = (request: QwenTransportRequest): void => {
     .parse(messages[1]?.content);
   const imageUrl = z.record(z.string(), z.unknown()).parse(userContent[0]?.image_url).url;
   if (
-    !systemContent.includes('JSON') ||
+    systemContent !== QWEN3_VL_PROVIDER_PROTOCOL_WRAPPER_V2.content ||
     typeof imageUrl !== 'string' ||
     !imageUrl.startsWith('data:image/png;base64,') ||
     /^https?:/u.test(imageUrl)

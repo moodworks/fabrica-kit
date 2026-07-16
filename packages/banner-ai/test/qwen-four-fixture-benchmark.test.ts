@@ -15,8 +15,14 @@ import {
   QWEN3_VL_OFFICIAL_EVIDENCE_RETRIEVED_DATE,
   QWEN3_VL_PRICING_EVIDENCE_SHA256,
   QWEN3_VL_PROVIDER_KEY,
+  QWEN3_VL_PROVIDER_PROTOCOL_WRAPPER_V1_SHA256,
+  QWEN3_VL_PROVIDER_PROTOCOL_WRAPPER_V2,
+  QWEN3_VL_PROVIDER_PROTOCOL_WRAPPER_V2_REQUIRED_CONSTRAINTS,
+  QWEN3_VL_PROVIDER_PROTOCOL_WRAPPER_V2_SHA256,
   QWEN3_VL_REQUESTED_MODEL_ID,
   QWEN3_VL_REQUEST_SHAPE_SHA256,
+  QWEN3_VL_REQUEST_SHAPE_V1_SHA256,
+  QWEN3_VL_REQUEST_SHAPE_V2,
   QWEN3_VL_SECRET_REFERENCE_NAME,
   QWEN3_VL_SERVER_WORKSPACE_ID,
   QWEN_FOUR_FIXTURE_BENCHMARK_CAPS_SHA256,
@@ -30,7 +36,11 @@ import {
   createDeterministicOracleMatchingQwenOutputV1,
 } from '../src/evaluation/qwen-four-fixture-quality.js';
 import { createDeterministicQwenTransport } from '../src/server/qwen3-vl-deterministic-fake-transport.js';
-import { QWEN_FOUR_FIXTURE_ORDERED_MODEL_INPUT_DIGESTS_SHA256 } from '../src/server/qwen-four-fixture-request-catalog.js';
+import { canonicalizeJson, sha256Hex } from '../src/scene/canonical-scene-json.js';
+import {
+  QWEN_FOUR_FIXTURE_ACTIVE_MODEL_INPUT_DIGESTS_SHA256,
+  QWEN_FOUR_FIXTURE_ORDERED_MODEL_INPUT_DIGESTS_SHA256,
+} from '../src/server/qwen-four-fixture-request-catalog.js';
 import {
   createQwenDryRunExecutionAuthorization,
   preflightQwenLiveExecutionAuthorization,
@@ -84,7 +94,7 @@ const runDryBenchmark = async () => {
 const liveAuthorizationPacket = () => {
   const serverWorkspaceId = QWEN3_VL_SERVER_WORKSPACE_ID;
   return {
-    authorizationVersion: 1 as const,
+    authorizationVersion: 2 as const,
     authorizationId: 'qwen.live.execution.authorization.2026-07-15',
     mode: 'live-provider' as const,
     purpose: 'one-capped-four-fixture-sequential-zero-retry-benchmark' as const,
@@ -101,11 +111,12 @@ const liveAuthorizationPacket = () => {
     humanOracleCorpusSha256: QWEN_FOUR_FIXTURE_HUMAN_ORACLE_CORPUS_SHA256,
     pricingEvidenceSha256: QWEN3_VL_PRICING_EVIDENCE_SHA256,
     pricingEvidenceRetrievedDate: QWEN3_VL_OFFICIAL_EVIDENCE_RETRIEVED_DATE,
+    providerProtocolWrapperSha256: QWEN3_VL_PROVIDER_PROTOCOL_WRAPPER_V2_SHA256,
     requestShapeSha256: QWEN3_VL_REQUEST_SHAPE_SHA256,
     benchmarkCapsSha256: QWEN_FOUR_FIXTURE_BENCHMARK_CAPS_SHA256,
     contentPolicyDefinitionSha256: BANNER_AI_MODEL_DISPATCH_CONTENT_POLICY_V1_DEFINITION_SHA256,
     workflowDefinitionSha256: INITIAL_BANNER_ANALYZE_WORKFLOW_REF_V1.definitionSha256,
-    orderedModelInputDigestsSha256: QWEN_FOUR_FIXTURE_ORDERED_MODEL_INPUT_DIGESTS_SHA256,
+    orderedModelInputDigestsSha256: QWEN_FOUR_FIXTURE_ACTIVE_MODEL_INPUT_DIGESTS_SHA256,
     executionAuthorized: true as const,
   };
 };
@@ -118,6 +129,7 @@ describe('Qwen four-fixture benchmark runner', () => {
 
     expect(first.transport.getCallCount()).toBe(4);
     expect(first.report).toMatchObject({
+      reportVersion: 2,
       mode: 'deterministic-fake',
       providerNetworkUsed: false,
       providerCallCount: 4,
@@ -129,6 +141,9 @@ describe('Qwen four-fixture benchmark runner', () => {
         indeterminateAttemptCount: 0,
       },
       requestedModelId: 'qwen3.6-flash-2026-04-16',
+      providerProtocolWrapperSha256: QWEN3_VL_PROVIDER_PROTOCOL_WRAPPER_V2_SHA256,
+      requestShapeSha256: QWEN3_VL_REQUEST_SHAPE_SHA256,
+      orderedModelInputDigestsSha256: QWEN_FOUR_FIXTURE_ACTIVE_MODEL_INPUT_DIGESTS_SHA256,
       endpoint:
         'https://ws-vy71dtw49uzef5hz.eu-central-1.maas.aliyuncs.com/compatible-mode/v1/chat/completions',
       stoppedEarly: false,
@@ -149,6 +164,22 @@ describe('Qwen four-fixture benchmark runner', () => {
     expect(
       first.report.fixtureResults.every((result) => result.accountingStatus === 'complete'),
     ).toBe(true);
+    const correctedPersonOutput = createDeterministicOracleMatchingQwenOutputV1('banner-person-v1');
+    expect(correctedPersonOutput.composition.kind).toBe('composition_proposal');
+    if (correctedPersonOutput.composition.kind !== 'composition_proposal') {
+      throw new TypeError('Expected the deterministic person composition proposal.');
+    }
+    expect(correctedPersonOutput.composition.parts).toHaveLength(5);
+    expect(correctedPersonOutput.layerEvidence).toHaveLength(5);
+    expect(correctedPersonOutput.layerEvidence.map((evidence) => evidence.partKey)).toEqual(
+      correctedPersonOutput.composition.parts.map((part) => part.partKey),
+    );
+    const personResult = first.report.fixtureResults[0]!;
+    expect(personResult.quality).not.toBeNull();
+    expect(personResult.quality).toMatchObject({
+      layerQuality: { actualLayerCount: 5, pass: true },
+      pass: true,
+    });
     expect(serializeQwenFourFixtureBenchmarkReport(first.report)).toBe(
       serializeQwenFourFixtureBenchmarkReport(second.report),
     );
@@ -386,6 +417,7 @@ describe('Qwen four-fixture benchmark runner', () => {
       { pendingCorpusCoreSha256: 'f'.repeat(64) },
       { humanOracleCorpusSha256: 'f'.repeat(64) },
       { pricingEvidenceSha256: 'f'.repeat(64) },
+      { providerProtocolWrapperSha256: 'f'.repeat(64) },
       { requestShapeSha256: 'f'.repeat(64) },
       { benchmarkCapsSha256: 'f'.repeat(64) },
       { contentPolicyDefinitionSha256: 'f'.repeat(64) },
@@ -395,6 +427,55 @@ describe('Qwen four-fixture benchmark runner', () => {
       expect(() =>
         preflightQwenLiveExecutionAuthorization({
           packet: { ...liveAuthorizationPacket(), ...mutation },
+          secretPresent: true,
+          nowMs: fixedNowMs,
+        }),
+      ).toThrow();
+    }
+  });
+
+  it('fails every stale V1 authorization binding closed during preflight', () => {
+    for (const mutation of [
+      { authorizationVersion: 1 },
+      { providerProtocolWrapperSha256: QWEN3_VL_PROVIDER_PROTOCOL_WRAPPER_V1_SHA256 },
+      { requestShapeSha256: QWEN3_VL_REQUEST_SHAPE_V1_SHA256 },
+      { orderedModelInputDigestsSha256: QWEN_FOUR_FIXTURE_ORDERED_MODEL_INPUT_DIGESTS_SHA256 },
+    ]) {
+      expect(() =>
+        preflightQwenLiveExecutionAuthorization({
+          packet: { ...liveAuthorizationPacket(), ...mutation },
+          secretPresent: true,
+          nowMs: fixedNowMs,
+        }),
+      ).toThrow();
+    }
+  });
+
+  it('binds every required wrapper constraint into both active wrapper and request-shape hashes', () => {
+    for (const constraint of QWEN3_VL_PROVIDER_PROTOCOL_WRAPPER_V2_REQUIRED_CONSTRAINTS) {
+      expect(QWEN3_VL_PROVIDER_PROTOCOL_WRAPPER_V2.content).toContain(constraint);
+      const mutatedWrapperContent = QWEN3_VL_PROVIDER_PROTOCOL_WRAPPER_V2.content.replace(
+        constraint,
+        `${constraint} mutated`,
+      );
+      const mutatedWrapperSha256 = sha256Hex(Buffer.from(mutatedWrapperContent, 'utf8'));
+      const mutatedRequestShapeSha256 = sha256Hex(
+        Buffer.from(
+          canonicalizeJson({
+            ...QWEN3_VL_REQUEST_SHAPE_V2,
+            providerProtocolWrapperSha256: mutatedWrapperSha256,
+          }),
+          'utf8',
+        ),
+      );
+      expect(mutatedWrapperSha256).not.toBe(QWEN3_VL_PROVIDER_PROTOCOL_WRAPPER_V2_SHA256);
+      expect(mutatedRequestShapeSha256).not.toBe(QWEN3_VL_REQUEST_SHAPE_SHA256);
+      expect(() =>
+        preflightQwenLiveExecutionAuthorization({
+          packet: {
+            ...liveAuthorizationPacket(),
+            requestShapeSha256: mutatedRequestShapeSha256,
+          },
           secretPresent: true,
           nowMs: fixedNowMs,
         }),

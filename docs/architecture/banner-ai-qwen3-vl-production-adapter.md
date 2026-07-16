@@ -100,6 +100,47 @@ absent, `null`, or the empty string; `refusal`, `function_call`, and `audio` may
 `null`; `tool_calls` may be absent, `null`, or empty. Populated metadata and every other message
 key are rejected, and no metadata is merged into scene JSON or granted instruction authority.
 
+### Provider-free scene-output contract revision 2
+
+The unchanged `SCENE_ANALYSIS_PROMPT_V1` remains pinned to
+`5cc311b7b353e06c61bcdf840b40dff9d35de0aea12851ffa18a654177917227`. The historical provider
+protocol wrapper/request revision 1 remains recorded but is non-authoritative:
+
+- wrapper V1 SHA-256: `339186794127e07e8be27959c07400e04e4b14f528d56da259613ce8942d2ab5`;
+- request-shape V1 SHA-256: `06963aab79297adf81adb33f1c3c97b070ab5f30feb7ce6982d4e751afdf1fbf`;
+- reconstructed historical V1 provider-binding SHA-256:
+  `d6b0957ca617139b382b0585570ecf27c5a00a050a45c2b729c2f251bf7bd252`. This is a derived
+  wrapper/request/neutral-aggregate evidence binding, not a field that existed in the old
+  authorization packet.
+
+Current request construction and authorization use wrapper/request revision 2. The V2 wrapper
+explicitly constrains observation IDs, invalid ID categories, unique IDs, 3–5 composition parts,
+meaningful grouping with no sixth part, exact one-to-one ordered complete layer evidence, required
+fields, unknown-field rejection, untrusted image/OCR/user-content handling with no override
+authority, and a pre-emission JSON-only self-check. Exact active evidence is:
+
+- wrapper V2 SHA-256: `87497d39a04ca12210500179b8e6705f03788d06a20bec8bf7cd6de29f6c6025`;
+- request-shape V2 SHA-256: `6a540409b86a7b7e7c677ddc5fb5bd3d9bab7ee35758a1da3679ade49af8fb27`;
+- provider-specific ordered model-input aggregate V2 SHA-256:
+  `1f2f53250b1032e12676041439e40f06532d8a69fb68d2cd00f5e388eaac5e2c`.
+
+The four individual provider-neutral canonical model-input digests and their neutral V1 aggregate
+`4dc9f1265bf0494784026836f42506f0b8f42e045862376318e905b437629041` are unchanged.
+Authorization, benchmark reports, request construction, and the deterministic fake transport
+require the V2 wrapper/request/aggregate binding exactly; stale V1 authorization fails closed
+before dispatch.
+
+Historical benchmark report schema V1 remains a strict parser for preserved reports. It has no
+provider-wrapper field and requires the historical V1 request digest plus the unchanged neutral
+model-input aggregate. Current benchmark execution and serialization use strict report schema V2,
+with `reportVersion: 2` and required wrapper V2, request-shape V2, and provider-specific aggregate
+V2 bindings. Neither report revision grants provider-success or production-admission authority.
+
+The accepted diagnostic response remains historical non-admission evidence: its envelope/model/
+usage/assistant metadata/JSON syntax passed, while scene validation failed for five invalid
+`observationId` values, six composition parts, and six `layerEvidence` entries. It did not become
+a provider or quality success and no local diagnostic artifact is rewritten by this revision.
+
 Provider dispatch sits behind an injectable server-only transport. The native `fetch` transport is
 the sole network implementation and is never imported by the package root or anywhere under
 `apps/web/src`. An opaque, fresh, server-minted execution capability must match mode,

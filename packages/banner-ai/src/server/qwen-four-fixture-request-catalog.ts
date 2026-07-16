@@ -7,8 +7,12 @@ import {
 } from '../evaluation/ai-contracts.js';
 import {
   QWEN3_VL_FLASH_MODEL_CONTRACT_V1,
+  QWEN3_VL_PROVIDER_PROTOCOL_WRAPPER_V1_SHA256,
   QWEN_FOUR_FIXTURE_HUMAN_ORACLE_CORPUS_SHA256,
   QWEN_FOUR_FIXTURE_PENDING_CORPUS_CORE_SHA256,
+  QWEN3_VL_PROVIDER_PROTOCOL_WRAPPER_V2_SHA256,
+  QWEN3_VL_REQUEST_SHAPE_V1_SHA256,
+  QWEN3_VL_REQUEST_SHAPE_V2_SHA256,
 } from '../evaluation/qwen3-vl-candidate-evidence.js';
 import {
   QwenBenchmarkFixtureIdSchema,
@@ -91,6 +95,50 @@ export const QWEN_FOUR_FIXTURE_ORDERED_MODEL_INPUT_DIGESTS_SHA256 = sha256Hex(
     'utf8',
   ),
 );
+
+export const QWEN_FOUR_FIXTURE_ORDERED_MODEL_INPUT_DIGESTS_V1_SHA256 =
+  '4dc9f1265bf0494784026836f42506f0b8f42e045862376318e905b437629041' as const;
+if (
+  QWEN_FOUR_FIXTURE_ORDERED_MODEL_INPUT_DIGESTS_SHA256 !==
+  QWEN_FOUR_FIXTURE_ORDERED_MODEL_INPUT_DIGESTS_V1_SHA256
+) {
+  throw new TypeError('Historical provider-neutral Qwen model-input aggregate drifted.');
+}
+
+const reconstructedHistoricalV1BindingSha256 = sha256Hex(
+  Buffer.from(
+    canonicalizeJson({
+      bindingVersion: 1,
+      orderedModelInputDigestsSha256: QWEN_FOUR_FIXTURE_ORDERED_MODEL_INPUT_DIGESTS_SHA256,
+      providerProtocolWrapperSha256: QWEN3_VL_PROVIDER_PROTOCOL_WRAPPER_V1_SHA256,
+      requestShapeSha256: QWEN3_VL_REQUEST_SHAPE_V1_SHA256,
+    }),
+    'utf8',
+  ),
+);
+export const QWEN_FOUR_FIXTURE_HISTORICAL_V1_BINDING_SHA256 =
+  'd6b0957ca617139b382b0585570ecf27c5a00a050a45c2b729c2f251bf7bd252' as const;
+if (reconstructedHistoricalV1BindingSha256 !== QWEN_FOUR_FIXTURE_HISTORICAL_V1_BINDING_SHA256) {
+  throw new TypeError('Reconstructed historical Qwen V1 provider binding drifted.');
+}
+
+export const QWEN_FOUR_FIXTURE_ORDERED_MODEL_INPUT_DIGESTS_V2_SHA256 = sha256Hex(
+  Buffer.from(
+    canonicalizeJson({
+      aggregateVersion: 2,
+      fixtureOrder: catalogEntries.map((entry) => entry.fixtureId),
+      fullCanonicalModelInputDigests: QWEN_FOUR_FIXTURE_ORDERED_MODEL_INPUT_DIGESTS_V1,
+      pendingCorpusCoreSha256: QWEN_FOUR_FIXTURE_PENDING_CORPUS_CORE_SHA256,
+      humanOracleCorpusSha256: QWEN_FOUR_FIXTURE_HUMAN_ORACLE_CORPUS_SHA256,
+      providerProtocolWrapperSha256: QWEN3_VL_PROVIDER_PROTOCOL_WRAPPER_V2_SHA256,
+      requestShapeSha256: QWEN3_VL_REQUEST_SHAPE_V2_SHA256,
+    }),
+    'utf8',
+  ),
+);
+
+export const QWEN_FOUR_FIXTURE_ACTIVE_MODEL_INPUT_DIGESTS_SHA256 =
+  QWEN_FOUR_FIXTURE_ORDERED_MODEL_INPUT_DIGESTS_V2_SHA256;
 
 export const createCanonicalQwenBenchmarkRequestV1 = (
   fixtureIdInput: unknown,
