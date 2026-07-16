@@ -80,6 +80,7 @@ const QwenSanitizedIssueClassificationV1Schema = z.enum([
   'range-constraint',
   'size-constraint',
   'unknown-field',
+  'message-metadata',
   'json-syntax',
   'identity-mismatch',
 ]);
@@ -287,6 +288,23 @@ const issueClassification = (
   received: unknown,
 ): z.infer<typeof QwenSanitizedIssueClassificationV1Schema> => {
   if (input.code === 'unrecognized_keys') return 'unknown-field';
+  const path = input.path ?? [];
+  const messageMetadata = new Set([
+    'reasoning_content',
+    'refusal',
+    'tool_calls',
+    'function_call',
+    'audio',
+  ]);
+  if (
+    path.length === 4 &&
+    path[0] === 'choices' &&
+    path[2] === 'message' &&
+    typeof path[3] === 'string' &&
+    messageMetadata.has(path[3])
+  ) {
+    return 'message-metadata';
+  }
   if (input.code === 'invalid_value') {
     return (input.values?.length ?? 0) === 1 ? 'literal-mismatch' : 'enum-mismatch';
   }
@@ -472,7 +490,15 @@ const stageForEnvelopeIssues = (issues: readonly ZodIssueLike[]): QwenValidation
       (issue) =>
         issue.path?.[0] === 'choices' &&
         issue.path?.[2] === 'message' &&
-        (issue.path?.[3] === 'role' || issue.path?.[3] === 'content'),
+        [
+          'role',
+          'content',
+          'reasoning_content',
+          'refusal',
+          'tool_calls',
+          'function_call',
+          'audio',
+        ].includes(String(issue.path?.[3])),
     )
   ) {
     return 'assistant-role-content';
@@ -578,10 +604,11 @@ export const QwenSuccessEnvelopeSchema = z
               .strictObject({
                 role: z.literal('assistant'),
                 content: z.string().min(1).max(2_000_000),
+                reasoning_content: z.union([z.literal(''), z.null()]).optional(),
                 refusal: z.null().optional(),
                 audio: z.null().optional(),
                 function_call: z.null().optional(),
-                tool_calls: z.null().optional(),
+                tool_calls: z.union([z.tuple([]).readonly(), z.null()]).optional(),
               })
               .readonly(),
             finish_reason: z

@@ -770,10 +770,14 @@ const providerEnvelopeNode = objectNode({
       message: objectNode({
         role: enumString(['assistant']),
         content: { kind: 'assistant-json', schema: sceneOutputNode, maximumLength: 2_000_000 },
+        reasoning_content: leaf(['string', 'null'], {
+          stringMode: 'enum',
+          allowedStrings: [''],
+        }),
         refusal: nullLeaf,
         audio: nullLeaf,
         function_call: nullLeaf,
-        tool_calls: nullLeaf,
+        tool_calls: arrayNode(objectNode({}), 0),
       }),
       finish_reason: leaf(['string', 'null'], {
         stringMode: 'enum',

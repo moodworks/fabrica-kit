@@ -93,6 +93,13 @@ model-produced OCR provenance, and human-review-only disposition against the tru
 response bodies, image data, prompt text, secrets, authorization headers, and execution
 authorization do not enter reports or logs.
 
+Assistant-message metadata is a closed envelope-only boundary: `role` must be `assistant` and
+`content` must be nonempty scene JSON; only `role`, `content`, `reasoning_content`, `refusal`,
+`tool_calls`, `function_call`, and `audio` are recognized message keys. `reasoning_content` may be
+absent, `null`, or the empty string; `refusal`, `function_call`, and `audio` may be absent or
+`null`; `tool_calls` may be absent, `null`, or empty. Populated metadata and every other message
+key are rejected, and no metadata is merged into scene JSON or granted instruction authority.
+
 Provider dispatch sits behind an injectable server-only transport. The native `fetch` transport is
 the sole network implementation and is never imported by the package root or anywhere under
 `apps/web/src`. An opaque, fresh, server-minted execution capability must match mode,

@@ -421,6 +421,344 @@ describe('Qwen response diagnostics and offline replay', () => {
     expect(diagnosticText).not.toMatch(/"message"\s*:|base64|Bearer|DASHSCOPE/iu);
   });
 
+  it.each([
+    { key: 'reasoning_content', value: '' },
+    { key: 'reasoning_content', value: null },
+    { key: 'refusal', value: null },
+    { key: 'tool_calls', value: [] },
+    { key: 'tool_calls', value: null },
+    { key: 'function_call', value: null },
+    { key: 'audio', value: null },
+  ] as const)('accepts inert assistant message metadata: $key', ({ key, value }) => {
+    const envelope = structuredClone(validEnvelope());
+    const message = (envelope.choices as Record<string, unknown>[])[0]!.message as Record<
+      string,
+      unknown
+    >;
+    message[key] = value;
+    expect(boundaryFailureOrNull(responseFor(envelope))).toBeNull();
+  });
+
+  it('accepts an assistant message containing exactly role and content', () => {
+    const envelope = structuredClone(validEnvelope());
+    const message = (envelope.choices as Record<string, unknown>[])[0]!.message as Record<
+      string,
+      unknown
+    >;
+    delete message.reasoning_content;
+    delete message.refusal;
+    delete message.tool_calls;
+    delete message.function_call;
+    delete message.audio;
+    const result = validateQwenProviderResponseBoundaryV1({
+      response: responseFor(envelope),
+      request: personRequest(),
+    });
+    expect(result.proposal).toMatchObject({ decisionAuthority: 'proposal-requires-user-review' });
+    expect(Object.keys(result.envelope.choices[0]!.message)).toEqual(['role', 'content']);
+    expect(result.proposal).not.toHaveProperty('reasoning_content');
+    expect(result.proposal).not.toHaveProperty('refusal');
+    expect(result.proposal).not.toHaveProperty('tool_calls');
+    expect(result.proposal).not.toHaveProperty('function_call');
+    expect(result.proposal).not.toHaveProperty('audio');
+  });
+
+  it('keeps permitted inert metadata envelope-only and still validates scene content strictly', () => {
+    const envelope = structuredClone(validEnvelope());
+    const message = (envelope.choices as Record<string, unknown>[])[0]!.message as Record<
+      string,
+      unknown
+    >;
+    message.reasoning_content = '';
+    message.refusal = null;
+    message.tool_calls = [];
+    message.function_call = null;
+    message.audio = null;
+    const accepted = validateQwenProviderResponseBoundaryV1({
+      response: responseFor(envelope),
+      request: personRequest(),
+    });
+    expect(accepted.proposal).toMatchObject({ decisionAuthority: 'proposal-requires-user-review' });
+    for (const key of ['reasoning_content', 'refusal', 'tool_calls', 'function_call', 'audio']) {
+      expect(accepted.proposal).not.toHaveProperty(key);
+    }
+
+    const malformed = structuredClone(envelope);
+    (malformed.choices as Record<string, unknown>[])[0]!.message = {
+      ...message,
+      content: '{',
+    };
+    expect(captureBoundaryFailure(responseFor(malformed)).diagnostic).toMatchObject({
+      stage: 'assistant-json-syntax',
+    });
+
+    const invalidScene = structuredClone(envelope);
+    mutateAssistantOutput(invalidScene, (output) => {
+      output.outputVersion = 2;
+    });
+    expect(captureBoundaryFailure(responseFor(invalidScene)).diagnostic).toMatchObject({
+      stage: 'scene-top-level-schema',
+    });
+  });
+
+  it('rejects metadata-shaped scene properties as strict scene unknown fields', () => {
+    const envelope = structuredClone(validEnvelope());
+    mutateAssistantOutput(envelope, (output) => {
+      output.reasoning_content = 'scene-property-not-envelope-metadata';
+    });
+    const failure = captureBoundaryFailure(responseFor(envelope));
+    expect(failure.diagnostic).toMatchObject({ stage: 'unknown-field-rejection' });
+    expect(failure.diagnostic.issues).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          path: '',
+          classification: 'unknown-field',
+          validatorIssueCode: 'unknown-fields',
+        }),
+      ]),
+    );
+    expect(JSON.stringify(failure.diagnostic)).not.toContain(
+      'scene-property-not-envelope-metadata',
+    );
+  });
+
+  it('classifies active metadata before malformed assistant content', () => {
+    const envelope = structuredClone(validEnvelope());
+    const message = (envelope.choices as Record<string, unknown>[])[0]!.message as Record<
+      string,
+      unknown
+    >;
+    message.tool_calls = [{ id: 'raw-active-call' }];
+    message.content = '{';
+    const failure = captureBoundaryFailure(responseFor(envelope));
+    expect(failure.diagnostic).toMatchObject({ stage: 'assistant-role-content' });
+    expect(failure.diagnostic.issues).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          path: '/choices/0/message/tool_calls',
+          classification: 'message-metadata',
+        }),
+      ]),
+    );
+    expect(failure.diagnostic.stage).not.toBe('assistant-json-syntax');
+    expect(JSON.stringify(failure.diagnostic)).not.toMatch(/raw-active-call/iu);
+  });
+
+  it.each([
+    { key: 'reasoning_content', value: 'hidden reasoning' },
+    { key: 'refusal', value: 'refused' },
+    { key: 'tool_calls', value: [{ id: 'call-1' }] },
+    { key: 'function_call', value: {} },
+    { key: 'audio', value: {} },
+  ] as const)(
+    'rejects active assistant metadata as a documented category: $key',
+    ({ key, value }) => {
+      const envelope = structuredClone(validEnvelope());
+      const message = (envelope.choices as Record<string, unknown>[])[0]!.message as Record<
+        string,
+        unknown
+      >;
+      message[key] = value;
+      const failure = captureBoundaryFailure(responseFor(envelope));
+      expect(failure.diagnostic.stage).toBe('assistant-role-content');
+      expect(failure.diagnostic.issues).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            path: `/choices/0/message/${key}`,
+            classification: 'message-metadata',
+          }),
+        ]),
+      );
+      expect(JSON.stringify(failure.diagnostic)).not.toContain('hidden reasoning');
+    },
+  );
+
+  it('keeps arbitrary assistant message keys distinct from documented metadata rejection', () => {
+    const envelope = structuredClone(validEnvelope());
+    const message = (envelope.choices as Record<string, unknown>[])[0]!.message as Record<
+      string,
+      unknown
+    >;
+    message.unapproved_message_key = 'discard-this-value';
+    const failure = captureBoundaryFailure(responseFor(envelope));
+    expect(failure.diagnostic.stage).toBe('unknown-field-rejection');
+    expect(failure.diagnostic.issues).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          path: '/choices/0/message',
+          classification: 'unknown-field',
+          validatorIssueCode: 'unknown-fields',
+          actualUnknownFieldNameCount: 1,
+          retainedUnknownFieldNameCount: 1,
+          truncatedUnknownFieldNameCount: 0,
+        }),
+      ]),
+    );
+    expect(JSON.stringify(failure.diagnostic)).not.toContain('unapproved_message_key');
+  });
+
+  it('replays arbitrary assistant message unknown-field evidence unchanged', async () => {
+    const envelope = structuredClone(validEnvelope());
+    const message = (envelope.choices as Record<string, unknown>[])[0]!.message as Record<
+      string,
+      unknown
+    >;
+    message.unapproved_message_key = 'raw-unknown-message-value';
+    const response = responseFor(envelope);
+    const failure = captureBoundaryFailure(response);
+    const paths = diagnosticPaths('metadata-replay-unknown-0001');
+    const reservations = await reserveQwenDiagnosticArtifactFilesV1(paths);
+    await captureSanitizedQwenResponseV1({
+      reservations,
+      capturedAtMs: fixedNowMs,
+      fixtureId: 'banner-person-v1',
+      response,
+      failure,
+    });
+    const replay = await replaySanitizedQwenResponseV1({
+      responseFile: paths.responseArtifactRelativePath,
+    });
+    expect(replay).toMatchObject({
+      providerCallCount: 0,
+      networkUsed: false,
+      replayReproduced: true,
+      validationStatus: 'replay-rejected',
+      failureReason: 'schema-invalid',
+      diagnostic: {
+        stage: failure.diagnostic.stage,
+        issueDigestSha256: failure.diagnostic.issueDigestSha256,
+      },
+    });
+    await abortQwenDiagnosticArtifactReservationsV1(reservations);
+  });
+
+  it('replays inert and rejected message metadata without provider access', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch');
+    const cases = [
+      { token: 'metadata-replay-exact-0001', key: null, value: null, rejected: false },
+      {
+        token: 'metadata-replay-reasoning-0001',
+        key: 'reasoning_content',
+        value: '',
+        rejected: false,
+      },
+      {
+        token: 'metadata-replay-reasoning-null-0001',
+        key: 'reasoning_content',
+        value: null,
+        rejected: false,
+      },
+      { token: 'metadata-replay-refusal-0001', key: 'refusal', value: null, rejected: false },
+      { token: 'metadata-replay-tools-empty-0001', key: 'tool_calls', value: [], rejected: false },
+      { token: 'metadata-replay-tools-null-0001', key: 'tool_calls', value: null, rejected: false },
+      {
+        token: 'metadata-replay-function-null-0001',
+        key: 'function_call',
+        value: null,
+        rejected: false,
+      },
+      { token: 'metadata-replay-audio-null-0001', key: 'audio', value: null, rejected: false },
+      {
+        token: 'metadata-replay-reasoning-active-0001',
+        key: 'reasoning_content',
+        value: 'raw reasoning',
+        rejected: true,
+      },
+      {
+        token: 'metadata-replay-refusal-active-0001',
+        key: 'refusal',
+        value: 'raw refusal',
+        rejected: true,
+      },
+      {
+        token: 'metadata-replay-tools-active-0001',
+        key: 'tool_calls',
+        value: [{ id: 'raw tool call' }],
+        rejected: true,
+      },
+      {
+        token: 'metadata-replay-function-active-0001',
+        key: 'function_call',
+        value: { name: 'raw function' },
+        rejected: true,
+      },
+      {
+        token: 'metadata-replay-audio-active-0001',
+        key: 'audio',
+        value: { data: 'raw audio' },
+        rejected: true,
+      },
+    ] as const;
+    for (const testCase of cases) {
+      const envelope = structuredClone(validEnvelope());
+      const message = (envelope.choices as Record<string, unknown>[])[0]!.message as Record<
+        string,
+        unknown
+      >;
+      if (testCase.key === null) {
+        delete message.reasoning_content;
+        delete message.refusal;
+        delete message.tool_calls;
+        delete message.function_call;
+        delete message.audio;
+      } else {
+        message[testCase.key] = testCase.value;
+      }
+      const response = responseFor(envelope);
+      const failure = boundaryFailureOrNull(response);
+      expect(Boolean(failure)).toBe(testCase.rejected);
+      const paths = diagnosticPaths(testCase.token);
+      const reservations = await reserveQwenDiagnosticArtifactFilesV1(paths);
+      await captureSanitizedQwenResponseV1({
+        reservations,
+        capturedAtMs: fixedNowMs,
+        fixtureId: 'banner-person-v1',
+        response,
+        failure,
+      });
+      const artifactText = await readFile(
+        join(repositoryRoot, paths.responseArtifactRelativePath),
+        'utf8',
+      );
+      if (testCase.rejected) {
+        for (const rawMetadataString of [
+          'raw reasoning',
+          'raw refusal',
+          'raw tool call',
+          'raw function',
+          'raw audio',
+        ]) {
+          expect(artifactText).not.toContain(rawMetadataString);
+        }
+      }
+      const replay = await replaySanitizedQwenResponseV1({
+        responseFile: paths.responseArtifactRelativePath,
+      });
+      expect(replay).toMatchObject({
+        providerCallCount: 0,
+        networkUsed: false,
+        replayReproduced: true,
+        productionAdmissionAuthority: false,
+      });
+      expect(replay.providerCallCount).toBe(0);
+      if (failure === null) {
+        expect(replay.validationStatus).toBe('replay-valid');
+        expect(replay.diagnostic).toBeNull();
+      } else {
+        expect(replay).toMatchObject({
+          validationStatus: 'replay-rejected',
+          failureReason: failure.reason,
+          diagnostic: {
+            stage: failure.diagnostic.stage,
+            issueDigestSha256: failure.diagnostic.issueDigestSha256,
+          },
+        });
+      }
+      await abortQwenDiagnosticArtifactReservationsV1(reservations);
+    }
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
   it('sorts multiple issues and unknown names into one stable digest', () => {
     const create = (reverse: boolean) => {
       const envelope = structuredClone(validEnvelope());
