@@ -2,22 +2,31 @@ import { z } from 'zod';
 
 import {
   QWEN3_VL_CHAT_COMPLETIONS_ENDPOINT,
+  QWEN3_VL_HISTORICAL_FRANKFURT_CHAT_COMPLETIONS_ENDPOINT,
   QWEN3_VL_OFFICIAL_EVIDENCE_RETRIEVED_DATE,
   QWEN3_VL_PRICING_EVIDENCE_SHA256,
+  QWEN3_VL_PRICING_EVIDENCE_V2_SHA256,
+  QWEN3_VL_PRICING_EVIDENCE_V1_SHA256,
+  QWEN3_VL_PROVIDER_IDENTITY_V2_SHA256,
   QWEN3_VL_PROVIDER_KEY,
   QWEN3_VL_REQUESTED_MODEL_ID,
   QWEN3_VL_PROVIDER_PROTOCOL_WRAPPER_V2_SHA256,
   QWEN3_VL_REQUEST_SHAPE_V1_SHA256,
   QWEN3_VL_REQUEST_SHAPE_V2_SHA256,
+  QWEN3_VL_REQUEST_SHAPE_V3_SHA256,
   QWEN_FOUR_FIXTURE_BENCHMARK_CAPS_SHA256,
   QWEN_FOUR_FIXTURE_BENCHMARK_CAPS_V1,
   QWEN_FOUR_FIXTURE_HUMAN_ORACLE_CORPUS_SHA256,
   QWEN_FOUR_FIXTURE_PENDING_CORPUS_CORE_SHA256,
   QWEN_SINGLE_FIXTURE_DIAGNOSTIC_CAPS_V2,
   QWEN_SINGLE_FIXTURE_DIAGNOSTIC_CAPS_V2_SHA256,
+  QWEN_SINGLE_FIXTURE_DIAGNOSTIC_CAPS_V3,
+  QWEN_SINGLE_FIXTURE_DIAGNOSTIC_CAPS_V3_SHA256,
   QwenCalculatedListCostV1Schema,
+  QwenCalculatedListCostV2Schema,
   QwenProviderUsageV1Schema,
   calculateQwen3VlListCostMicros,
+  calculateQwen3VlHistoricalListCostMicros,
 } from '../evaluation/qwen3-vl-candidate-evidence.js';
 import {
   QwenBenchmarkFixtureIdSchema,
@@ -43,6 +52,7 @@ import {
   QWEN_FOUR_FIXTURE_CANONICAL_REQUEST_CATALOG_V1,
   QWEN_FOUR_FIXTURE_ACTIVE_MODEL_INPUT_DIGESTS_SHA256,
   QWEN_FOUR_FIXTURE_ORDERED_MODEL_INPUT_DIGESTS_SHA256,
+  QWEN_FOUR_FIXTURE_ORDERED_MODEL_INPUT_DIGESTS_V2_SHA256,
   createCanonicalQwenBenchmarkRequestV1,
 } from './qwen-four-fixture-request-catalog.js';
 import {
@@ -63,6 +73,8 @@ import {
 
 export const QWEN_FOUR_FIXTURE_REPORT_PATH =
   '.local-data/banner-ai/qwen3-vl-four-fixture-benchmark.json' as const;
+export const QWEN_SINGAPORE_V4_REPORT_PATH =
+  '.local-data/banner-ai/qwen3-vl-four-fixture-benchmark-singapore-v4.json' as const;
 
 export const QwenBenchmarkClassifiedFailureReasonSchema = z.enum([
   'authorization-missing',
@@ -170,7 +182,7 @@ const QwenFixtureBenchmarkResultV1Schema = z
         result.usage !== null &&
         result.calculatedListCost !== null &&
         canonicalizeJson(result.calculatedListCost) ===
-          canonicalizeJson(calculateQwen3VlListCostMicros(result.usage)));
+          canonicalizeJson(calculateQwen3VlHistoricalListCostMicros(result.usage)));
     const statusIsConsistent =
       (result.status === 'pass' &&
         result.classifiedFailureReason === 'none' &&
@@ -186,6 +198,70 @@ const QwenFixtureBenchmarkResultV1Schema = z
         message:
           'Qwen fixture result accounting, status, or failure classification is inconsistent.',
       });
+    }
+  })
+  .readonly();
+
+export const QwenFixtureBenchmarkResultV2Schema = z
+  .strictObject({
+    fixtureId: QwenBenchmarkFixtureIdSchema,
+    normalizedSourceSha256: Sha256HexSchema,
+    oracleSha256: Sha256HexSchema,
+    providerCallCount: z.union([z.literal(0), z.literal(1)]),
+    retryCount: z.literal(0),
+    accountingStatus: z.enum(['not-dispatched', 'indeterminate', 'complete']),
+    latencyMs: z.int().min(0).max(600_000).nullable(),
+    fixtureWallTimeMs: z.int().min(0).max(1_200_000),
+    usage: QwenProviderUsageV1Schema.nullable(),
+    calculatedListCost: QwenCalculatedListCostV2Schema.nullable(),
+    quality: QwenFixtureQualitySummaryV1Schema.nullable(),
+    diagnostic: QwenValidationDiagnosticV1Schema.nullable().optional(),
+    diagnosticArtifact: QwenDiagnosticArtifactMetadataV1Schema.optional(),
+    diagnosticReplayStatus: z.enum(['reproduced', 'mismatch']).optional(),
+    status: z.enum(['pass', 'fail']),
+    classifiedFailureReason: QwenBenchmarkClassifiedFailureReasonSchema,
+  })
+  .superRefine((result, context) => {
+    const complete = result.accountingStatus === 'complete';
+    const accountingShapeIsConsistent =
+      (result.accountingStatus === 'not-dispatched' &&
+        result.providerCallCount === 0 &&
+        result.latencyMs === null &&
+        result.usage === null &&
+        result.calculatedListCost === null) ||
+      (result.accountingStatus === 'indeterminate' &&
+        result.providerCallCount === 1 &&
+        result.latencyMs !== null &&
+        result.usage === null &&
+        result.calculatedListCost === null) ||
+      (result.accountingStatus === 'complete' &&
+        result.providerCallCount === 1 &&
+        result.latencyMs !== null &&
+        result.usage !== null &&
+        result.calculatedListCost !== null);
+    const accountingIsConsistent =
+      (!complete && result.calculatedListCost === null) ||
+      (complete &&
+        result.usage !== null &&
+        result.calculatedListCost !== null &&
+        canonicalizeJson(result.calculatedListCost) ===
+          canonicalizeJson(calculateQwen3VlListCostMicros(result.usage)));
+    const statusIsConsistent =
+      (result.status === 'pass' &&
+        result.classifiedFailureReason === 'none' &&
+        result.quality?.pass === true &&
+        complete) ||
+      (result.status === 'fail' && result.classifiedFailureReason !== 'none');
+    const diagnosticIsConsistent =
+      (result.diagnosticArtifact === undefined && result.diagnosticReplayStatus === undefined) ||
+      (result.diagnosticArtifact !== undefined && result.diagnosticReplayStatus !== undefined);
+    if (
+      !accountingShapeIsConsistent ||
+      !accountingIsConsistent ||
+      !statusIsConsistent ||
+      !diagnosticIsConsistent
+    ) {
+      context.addIssue({ code: 'custom', message: 'Qwen active fixture accounting drifted.' });
     }
   })
   .readonly();
@@ -268,37 +344,85 @@ const qwenFourFixtureBenchmarkReportCommonShape = {
   diagnosticReportRelativePath: QwenDiagnosticReportRelativePathV1Schema.optional(),
 } as const;
 
+const qwenFourFixtureHistoricalReportCommonShape = {
+  ...qwenFourFixtureBenchmarkReportCommonShape,
+  endpoint: z.literal(QWEN3_VL_HISTORICAL_FRANKFURT_CHAT_COMPLETIONS_ENDPOINT).nullable(),
+  officialEvidenceRetrievedDate: z.literal('2026-07-15'),
+  pricingEvidenceSha256: z.literal(QWEN3_VL_PRICING_EVIDENCE_V1_SHA256),
+} as const;
+
+const qwenFourFixtureActiveReportCommonShape = {
+  ...qwenFourFixtureBenchmarkReportCommonShape,
+  endpoint: z.literal(QWEN3_VL_CHAT_COMPLETIONS_ENDPOINT),
+  fixtureResults: z.array(QwenFixtureBenchmarkResultV2Schema).max(4).readonly(),
+} as const;
+
 const QwenFourFixtureBenchmarkReportV1CoreSchema = z.strictObject({
   reportVersion: z.literal(1),
-  ...qwenFourFixtureBenchmarkReportCommonShape,
+  ...qwenFourFixtureHistoricalReportCommonShape,
   requestShapeSha256: z.literal(QWEN3_VL_REQUEST_SHAPE_V1_SHA256),
   orderedModelInputDigestsSha256: z.literal(QWEN_FOUR_FIXTURE_ORDERED_MODEL_INPUT_DIGESTS_SHA256),
 });
 
 const QwenFourFixtureBenchmarkReportV2CoreSchema = z.strictObject({
   reportVersion: z.literal(2),
-  ...qwenFourFixtureBenchmarkReportCommonShape,
+  ...qwenFourFixtureHistoricalReportCommonShape,
   providerProtocolWrapperSha256: z.literal(QWEN3_VL_PROVIDER_PROTOCOL_WRAPPER_V2_SHA256),
   requestShapeSha256: z.literal(QWEN3_VL_REQUEST_SHAPE_V2_SHA256),
-  orderedModelInputDigestsSha256: z.literal(QWEN_FOUR_FIXTURE_ACTIVE_MODEL_INPUT_DIGESTS_SHA256),
+  orderedModelInputDigestsSha256: z.literal(
+    QWEN_FOUR_FIXTURE_ORDERED_MODEL_INPUT_DIGESTS_V2_SHA256,
+  ),
 });
 
 const QwenFourFixtureBenchmarkReportV3CoreSchema = z.strictObject({
   reportVersion: z.literal(3),
-  ...qwenFourFixtureBenchmarkReportCommonShape,
+  ...qwenFourFixtureHistoricalReportCommonShape,
   providerProtocolWrapperSha256: z.literal(QWEN3_VL_PROVIDER_PROTOCOL_WRAPPER_V2_SHA256),
   requestShapeSha256: z.literal(QWEN3_VL_REQUEST_SHAPE_V2_SHA256),
-  orderedModelInputDigestsSha256: z.literal(QWEN_FOUR_FIXTURE_ACTIVE_MODEL_INPUT_DIGESTS_SHA256),
+  orderedModelInputDigestsSha256: z.literal(
+    QWEN_FOUR_FIXTURE_ORDERED_MODEL_INPUT_DIGESTS_V2_SHA256,
+  ),
   diagnosticOneFixtureMode: z.literal(true),
   diagnosticReportRelativePath: QwenDiagnosticReportRelativePathV1Schema,
   diagnosticCapsSha256: z.literal(QWEN_SINGLE_FIXTURE_DIAGNOSTIC_CAPS_V2_SHA256),
   diagnosticCaps: QwenDiagnosticCapsV2Schema,
 });
 
+const QwenFourFixtureBenchmarkReportV4CoreSchema = z.strictObject({
+  reportVersion: z.literal(4),
+  ...qwenFourFixtureActiveReportCommonShape,
+  authorizationVersion: z.literal(4),
+  gitSha: z.string().regex(/^[0-9a-f]{40}$/u),
+  manualReleaseSha256: z.string().regex(/^[0-9a-f]{64}$/u),
+  pricingEvidenceSha256: z.literal(QWEN3_VL_PRICING_EVIDENCE_V2_SHA256),
+  providerIdentitySha256: z.literal(QWEN3_VL_PROVIDER_IDENTITY_V2_SHA256),
+  providerProtocolWrapperSha256: z.literal(QWEN3_VL_PROVIDER_PROTOCOL_WRAPPER_V2_SHA256),
+  requestShapeSha256: z.literal(QWEN3_VL_REQUEST_SHAPE_V3_SHA256),
+  orderedModelInputDigestsSha256: z.literal(QWEN_FOUR_FIXTURE_ACTIVE_MODEL_INPUT_DIGESTS_SHA256),
+  diagnosticOneFixtureMode: z.literal(true).optional(),
+  diagnosticReportRelativePath: QwenDiagnosticReportRelativePathV1Schema.optional(),
+  diagnosticCapsSha256: z.literal(QWEN_SINGLE_FIXTURE_DIAGNOSTIC_CAPS_V3_SHA256).optional(),
+  diagnosticCaps: z
+    .strictObject({
+      diagnosticCapsVersion: z.literal(3),
+      mode: z.literal('single-fixture-response-capture'),
+      fixtureId: z.literal('banner-person-v1'),
+      providerCallsMaximum: z.literal(1),
+      retryCount: z.literal(0),
+      perCallTimeoutMs: z.literal(120_000),
+      totalWallTimeMs: z.literal(150_000),
+      totalCalculatedListCostMaximumMicroUsd: z.literal('100000'),
+      productionAdmissionAuthority: z.literal(false),
+      webRouteActivated: z.literal(false),
+    })
+    .optional(),
+});
+
 type QwenFourFixtureBenchmarkReportCore =
   | z.infer<typeof QwenFourFixtureBenchmarkReportV1CoreSchema>
   | z.infer<typeof QwenFourFixtureBenchmarkReportV2CoreSchema>
-  | z.infer<typeof QwenFourFixtureBenchmarkReportV3CoreSchema>;
+  | z.infer<typeof QwenFourFixtureBenchmarkReportV3CoreSchema>
+  | z.infer<typeof QwenFourFixtureBenchmarkReportV4CoreSchema>;
 
 const refineQwenFourFixtureBenchmarkReport = (
   report: QwenFourFixtureBenchmarkReportCore,
@@ -328,13 +452,30 @@ const refineQwenFourFixtureBenchmarkReport = (
         report.diagnosticCapsSha256 === QWEN_SINGLE_FIXTURE_DIAGNOSTIC_CAPS_V2_SHA256 &&
         canonicalizeJson(report.diagnosticCaps) ===
           canonicalizeJson(QWEN_SINGLE_FIXTURE_DIAGNOSTIC_CAPS_V2)
-      : 'diagnosticOneFixtureMode' in report
-        ? report.mode === 'live-provider' &&
-          report.fixtureResults.length === 1 &&
-          report.providerCallCount <= 1 &&
-          report.overallPass === false &&
-          report.diagnosticReportRelativePath !== undefined
-        : !('diagnosticReportRelativePath' in report);
+      : report.reportVersion === 4
+        ? report.mode === 'deterministic-fake'
+          ? report.providerNetworkUsed === false &&
+            report.diagnosticOneFixtureMode === undefined &&
+            report.diagnosticReportRelativePath === undefined &&
+            report.diagnosticCapsSha256 === undefined &&
+            report.diagnosticCaps === undefined
+          : report.diagnosticOneFixtureMode === true &&
+            report.mode === 'live-provider' &&
+            report.fixtureResults.length === 1 &&
+            report.providerCallCount <= 1 &&
+            report.retryCount === 0 &&
+            report.overallPass === false &&
+            report.diagnosticReportRelativePath !== undefined &&
+            report.diagnosticCapsSha256 === QWEN_SINGLE_FIXTURE_DIAGNOSTIC_CAPS_V3_SHA256 &&
+            canonicalizeJson(report.diagnosticCaps) ===
+              canonicalizeJson(QWEN_SINGLE_FIXTURE_DIAGNOSTIC_CAPS_V3)
+        : 'diagnosticOneFixtureMode' in report
+          ? report.mode === 'live-provider' &&
+            report.fixtureResults.length === 1 &&
+            report.providerCallCount <= 1 &&
+            report.overallPass === false &&
+            report.diagnosticReportRelativePath !== undefined
+          : !('diagnosticReportRelativePath' in report);
   if (
     report.providerCallCount !==
       report.fixtureResults.reduce((total, fixture) => total + fixture.providerCallCount, 0) ||
@@ -376,6 +517,10 @@ export const QwenFourFixtureBenchmarkReportV3Schema =
   QwenFourFixtureBenchmarkReportV3CoreSchema.superRefine(
     refineQwenFourFixtureBenchmarkReport,
   ).readonly();
+export const QwenFourFixtureBenchmarkReportV4Schema =
+  QwenFourFixtureBenchmarkReportV4CoreSchema.superRefine(
+    refineQwenFourFixtureBenchmarkReport,
+  ).readonly();
 
 export type QwenFourFixtureBenchmarkReportV1 = z.infer<
   typeof QwenFourFixtureBenchmarkReportV1Schema
@@ -385,6 +530,9 @@ export type QwenFourFixtureBenchmarkReportV2 = z.infer<
 >;
 export type QwenFourFixtureBenchmarkReportV3 = z.infer<
   typeof QwenFourFixtureBenchmarkReportV3Schema
+>;
+export type QwenFourFixtureBenchmarkReportV4 = z.infer<
+  typeof QwenFourFixtureBenchmarkReportV4Schema
 >;
 
 const defaultClock: QwenAdapterClockPort = Object.freeze({
@@ -484,7 +632,8 @@ const deadlineFailureReason = (remaining: {
 
 export const serializeQwenFourFixtureBenchmarkReport = (report: unknown): string =>
   `${canonicalizeJson(
-    QwenFourFixtureBenchmarkReportV3Schema.or(QwenFourFixtureBenchmarkReportV2Schema)
+    QwenFourFixtureBenchmarkReportV4Schema.or(QwenFourFixtureBenchmarkReportV3Schema)
+      .or(QwenFourFixtureBenchmarkReportV2Schema)
       .or(QwenFourFixtureBenchmarkReportV1Schema)
       .parse(report),
   )}\n`;
@@ -506,26 +655,30 @@ export const replayQwenDiagnosticArtifactStatusV1 = async (
 export const runQwenFourFixtureBenchmark = async (input: {
   readonly mode: 'deterministic-fake' | 'live-provider';
   readonly transport: QwenTransportPort;
-  readonly authorization?: QwenBenchmarkExecutionAuthorization;
+  readonly authorization: QwenBenchmarkExecutionAuthorization;
   readonly secret: string | null;
   readonly cancellation: CancellationSignalPort;
   readonly clock?: QwenAdapterClockPort;
-}): Promise<QwenFourFixtureBenchmarkReportV2 | QwenFourFixtureBenchmarkReportV3> => {
+}): Promise<
+  | QwenFourFixtureBenchmarkReportV2
+  | QwenFourFixtureBenchmarkReportV3
+  | QwenFourFixtureBenchmarkReportV4
+> => {
   const clock = input.clock ?? defaultClock;
   const benchmarkStartedAt = clock.nowMonotonicMs();
-  const diagnosticCapture = input.authorization?.diagnosticCapture ?? null;
+  const diagnosticCapture = input.authorization.diagnosticCapture ?? null;
   const diagnosticMode = diagnosticCapture !== null;
   const activeProviderCallsMaximum = diagnosticMode
-    ? QWEN_SINGLE_FIXTURE_DIAGNOSTIC_CAPS_V2.providerCallsMaximum
+    ? QWEN_SINGLE_FIXTURE_DIAGNOSTIC_CAPS_V3.providerCallsMaximum
     : QWEN_FOUR_FIXTURE_BENCHMARK_CAPS_V1.providerCallsMaximum;
   const activePerCallTimeoutMs = diagnosticMode
-    ? QWEN_SINGLE_FIXTURE_DIAGNOSTIC_CAPS_V2.perCallTimeoutMs
+    ? QWEN_SINGLE_FIXTURE_DIAGNOSTIC_CAPS_V3.perCallTimeoutMs
     : QWEN_FOUR_FIXTURE_BENCHMARK_CAPS_V1.perCallTimeoutMs;
   const activeTotalWallTimeMs = diagnosticMode
-    ? QWEN_SINGLE_FIXTURE_DIAGNOSTIC_CAPS_V2.totalWallTimeMs
+    ? QWEN_SINGLE_FIXTURE_DIAGNOSTIC_CAPS_V3.totalWallTimeMs
     : QWEN_FOUR_FIXTURE_BENCHMARK_CAPS_V1.totalWallTimeMs;
   const activeCostCeilingMicros = diagnosticMode
-    ? QWEN_SINGLE_FIXTURE_DIAGNOSTIC_CAPS_V2.totalCalculatedListCostMaximumMicroUsd
+    ? QWEN_SINGLE_FIXTURE_DIAGNOSTIC_CAPS_V3.totalCalculatedListCostMaximumMicroUsd
     : QWEN_FOUR_FIXTURE_BENCHMARK_CAPS_V1.totalCalculatedListCostMaximumMicroUsd;
   if (
     (input.mode === 'live-provider' && input.transport.transportKind !== 'native-fetch') ||
@@ -570,7 +723,7 @@ export const runQwenFourFixtureBenchmark = async (input: {
     },
   });
   const adapter = createQwen3VlSceneAnalysisAdapter({ transport: boundedTransport, clock });
-  const fixtureResults: QwenFourFixtureBenchmarkReportV2['fixtureResults'][number][] = [];
+  const fixtureResults: z.infer<typeof QwenFixtureBenchmarkResultV2Schema>[] = [];
   let successfulRunCount = 0;
   let knownCalculatedListCostMicros = 0n;
   let indeterminateAttemptCount = 0;
@@ -609,7 +762,7 @@ export const runQwenFourFixtureBenchmark = async (input: {
           ? undefined
           : await replayQwenDiagnosticArtifactStatusV1(inputFailure.diagnosticArtifact);
       fixtureResults.push(
-        QwenFixtureBenchmarkResultV1Schema.parse({
+        QwenFixtureBenchmarkResultV2Schema.parse({
           fixtureId: binding.fixtureId,
           normalizedSourceSha256: binding.normalizedSource.sha256,
           oracleSha256: binding.oracleSha256,
@@ -775,7 +928,7 @@ export const runQwenFourFixtureBenchmark = async (input: {
           ? undefined
           : await replayQwenDiagnosticArtifactStatusV1(result.diagnosticArtifact);
       fixtureResults.push(
-        QwenFixtureBenchmarkResultV1Schema.parse({
+        QwenFixtureBenchmarkResultV2Schema.parse({
           fixtureId: binding.fixtureId,
           normalizedSourceSha256: binding.normalizedSource.sha256,
           oracleSha256: binding.oracleSha256,
@@ -830,17 +983,21 @@ export const runQwenFourFixtureBenchmark = async (input: {
     fixtureResults.length === QWEN_FOUR_FIXTURE_BENCHMARK_CAPS_V1.fixtureCount &&
     fixtureResults.every((result) => result.status === 'pass');
   const reportInput = {
-    reportVersion: diagnosticMode ? 3 : 2,
+    reportVersion: 4,
+    authorizationVersion: input.authorization.authorizationVersion,
+    gitSha: input.authorization.gitSha,
+    manualReleaseSha256: input.authorization.manualReleaseSha256,
     reportKind: 'qwen-four-fixture-scene-analysis-benchmark',
     mode: input.mode,
     providerNetworkUsed: input.mode === 'live-provider' && providerCallCount > 0,
     providerKey: QWEN3_VL_PROVIDER_KEY,
     requestedModelId: QWEN3_VL_REQUESTED_MODEL_ID,
-    endpoint: input.authorization?.endpoint ?? null,
+    endpoint: input.authorization.endpoint,
     officialEvidenceRetrievedDate: QWEN3_VL_OFFICIAL_EVIDENCE_RETRIEVED_DATE,
-    pricingEvidenceSha256: QWEN3_VL_PRICING_EVIDENCE_SHA256,
+    pricingEvidenceSha256: QWEN3_VL_PRICING_EVIDENCE_V2_SHA256,
+    providerIdentitySha256: QWEN3_VL_PROVIDER_IDENTITY_V2_SHA256,
     providerProtocolWrapperSha256: QWEN3_VL_PROVIDER_PROTOCOL_WRAPPER_V2_SHA256,
-    requestShapeSha256: QWEN3_VL_REQUEST_SHAPE_V2_SHA256,
+    requestShapeSha256: QWEN3_VL_REQUEST_SHAPE_V3_SHA256,
     pendingCorpusCoreSha256: QWEN_FOUR_FIXTURE_PENDING_CORPUS_CORE_SHA256,
     humanOracleCorpusSha256: QWEN_FOUR_FIXTURE_HUMAN_ORACLE_CORPUS_SHA256,
     orderedModelInputDigestsSha256: QWEN_FOUR_FIXTURE_ACTIVE_MODEL_INPUT_DIGESTS_SHA256,
@@ -870,11 +1027,11 @@ export const runQwenFourFixtureBenchmark = async (input: {
       : {
           diagnosticOneFixtureMode: true,
           diagnosticReportRelativePath: diagnosticCapture.diagnosticReportRelativePath,
-          diagnosticCapsSha256: QWEN_SINGLE_FIXTURE_DIAGNOSTIC_CAPS_V2_SHA256,
-          diagnosticCaps: QWEN_SINGLE_FIXTURE_DIAGNOSTIC_CAPS_V2,
+          diagnosticCapsSha256: QWEN_SINGLE_FIXTURE_DIAGNOSTIC_CAPS_V3_SHA256,
+          diagnosticCaps: QWEN_SINGLE_FIXTURE_DIAGNOSTIC_CAPS_V3,
         }),
   };
   return diagnosticMode
-    ? QwenFourFixtureBenchmarkReportV3Schema.parse(reportInput)
-    : QwenFourFixtureBenchmarkReportV2Schema.parse(reportInput);
+    ? QwenFourFixtureBenchmarkReportV4Schema.parse(reportInput)
+    : QwenFourFixtureBenchmarkReportV4Schema.parse(reportInput);
 };

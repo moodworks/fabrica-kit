@@ -2,32 +2,39 @@
 
 Status: implemented, server-only, inactive by default, and not live-benchmark authorized.
 
-Qwen3.6 Flash is the first cost candidate because the pinned Global-scope Frankfurt snapshot
-combines visual input, OCR, JSON mode, and non-thinking operation with low documented list rates.
+Qwen3.6 Flash is the first cost candidate because the pinned Singapore International snapshot
+combines visual input, OCR, JSON mode, and non-thinking operation with documented list rates.
 The exact candidate is `qwen3.6-flash-2026-04-16`; the documented `qwen3.6-flash` alias is currently
 equivalent to that snapshot but is not accepted by Fabrica's identity boundary. The snapshot is
-available to the configured Germany/Frankfurt workspace and is not listed in Alibaba's current
+available to the configured Singapore workspace and is not listed in Alibaba's current
 deprecation schedule. Alibaba's snapshot policy promises notice at least 30 days before sunset.
 
 ## Official evidence
 
-The following official documentation was retrieved on 2026-07-15:
+The following official documentation was retrieved at `2026-07-16T18:29:37Z` and expires fail-closed
+at `2026-08-16T00:00:00.000Z`:
 
-- [Frankfurt workspace base URL](https://www.alibabacloud.com/help/en/model-studio/base-url)
+- [Workspace-dedicated base URL](https://www.alibabacloud.com/help/en/model-studio/base-url)
+- [Regions](https://www.alibabacloud.com/help/en/model-studio/regions/)
+- [API keys](https://www.alibabacloud.com/help/en/model-studio/get-api-key)
 - [OpenAI-compatible Chat request, response, Base64 image, tool, search, thinking, seed, and usage fields](https://www.alibabacloud.com/help/en/model-studio/qwen-api-via-openai-chat-completions)
 - [Qwen3.6 Flash visual model catalog, availability, modalities, context, and structured-output support](https://www.alibabacloud.com/help/en/model-studio/vision-model)
 - [JSON-object mode and supported Qwen3.6 Flash family](https://www.alibabacloud.com/help/en/model-studio/qwen-structured-output)
 - [Automatic context-cache behavior, usage accounting, and hit pricing](https://www.alibabacloud.com/help/en/model-studio/context-cache)
-- [Global-scope Frankfurt model pricing](https://www.alibabacloud.com/help/en/model-studio/model-pricing)
+- [Singapore International model pricing](https://www.alibabacloud.com/help/en/model-studio/model-pricing)
+- [New-user free quota](https://www.alibabacloud.com/help/en/model-studio/new-free-quota)
 - [Snapshot availability](https://www.alibabacloud.com/help/en/model-studio/newly-released-models)
 - [Model deprecation schedule](https://www.alibabacloud.com/help/en/model-studio/model-depreciation)
 
-The only endpoint is derived server-side from a validated server workspace ID:
+The active endpoint is derived server-side from the pinned Singapore workspace ID:
 
 ```text
-workspace ws-vy71dtw49uzef5hz
-POST https://ws-vy71dtw49uzef5hz.eu-central-1.maas.aliyuncs.com/compatible-mode/v1/chat/completions
+workspace ws-4ei01ync8iyumgp4
+POST https://ws-4ei01ync8iyumgp4.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1/chat/completions
 ```
+
+Frankfurt workspace `ws-vy71dtw49uzef5hz` and its endpoint remain versioned historical evidence;
+they are parseable but rejected by minting, preflight, native transport, and fake transport.
 
 The endpoint is still computed from the validated server workspace ID, and both values must equal
 those exact pins. A foreign workspace is rejected even when paired with its correctly derived
@@ -45,11 +52,11 @@ token boundaries.
 
 | Input-token tier            | Standard input USD / million | Cached-hit input USD / million | Output USD / million |
 | --------------------------- | ---------------------------: | -----------------------------: | -------------------: |
-| 0 < input ≤ 256,000         |                       $0.165 |                         $0.033 |                $0.99 |
-| 256,000 < input ≤ 1,000,000 |                        $0.66 |                         $0.132 |               $3.961 |
+| 0 < input ≤ 256,000         |                       $0.250 |                         $0.050 |                $1.50 |
+| 256,000 < input ≤ 1,000,000 |                        $1.00 |                         $0.200 |                $4.00 |
 
 Alibaba's documented Chat response reports tokens, not a monetary charge. Its implicit context
-cache is automatic for documented Qwen3.6 Flash requests in Frankfurt. Hit tokens are
+cache is automatic for documented Qwen3.6 Flash requests in Singapore. Hit tokens are
 reported in `prompt_tokens_details.cached_tokens` and cost 20% of the selected tier's standard
 input rate. Fabrica therefore retains exact provider usage, prices uncached prompt tokens at 100%,
 cached prompt tokens at 20%, and output tokens at the selected output rate with integer micro-USD
@@ -57,12 +64,18 @@ arithmetic. The combined rational is rounded up once to a whole micro-USD. Cache
 exceed prompt tokens. This request sends no explicit `cache_control`, so nonzero explicit-cache
 creation counts are rejected as foreign rather than guessed into the bill. The standalone official
 price calculator covers both published tiers through 1,000,000 input tokens. The fixed benchmark
-response envelope retains its narrower 256,000 prompt-token safety ceiling, so the established
-pre-dispatch reservation and 500,000 micro-USD benchmark cap remain unchanged.
+response envelope retains its narrower 256,000 prompt-token safety ceiling. The active diagnostic
+cap is one call, zero retries, 120,000ms per call, 150,000ms total, and 100,000 micro-USD; the
+exact uncached worst case at 256,000 + 4,096 tokens is `64,000 + 6,144 = 70,144` micro-USD.
+The four-fixture cap remains 500,000 micro-USD (`4 × 70,144 = 280,576`). The 1,000,000-token
+new-user quota is valid for 90 days after activation, Singapore International real-time inference,
+and shared at Alibaba-account/RAM level; list-cost accounting remains independent of quota use.
 
-Evidence is fail-closed after 2026-08-15T00:00:00Z. The new snapshot has no announced sunset in the
-current schedule; a later live benchmark must nevertheless refresh and independently review the
-dated availability, lifecycle, API, and pricing evidence.
+The exact snapshot has no announced sunset in the current schedule, while the moving
+`qwen3.6-flash` alias is scheduled for 2026-10-10; aliases remain rejected. Snapshot sunset notice
+is at least 30 days. The new evidence is fail-closed after 2026-08-16T00:00:00Z; a later live
+benchmark must nevertheless refresh and independently review the dated availability, lifecycle,
+API, and pricing evidence.
 
 ## Request and response boundary
 
@@ -87,7 +100,10 @@ documented prompt detail counts for audio, cache hits, text, image, and video, p
 `cache_creation` object (`ephemeral_5m_input_tokens`, `cache_creation_input_tokens`, and
 `cache_type: "ephemeral"`) and completion detail counts for audio, reasoning, and text. The
 documented audio and reasoning nulls are preserved; cache, text, image, and video counts must be
-integers when present. Undocumented detail fields are rejected.
+integers when present. Provider response usage is bounded to 256,000 prompt tokens and 260,096 total
+tokens (256,000 plus the 4,096 output ceiling); 256,001 is rejected before accounting. The
+provider-free pricing calculator alone accepts the separately evidenced second tier through
+1,000,000 input tokens. Undocumented detail fields are rejected.
 The adapter then validates source identity, layer limits, OCR completion, composition,
 model-produced OCR provenance, and human-review-only disposition against the trusted request. Raw
 response bodies, image data, prompt text, secrets, authorization headers, and execution
@@ -113,11 +129,15 @@ protocol wrapper/request revision 1 remains recorded but is non-authoritative:
   wrapper/request/neutral-aggregate evidence binding, not a field that existed in the old
   authorization packet.
 
-Current request construction and authorization use wrapper/request revision 2. The V2 wrapper
+Historical Frankfurt request/authorization/report revisions V1, V2, and V3 remain strict,
+parseable, and non-admission. They retain Frankfurt, historical pricing, request V2, the
+historical aggregate, and the 50,000 micro-USD diagnostic cap. Active Singapore request
+construction uses revision 3 and authorization V4. The V2 wrapper
 explicitly constrains observation IDs, invalid ID categories, unique IDs, 3–5 composition parts,
 meaningful grouping with no sixth part, exact one-to-one ordered complete layer evidence, required
 fields, unknown-field rejection, untrusted image/OCR/user-content handling with no override
-authority, and a pre-emission JSON-only self-check. Exact active evidence is:
+authority, and a pre-emission JSON-only self-check. The wrapper remains active at V2; the
+following request and aggregate values are historical Frankfurt V2 bindings:
 
 - wrapper V2 SHA-256: `87497d39a04ca12210500179b8e6705f03788d06a20bec8bf7cd6de29f6c6025`;
 - request-shape V2 SHA-256: `6a540409b86a7b7e7c677ddc5fb5bd3d9bab7ee35758a1da3679ade49af8fb27`;
@@ -126,15 +146,32 @@ authority, and a pre-emission JSON-only self-check. Exact active evidence is:
 
 The four individual provider-neutral canonical model-input digests and their neutral V1 aggregate
 `4dc9f1265bf0494784026836f42506f0b8f42e045862376318e905b437629041` are unchanged.
-Authorization, benchmark reports, request construction, and the deterministic fake transport
-require the V2 wrapper/request/aggregate binding exactly; stale V1 authorization fails closed
-before dispatch.
+Historical authorization and reports require these V2 bindings exactly; stale V1 authorization
+fails closed before dispatch. Active Singapore dispatch uses wrapper V2 with request V3 and
+aggregate V3, plus identity/pricing V2.
+
+Active Singapore evidence is independently versioned: provider identity V2
+`46edd18a06371a25617a4dd8dd54e1c3d51c1d3616beb2a7ed5965ad8f1d961e`, pricing V2
+`09badc6f060ba9f30943c2f54f480f58ef9a884da50767cf6ba8072ab0fba56c`, request V3
+`6db92da8ad630244d1e45ee63d9fb64de97f57c03ebdd5b851952436549a3252`, and active
+provider aggregate V3
+`3f054e4b8ed25273bb71fed3416583b49619334aea67c1b9c34897fd3632e8f7`.
 
 Historical benchmark report schema V1 remains a strict parser for preserved reports. It has no
 provider-wrapper field and requires the historical V1 request digest plus the unchanged neutral
-model-input aggregate. Current benchmark execution and serialization use strict report schema V2,
-with `reportVersion: 2` and required wrapper V2, request-shape V2, and provider-specific aggregate
-V2 bindings. Neither report revision grants provider-success or production-admission authority.
+model-input aggregate. Historical report schemas V1/V2/V3 remain strict Frankfurt parsers.
+Current Singapore execution and serialization use strict report schema V4 with request V3,
+pricing/identity V2, and active aggregate V3 bindings. No report grants provider-success or
+production-admission authority. V4 requires the exact current Git SHA supplied at preflight and a
+fresh caller-supplied, self-digesting manual release bound to the Singapore provider identity;
+reports record the authorization version, Git SHA, and release digest. Deterministic-fake V4
+reports are four-fixture reports with no diagnostic fields and `providerNetworkUsed: false`;
+live-provider V4 reports require the one-fixture diagnostic fields, one-call/zero-retry shape,
+overall failure, and diagnostic cap V3. Live V4 minting is private to successful preflight; the
+exported mint helper cannot turn packet data directly into live authority.
+Freshness is bounded canonically: an active authorization may live for at most 600,000ms, a
+manual release for at most 900,000ms, and preflight accepts issuance no older than 60,000ms; issue
+times must not be in the future, and equality at expiry or the issuance-age boundary fails closed.
 
 The accepted diagnostic response remains historical non-admission evidence: its envelope/model/
 usage/assistant metadata/JSON syntax passed, while scene validation failed for five invalid
@@ -143,13 +180,17 @@ a provider or quality success and no local diagnostic artifact is rewritten by t
 
 Provider dispatch sits behind an injectable server-only transport. The native `fetch` transport is
 the sole network implementation and is never imported by the package root or anywhere under
-`apps/web/src`. An opaque, fresh, server-minted execution capability must match mode,
-workspace-derived endpoint, model, request shape, pricing, corpus, human oracle, benchmark caps,
-content-policy definition, workflow definition, and the ordered aggregate of all four full
-canonical model-input digests. A fixed request catalog requires the exact request ID, repository
-fixture path, export name, fixture identity, and full input for each position. A fixture is claimed
-before dispatch, so neither an identical nor alternate request can send it twice. Cancellation and
-timeout abort the transport signal; both are terminal and retries are zero.
+`apps/web/src`. Immediately before dispatch, the adapter mints a module-private, single-use
+capability in a `WeakMap`/`WeakSet`. It is bound to the opaque validated authorization, transport
+kind and mode, exact endpoint/method/body, timeout, abort signal, and boolean secret-presence policy;
+native and deterministic transports synchronously consume it, so copied, forged, mismatched, or
+reused request objects cannot dispatch. The authorization state also binds the workspace-derived
+endpoint, model, request shape, pricing, corpus, human oracle, benchmark caps, content-policy
+definition, workflow definition, and ordered aggregate of all four full canonical model-input
+digests. A fixed request catalog requires the exact request ID, repository fixture path, export
+name, fixture identity, and full input for each position. A fixture is claimed before dispatch, so
+neither an identical nor alternate request can send it twice. Cancellation and timeout abort the
+transport signal; both are terminal and retries are zero.
 
 ## Four-fixture runner
 
@@ -171,9 +212,13 @@ Immediately before each dispatch the runner recomputes the positive time remaini
 time caps and gives the adapter only their minimum. If any remaining budget is exhausted, it
 records a non-dispatched classified failure and sends nothing.
 
-The deterministic report is written to
-`.local-data/banner-ai/qwen3-vl-four-fixture-benchmark.json`. It records fixture identity, latency,
-exact token usage, calculated list cost, quality outcome, and classified failure reason. A failed
+The strict historical Frankfurt V1 report path
+`.local-data/banner-ai/qwen3-vl-four-fixture-benchmark.json` is preservation-only and is never used
+for active Singapore execution. The provider-free Singapore V4 dry run writes only
+`.local-data/banner-ai/qwen3-vl-four-fixture-benchmark-singapore-v4.json`; an active live fallback
+uses the same versioned path unless its caller-supplied diagnostic binding provides a unique report
+path. It records fixture identity, latency, exact token usage, calculated list cost, quality outcome,
+and classified failure reason. A failed
 attempt with a validated success envelope retains its latency, usage, and exact calculated cost in
 fixture and aggregate totals. A dispatched attempt whose usage cannot be validated is explicitly
 `indeterminate`; the report states the number of indeterminate attempts and the exact total of only
@@ -222,14 +267,14 @@ swap, mode drift, or unsafe parent therefore fails closed.
 
 Diagnostic caps are separately versioned from the unchanged four-fixture benchmark caps. Historical
 diagnostic V1 is parseable evidence only (60,000 ms call / 120,000 ms total), digest
-`6f0df176ddae07d69e244d5ff9cb696f92f4a53d0a8f8150909dbd8c11451fa0`; active diagnostic V2
+`6f0df176ddae07d69e244d5ff9cb696f92f4a53d0a8f8150909dbd8c11451fa0`; historical diagnostic V2
 requires its own canonical cap digest
 `4099960771c16079383d6f520633265c3113a5fd4b121154afeda5935314b81c` and exact 120,000 ms call / 150,000 ms total limits, one call,
-zero retries, and a 50,000 micro-USD ceiling. Its V3 authorization and report retain the four-fixture
-binding as historical context and bind the diagnostic digest separately; old V2 diagnostic packets
-cannot dispatch. Diagnostic deadlines use strict equality as timeout, abort the request, and leave
-missing usage indeterminate. The exact worst-case reservation is 256,000 prompt plus 4,096 completion
-tokens: `ceil(42240 + 4055.04) = 46296` micro-USD, below the exact 50,000 ceiling. The concise
+zero retries, and a 50,000 micro-USD ceiling. Active Singapore diagnostic V3 uses authorization
+V4 and report V4 with a 100,000 micro-USD ceiling; old V2/V3 diagnostic authority cannot dispatch.
+Diagnostic deadlines use strict equality as timeout, abort the request, and leave missing usage
+indeterminate. The historical Frankfurt proof remains `ceil(42240 + 4055.04) = 46296` micro-USD;
+the active Singapore proof is `ceil(64000 + 6144) = 70144` micro-USD. The concise
 non-authorizing timeout evidence is recorded below.
 
 ### c0004 historical evidence

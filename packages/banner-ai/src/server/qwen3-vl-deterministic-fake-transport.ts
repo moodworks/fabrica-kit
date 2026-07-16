@@ -14,6 +14,7 @@ import type {
   QwenTransportRequest,
   QwenTransportResponse,
 } from './qwen3-vl-scene-analysis-adapter.js';
+import { consumeQwenTransportDispatchCapability } from './qwen3-vl-scene-analysis-adapter.js';
 
 export type DeterministicQwenTransportStep =
   | {
@@ -215,6 +216,7 @@ export const createDeterministicQwenTransport = (
   return Object.freeze({
     transportKind: 'deterministic-fake' as const,
     async dispatch(request: QwenTransportRequest): Promise<QwenTransportResponse> {
+      consumeQwenTransportDispatchCapability(request, 'deterministic-fake');
       assertFakeRequestBoundary(request);
       const step = steps[callCount];
       callCount += 1;

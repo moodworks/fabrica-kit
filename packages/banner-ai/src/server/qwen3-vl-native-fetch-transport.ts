@@ -4,17 +4,18 @@ import {
   QWEN3_VL_CHAT_COMPLETIONS_ENDPOINT,
   QWEN3_VL_ENDPOINT_METHOD,
   QWEN3_VL_SECRET_REFERENCE_NAME,
-  QWEN_SINGLE_FIXTURE_DIAGNOSTIC_CAPS_V2,
+  QWEN_SINGLE_FIXTURE_DIAGNOSTIC_CAPS_V3,
 } from '../evaluation/qwen3-vl-candidate-evidence.js';
 import type {
   QwenTransportPort,
   QwenTransportRequest,
   QwenTransportResponse,
 } from './qwen3-vl-scene-analysis-adapter.js';
+import { consumeQwenTransportDispatchCapability } from './qwen3-vl-scene-analysis-adapter.js';
 
 const MAX_PROVIDER_RESPONSE_BYTES = 2_097_152;
 
-const assertPinnedFrankfurtEndpoint = (input: string): void => {
+const assertPinnedSingaporeEndpoint = (input: string): void => {
   const endpoint = new URL(input);
   if (
     input !== QWEN3_VL_CHAT_COMPLETIONS_ENDPOINT ||
@@ -22,14 +23,15 @@ const assertPinnedFrankfurtEndpoint = (input: string): void => {
     endpoint.username !== '' ||
     endpoint.password !== '' ||
     endpoint.port !== '' ||
-    !/^[a-z0-9](?:[a-z0-9-]{1,61}[a-z0-9])\.eu-central-1\.maas\.aliyuncs\.com$/u.test(
+    endpoint.hostname !== 'ws-4ei01ync8iyumgp4.ap-southeast-1.maas.aliyuncs.com' ||
+    !/^[a-z0-9](?:[a-z0-9-]{1,61}[a-z0-9])\.ap-southeast-1\.maas\.aliyuncs\.com$/u.test(
       endpoint.hostname,
     ) ||
     endpoint.pathname !== '/compatible-mode/v1/chat/completions' ||
     endpoint.search !== '' ||
     endpoint.hash !== ''
   ) {
-    throw new TypeError('Qwen transport endpoint is not the pinned Frankfurt workspace endpoint.');
+    throw new TypeError('Qwen transport endpoint is not the pinned Singapore workspace endpoint.');
   }
 };
 
@@ -79,7 +81,8 @@ export const createQwen3VlNativeFetchTransport = (input?: {
   return Object.freeze({
     transportKind: 'native-fetch' as const,
     async dispatch(request: QwenTransportRequest): Promise<QwenTransportResponse> {
-      assertPinnedFrankfurtEndpoint(request.endpoint);
+      consumeQwenTransportDispatchCapability(request, 'native-fetch');
+      assertPinnedSingaporeEndpoint(request.endpoint);
       if (request.method !== QWEN3_VL_ENDPOINT_METHOD) {
         throw new TypeError('Qwen transport method differs from the pinned request shape.');
       }
@@ -87,7 +90,7 @@ export const createQwen3VlNativeFetchTransport = (input?: {
       const timeoutMs = z
         .int()
         .min(1)
-        .max(QWEN_SINGLE_FIXTURE_DIAGNOSTIC_CAPS_V2.perCallTimeoutMs)
+        .max(QWEN_SINGLE_FIXTURE_DIAGNOSTIC_CAPS_V3.perCallTimeoutMs)
         .parse(request.timeoutMs);
       if (request.signal.aborted || timeoutMs < 1) {
         throw new DOMException('Qwen request was aborted.', 'AbortError');

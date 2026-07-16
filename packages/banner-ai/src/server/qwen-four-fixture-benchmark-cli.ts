@@ -14,7 +14,7 @@ import {
   type QwenAdapterClockPort,
 } from './qwen3-vl-scene-analysis-adapter.js';
 import {
-  QWEN_FOUR_FIXTURE_REPORT_PATH,
+  QWEN_SINGAPORE_V4_REPORT_PATH,
   runQwenFourFixtureBenchmark,
   serializeQwenFourFixtureBenchmarkReport,
 } from './qwen-four-fixture-benchmark.js';
@@ -53,7 +53,7 @@ const writeReport = async (input: {
 };
 
 const runDry = async (): Promise<void> => {
-  const fixedEpochMs = Date.parse('2026-07-15T12:00:00.000Z');
+  const fixedEpochMs = Date.parse('2026-07-16T19:00:00.000Z');
   let monotonicMs = 0;
   const clock: QwenAdapterClockPort = Object.freeze({
     nowEpochMs: () => fixedEpochMs,
@@ -69,7 +69,10 @@ const runDry = async (): Promise<void> => {
       output: createDeterministicOracleMatchingQwenOutputV1(fixtureId),
     })),
   );
-  const authorization = createQwenDryRunExecutionAuthorization({ nowMs: fixedEpochMs });
+  const authorization = createQwenDryRunExecutionAuthorization({
+    nowMs: fixedEpochMs,
+    currentGitSha: execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim(),
+  });
   const report = await runQwenFourFixtureBenchmark({
     mode: 'deterministic-fake',
     transport,
@@ -80,10 +83,10 @@ const runDry = async (): Promise<void> => {
   });
   await writeReport({
     report,
-    relativePath: QWEN_FOUR_FIXTURE_REPORT_PATH,
+    relativePath: QWEN_SINGAPORE_V4_REPORT_PATH,
     exclusive: false,
   });
-  process.stdout.write(`${QWEN_FOUR_FIXTURE_REPORT_PATH}\n`);
+  process.stdout.write(`${QWEN_SINGAPORE_V4_REPORT_PATH}\n`);
   if (!report.overallPass) process.exitCode = 1;
 };
 
@@ -119,6 +122,7 @@ const runLive = async (): Promise<void> => {
     packet,
     secretPresent: true,
     nowMs: Date.now(),
+    currentGitSha: execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim(),
   });
   const diagnosticEnabled = authorization.diagnosticCapture !== null;
   if (diagnosticEnabled) await reserveQwenDiagnosticArtifactsForAuthorizationV1(authorization);
@@ -134,7 +138,7 @@ const runLive = async (): Promise<void> => {
     });
     const reportPath =
       authorization.diagnosticCapture?.diagnosticReportRelativePath ??
-      QWEN_FOUR_FIXTURE_REPORT_PATH;
+      QWEN_SINGAPORE_V4_REPORT_PATH;
     if (diagnosticEnabled) {
       await finalizeQwenDiagnosticReportForAuthorizationV1({
         authorization,

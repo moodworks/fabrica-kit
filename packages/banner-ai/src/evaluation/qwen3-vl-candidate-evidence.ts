@@ -11,13 +11,23 @@ import { SCENE_ANALYSIS_PROMPT_V1 } from './prompt-catalog.js';
 
 export const QWEN3_VL_PROVIDER_KEY = 'alibaba-cloud-model-studio' as const;
 export const QWEN3_VL_REQUESTED_MODEL_ID = 'qwen3.6-flash-2026-04-16' as const;
-export const QWEN3_VL_SERVER_WORKSPACE_ID = 'ws-vy71dtw49uzef5hz' as const;
+/** Historical Frankfurt identity. It is retained for parsing only and is never active. */
+export const QWEN3_VL_HISTORICAL_FRANKFURT_WORKSPACE_ID = 'ws-vy71dtw49uzef5hz' as const;
+export const QWEN3_VL_HISTORICAL_FRANKFURT_ENDPOINT =
+  'https://ws-vy71dtw49uzef5hz.eu-central-1.maas.aliyuncs.com/compatible-mode/v1/chat/completions' as const;
+export const QWEN3_VL_SERVER_WORKSPACE_ID = 'ws-4ei01ync8iyumgp4' as const;
+export const QWEN3_VL_REGION = 'ap-southeast-1' as const;
+export const QWEN3_VL_HOST = 'ws-4ei01ync8iyumgp4.ap-southeast-1.maas.aliyuncs.com' as const;
 export const QWEN3_VL_API_FAMILY = 'openai-compatible-chat-completions' as const;
 export const QWEN3_VL_SECRET_REFERENCE_NAME = 'DASHSCOPE_API_KEY' as const;
 export const QWEN3_VL_ENDPOINT_METHOD = 'POST' as const;
 export const QWEN3_VL_MAX_OUTPUT_TOKENS = 4_096 as const;
-export const QWEN3_VL_OFFICIAL_EVIDENCE_RETRIEVED_DATE = '2026-07-15' as const;
-export const QWEN3_VL_OFFICIAL_EVIDENCE_FRESH_UNTIL_EXCLUSIVE = '2026-08-15T00:00:00.000Z' as const;
+export const QWEN3_VL_OFFICIAL_EVIDENCE_RETRIEVED_AT = '2026-07-16T18:29:37Z' as const;
+export const QWEN3_VL_OFFICIAL_EVIDENCE_RETRIEVED_DATE = '2026-07-16' as const;
+export const QWEN3_VL_OFFICIAL_EVIDENCE_FRESH_UNTIL_EXCLUSIVE = '2026-08-16T00:00:00.000Z' as const;
+export const QWEN3_VL_HISTORICAL_EVIDENCE_RETRIEVED_DATE = '2026-07-15' as const;
+export const QWEN3_VL_HISTORICAL_EVIDENCE_FRESH_UNTIL_EXCLUSIVE =
+  '2026-08-15T00:00:00.000Z' as const;
 
 export const QWEN3_VL_FLASH_MODEL_CONTRACT_V1 = AiModelContractV1Schema.parse({
   identity: {
@@ -34,7 +44,9 @@ export const QWEN3_VL_FLASH_MODEL_CONTRACT_V1 = AiModelContractV1Schema.parse({
 });
 
 export const QWEN3_VL_OFFICIAL_DOCUMENTATION = Object.freeze({
-  frankfurtBaseUrl: 'https://www.alibabacloud.com/help/en/model-studio/base-url',
+  baseUrl: 'https://www.alibabacloud.com/help/en/model-studio/base-url',
+  regions: 'https://www.alibabacloud.com/help/en/model-studio/regions/',
+  apiKey: 'https://www.alibabacloud.com/help/en/model-studio/get-api-key',
   chatCompletions:
     'https://www.alibabacloud.com/help/en/model-studio/qwen-api-via-openai-chat-completions',
   visualInput: 'https://www.alibabacloud.com/help/en/model-studio/vision',
@@ -44,6 +56,8 @@ export const QWEN3_VL_OFFICIAL_DOCUMENTATION = Object.freeze({
   pricing: 'https://www.alibabacloud.com/help/en/model-studio/model-pricing',
   releaseAvailability: 'https://www.alibabacloud.com/help/en/model-studio/newly-released-models',
   deprecation: 'https://www.alibabacloud.com/help/en/model-studio/model-depreciation',
+  newlyReleasedModels: 'https://www.alibabacloud.com/help/en/model-studio/newly-released-models',
+  freeQuota: 'https://www.alibabacloud.com/help/en/model-studio/new-free-quota',
   selfHostedVllm: 'https://qwen.readthedocs.io/en/stable/deployment/vllm.html',
 } as const);
 
@@ -59,15 +73,71 @@ export const deriveQwenFrankfurtChatCompletionsEndpoint = (workspaceId: unknown)
   return `https://${validatedServerWorkspaceId}.eu-central-1.maas.aliyuncs.com/compatible-mode/v1/chat/completions`;
 };
 
-export const QWEN3_VL_CHAT_COMPLETIONS_ENDPOINT = deriveQwenFrankfurtChatCompletionsEndpoint(
+export const deriveQwenSingaporeChatCompletionsEndpoint = (workspaceId: unknown): string => {
+  const validatedServerWorkspaceId = QwenServerWorkspaceIdSchema.parse(workspaceId);
+  if (validatedServerWorkspaceId !== QWEN3_VL_SERVER_WORKSPACE_ID) {
+    throw new TypeError('Qwen workspace is not the pinned Singapore workspace.');
+  }
+  return `https://${validatedServerWorkspaceId}.${QWEN3_VL_REGION}.maas.aliyuncs.com/compatible-mode/v1/chat/completions`;
+};
+
+export const QWEN3_VL_HISTORICAL_FRANKFURT_CHAT_COMPLETIONS_ENDPOINT =
+  deriveQwenFrankfurtChatCompletionsEndpoint(QWEN3_VL_HISTORICAL_FRANKFURT_WORKSPACE_ID);
+export const QWEN3_VL_CHAT_COMPLETIONS_ENDPOINT = deriveQwenSingaporeChatCompletionsEndpoint(
   QWEN3_VL_SERVER_WORKSPACE_ID,
+);
+
+export const QWEN3_VL_PROVIDER_IDENTITY_V2 = Object.freeze({
+  identityVersion: 2 as const,
+  providerKey: QWEN3_VL_PROVIDER_KEY,
+  workspace: 'Alibaba Cloud Model Studio' as const,
+  workspaceId: QWEN3_VL_SERVER_WORKSPACE_ID,
+  region: 'Singapore' as const,
+  regionId: QWEN3_VL_REGION,
+  host: QWEN3_VL_HOST,
+  endpoint: QWEN3_VL_CHAT_COMPLETIONS_ENDPOINT,
+  endpointMethod: QWEN3_VL_ENDPOINT_METHOD,
+  apiFamily: QWEN3_VL_API_FAMILY,
+  requestedModelId: QWEN3_VL_REQUESTED_MODEL_ID,
+  secretReferenceName: QWEN3_VL_SECRET_REFERENCE_NAME,
+  workspaceProfile: 'workspace-dedicated-pay-as-you-go' as const,
+  authenticationScope: 'current-workspace-only' as const,
+  apiKeyScope: 'region-specific-non-interchangeable' as const,
+  rejectedEndpointProfiles: Object.freeze([
+    'shared-dashscope',
+    'trial',
+    'token-plan',
+    'coding-plan',
+  ] as const),
+});
+export const QWEN3_VL_PROVIDER_IDENTITY_V2_SHA256 = sha256Hex(
+  Buffer.from(canonicalizeJson(QWEN3_VL_PROVIDER_IDENTITY_V2), 'utf8'),
+);
+
+export const QWEN3_VL_PROVIDER_IDENTITY_V1 = Object.freeze({
+  identityVersion: 1 as const,
+  providerKey: QWEN3_VL_PROVIDER_KEY,
+  workspace: 'Alibaba Cloud Model Studio' as const,
+  workspaceId: QWEN3_VL_HISTORICAL_FRANKFURT_WORKSPACE_ID,
+  region: 'Germany-Frankfurt' as const,
+  regionId: 'eu-central-1' as const,
+  host: 'ws-vy71dtw49uzef5hz.eu-central-1.maas.aliyuncs.com' as const,
+  endpoint: QWEN3_VL_HISTORICAL_FRANKFURT_CHAT_COMPLETIONS_ENDPOINT,
+  endpointMethod: QWEN3_VL_ENDPOINT_METHOD,
+  apiFamily: QWEN3_VL_API_FAMILY,
+  requestedModelId: QWEN3_VL_REQUESTED_MODEL_ID,
+  secretReferenceName: QWEN3_VL_SECRET_REFERENCE_NAME,
+  parseOnly: true as const,
+});
+export const QWEN3_VL_PROVIDER_IDENTITY_V1_SHA256 = sha256Hex(
+  Buffer.from(canonicalizeJson(QWEN3_VL_PROVIDER_IDENTITY_V1), 'utf8'),
 );
 
 export const QWEN3_VL_MODEL_AVAILABILITY_EVIDENCE_V1 = Object.freeze({
   evidenceVersion: 1 as const,
   requestedModelId: QWEN3_VL_REQUESTED_MODEL_ID,
-  retrievedDate: QWEN3_VL_OFFICIAL_EVIDENCE_RETRIEVED_DATE,
-  freshUntilExclusive: QWEN3_VL_OFFICIAL_EVIDENCE_FRESH_UNTIL_EXCLUSIVE,
+  retrievedDate: QWEN3_VL_HISTORICAL_EVIDENCE_RETRIEVED_DATE,
+  freshUntilExclusive: QWEN3_VL_HISTORICAL_EVIDENCE_FRESH_UNTIL_EXCLUSIVE,
   releaseScope: 'International' as const,
   frankfurtDeploymentScope: 'Global' as const,
   region: 'Germany-Frankfurt' as const,
@@ -92,12 +162,78 @@ export const QWEN3_VL_MODEL_AVAILABILITY_EVIDENCE_V1 = Object.freeze({
 export const QWEN3_VL_MODEL_LIFECYCLE_EVIDENCE_V1 = Object.freeze({
   evidenceVersion: 1 as const,
   requestedModelId: QWEN3_VL_REQUESTED_MODEL_ID,
-  retrievedDate: QWEN3_VL_OFFICIAL_EVIDENCE_RETRIEVED_DATE,
-  freshUntilExclusive: QWEN3_VL_OFFICIAL_EVIDENCE_FRESH_UNTIL_EXCLUSIVE,
+  retrievedDate: QWEN3_VL_HISTORICAL_EVIDENCE_RETRIEVED_DATE,
+  freshUntilExclusive: QWEN3_VL_HISTORICAL_EVIDENCE_FRESH_UNTIL_EXCLUSIVE,
   currentDeprecationScheduleStatus: 'not-listed' as const,
   snapshotSunsetNoticeMinimumDays: 30 as const,
   sourceUrl: QWEN3_VL_OFFICIAL_DOCUMENTATION.deprecation,
 });
+export const QWEN3_VL_MODEL_AVAILABILITY_EVIDENCE_V1_SHA256 = sha256Hex(
+  Buffer.from(canonicalizeJson(QWEN3_VL_MODEL_AVAILABILITY_EVIDENCE_V1), 'utf8'),
+);
+export const QWEN3_VL_MODEL_LIFECYCLE_EVIDENCE_V1_SHA256 = sha256Hex(
+  Buffer.from(canonicalizeJson(QWEN3_VL_MODEL_LIFECYCLE_EVIDENCE_V1), 'utf8'),
+);
+
+export const QWEN3_VL_MODEL_AVAILABILITY_EVIDENCE_V2 = Object.freeze({
+  evidenceVersion: 2 as const,
+  requestedModelId: QWEN3_VL_REQUESTED_MODEL_ID,
+  retrievedAt: QWEN3_VL_OFFICIAL_EVIDENCE_RETRIEVED_AT,
+  freshUntilExclusive: QWEN3_VL_OFFICIAL_EVIDENCE_FRESH_UNTIL_EXCLUSIVE,
+  releaseScope: 'International' as const,
+  region: 'Singapore' as const,
+  regionId: QWEN3_VL_REGION,
+  workspaceId: QWEN3_VL_SERVER_WORKSPACE_ID,
+  inputModalities: Object.freeze(['text', 'image', 'video'] as const),
+  contextWindowTokens: 1_000_000 as const,
+  imageInputSupported: true as const,
+  jsonObjectStructuredOutput: true as const,
+  nonThinkingModeRequired: true as const,
+  currentSnapshotDeprecationStatus: 'not-listed' as const,
+  movingAliasScheduledSunset: '2026-10-10' as const,
+  workspaceProfile: 'workspace-dedicated-pay-as-you-go' as const,
+  authenticationScope: 'current-workspace-only' as const,
+  apiKeyScope: 'region-specific-non-interchangeable' as const,
+  rejectedEndpointProfiles: Object.freeze([
+    'shared-dashscope',
+    'trial',
+    'token-plan',
+    'coding-plan',
+  ] as const),
+  snapshotSunsetNoticeMinimumDays: 30 as const,
+  sourceUrls: Object.freeze({
+    baseUrl: QWEN3_VL_OFFICIAL_DOCUMENTATION.baseUrl,
+    regions: QWEN3_VL_OFFICIAL_DOCUMENTATION.regions,
+    apiKey: QWEN3_VL_OFFICIAL_DOCUMENTATION.apiKey,
+    pricing: QWEN3_VL_OFFICIAL_DOCUMENTATION.pricing,
+    visualModelCatalog: QWEN3_VL_OFFICIAL_DOCUMENTATION.visualModelCatalog,
+    structuredOutput: QWEN3_VL_OFFICIAL_DOCUMENTATION.structuredOutput,
+    chatCompletions: QWEN3_VL_OFFICIAL_DOCUMENTATION.chatCompletions,
+    newlyReleasedModels: QWEN3_VL_OFFICIAL_DOCUMENTATION.newlyReleasedModels,
+    deprecation: QWEN3_VL_OFFICIAL_DOCUMENTATION.deprecation,
+  }),
+});
+export const QWEN3_VL_MODEL_AVAILABILITY_EVIDENCE_V2_SHA256 = sha256Hex(
+  Buffer.from(canonicalizeJson(QWEN3_VL_MODEL_AVAILABILITY_EVIDENCE_V2), 'utf8'),
+);
+
+export const QWEN3_VL_MODEL_LIFECYCLE_EVIDENCE_V2 = Object.freeze({
+  evidenceVersion: 2 as const,
+  requestedModelId: QWEN3_VL_REQUESTED_MODEL_ID,
+  retrievedAt: QWEN3_VL_OFFICIAL_EVIDENCE_RETRIEVED_AT,
+  freshUntilExclusive: QWEN3_VL_OFFICIAL_EVIDENCE_FRESH_UNTIL_EXCLUSIVE,
+  currentSnapshotDeprecationScheduleStatus: 'not-listed' as const,
+  movingAlias: 'qwen3.6-flash' as const,
+  movingAliasScheduledSunset: '2026-10-10' as const,
+  snapshotSunsetNoticeMinimumDays: 30 as const,
+  sourceUrls: Object.freeze({
+    deprecation: QWEN3_VL_OFFICIAL_DOCUMENTATION.deprecation,
+    newlyReleasedModels: QWEN3_VL_OFFICIAL_DOCUMENTATION.newlyReleasedModels,
+  }),
+});
+export const QWEN3_VL_MODEL_LIFECYCLE_EVIDENCE_V2_SHA256 = sha256Hex(
+  Buffer.from(canonicalizeJson(QWEN3_VL_MODEL_LIFECYCLE_EVIDENCE_V2), 'utf8'),
+);
 
 const providerProtocolWrapperPrefix = `Provider protocol wrapper v1.
 The canonical Banner instruction above is unchanged and authoritative.
@@ -212,7 +348,19 @@ export const QWEN3_VL_REQUEST_SHAPE_V2 = Object.freeze({
 export const QWEN3_VL_REQUEST_SHAPE_V2_SHA256 = sha256Hex(
   Buffer.from(canonicalizeJson(QWEN3_VL_REQUEST_SHAPE_V2), 'utf8'),
 );
-export const QWEN3_VL_ACTIVE_REQUEST_SHAPE_SHA256 = QWEN3_VL_REQUEST_SHAPE_V2_SHA256;
+export const QWEN3_VL_REQUEST_SHAPE_V3 = Object.freeze({
+  ...QWEN3_VL_REQUEST_SHAPE_V2,
+  requestShapeVersion: 3 as const,
+  endpointDerivation:
+    'https://{pinnedSingaporeWorkspaceId}.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1/chat/completions' as const,
+  providerIdentitySha256: QWEN3_VL_PROVIDER_IDENTITY_V2_SHA256,
+  pricingEvidenceVersion: 2 as const,
+  cacheUsageField: 'prompt_tokens_details.cached_tokens' as const,
+});
+export const QWEN3_VL_REQUEST_SHAPE_V3_SHA256 = sha256Hex(
+  Buffer.from(canonicalizeJson(QWEN3_VL_REQUEST_SHAPE_V3), 'utf8'),
+);
+export const QWEN3_VL_ACTIVE_REQUEST_SHAPE_SHA256 = QWEN3_VL_REQUEST_SHAPE_V3_SHA256;
 export const QWEN3_VL_REQUEST_SHAPE_SHA256 = QWEN3_VL_ACTIVE_REQUEST_SHAPE_SHA256;
 
 export const QWEN_FOUR_FIXTURE_BENCHMARK_CAPS_V1 = Object.freeze({
@@ -250,6 +398,7 @@ export const QWEN_SINGLE_FIXTURE_DIAGNOSTIC_CAPS_V1_SHA256 =
   '6f0df176ddae07d69e244d5ff9cb696f92f4a53d0a8f8150909dbd8c11451fa0' as const;
 
 /** Active diagnostic limits. A new authorization must bind this exact revision. */
+// Historical Frankfurt parse-only diagnostic cap; active Singapore uses V3 below.
 export const QWEN_SINGLE_FIXTURE_DIAGNOSTIC_CAPS_V2 = Object.freeze({
   diagnosticCapsVersion: 2 as const,
   mode: 'single-fixture-response-capture' as const,
@@ -265,6 +414,22 @@ export const QWEN_SINGLE_FIXTURE_DIAGNOSTIC_CAPS_V2 = Object.freeze({
 
 export const QWEN_SINGLE_FIXTURE_DIAGNOSTIC_CAPS_V2_SHA256 =
   '4099960771c16079383d6f520633265c3113a5fd4b121154afeda5935314b81c' as const;
+
+export const QWEN_SINGLE_FIXTURE_DIAGNOSTIC_CAPS_V3 = Object.freeze({
+  diagnosticCapsVersion: 3 as const,
+  mode: 'single-fixture-response-capture' as const,
+  fixtureId: 'banner-person-v1' as const,
+  providerCallsMaximum: 1 as const,
+  retryCount: 0 as const,
+  perCallTimeoutMs: 120_000 as const,
+  totalWallTimeMs: 150_000 as const,
+  totalCalculatedListCostMaximumMicroUsd: '100000' as const,
+  productionAdmissionAuthority: false as const,
+  webRouteActivated: false as const,
+});
+export const QWEN_SINGLE_FIXTURE_DIAGNOSTIC_CAPS_V3_SHA256 = sha256Hex(
+  Buffer.from(canonicalizeJson(QWEN_SINGLE_FIXTURE_DIAGNOSTIC_CAPS_V3), 'utf8'),
+);
 
 for (const [caps, expected, label] of [
   [QWEN_SINGLE_FIXTURE_DIAGNOSTIC_CAPS_V1, QWEN_SINGLE_FIXTURE_DIAGNOSTIC_CAPS_V1_SHA256, 'V1'],
@@ -299,8 +464,8 @@ export const QWEN3_VL_PRICING_EVIDENCE_V1 = Object.freeze({
   evidenceVersion: 1 as const,
   evidenceId: 'alibaba-qwen3-6-flash-global-frankfurt-pricing-2026-07-15' as const,
   sourceUrl: QWEN3_VL_OFFICIAL_DOCUMENTATION.pricing,
-  retrievedDate: QWEN3_VL_OFFICIAL_EVIDENCE_RETRIEVED_DATE,
-  freshUntilExclusive: QWEN3_VL_OFFICIAL_EVIDENCE_FRESH_UNTIL_EXCLUSIVE,
+  retrievedDate: QWEN3_VL_HISTORICAL_EVIDENCE_RETRIEVED_DATE,
+  freshUntilExclusive: QWEN3_VL_HISTORICAL_EVIDENCE_FRESH_UNTIL_EXCLUSIVE,
   requestedModelId: QWEN3_VL_REQUESTED_MODEL_ID,
   documentedAlias: 'qwen3.6-flash' as const,
   documentedAliasCurrentlyEquivalentToRequestedSnapshot: true as const,
@@ -323,9 +488,71 @@ export const QWEN3_VL_PRICING_EVIDENCE_V1 = Object.freeze({
   tiers: QWEN3_VL_PRICING_TIERS_V1,
 });
 
-export const QWEN3_VL_PRICING_EVIDENCE_SHA256 = sha256Hex(
+const qwen3VlHistoricalPricingEvidenceSha256 = sha256Hex(
   Buffer.from(canonicalizeJson(QWEN3_VL_PRICING_EVIDENCE_V1), 'utf8'),
 );
+export const QWEN3_VL_HISTORICAL_PRICING_EVIDENCE_SHA256 =
+  '67896b153548b82d6a16ba711ef452d7827b9d530bc9d8498b03f0c2a6ea71c9' as const;
+export const QWEN3_VL_PRICING_EVIDENCE_V1_SHA256 = QWEN3_VL_HISTORICAL_PRICING_EVIDENCE_SHA256;
+if (qwen3VlHistoricalPricingEvidenceSha256 !== QWEN3_VL_HISTORICAL_PRICING_EVIDENCE_SHA256) {
+  throw new TypeError('Historical Qwen V1 pricing evidence drifted.');
+}
+
+export const QWEN3_VL_PRICING_TIERS_V2 = Object.freeze([
+  Object.freeze({
+    minimumInputTokensExclusive: 0,
+    maximumInputTokensInclusive: 256_000,
+    inputMicrosPerMillionTokens: 250_000,
+    cachedInputMicrosPerMillionTokens: 50_000,
+    outputMicrosPerMillionTokens: 1_500_000,
+  }),
+  Object.freeze({
+    minimumInputTokensExclusive: 256_000,
+    maximumInputTokensInclusive: 1_000_000,
+    inputMicrosPerMillionTokens: 1_000_000,
+    cachedInputMicrosPerMillionTokens: 200_000,
+    outputMicrosPerMillionTokens: 4_000_000,
+  }),
+] as const);
+export const QWEN3_VL_PRICING_EVIDENCE_V2 = Object.freeze({
+  evidenceVersion: 2 as const,
+  evidenceId: 'alibaba-qwen3-6-flash-singapore-international-pricing-2026-07-16' as const,
+  sourceUrl: QWEN3_VL_OFFICIAL_DOCUMENTATION.pricing,
+  retrievedAt: QWEN3_VL_OFFICIAL_EVIDENCE_RETRIEVED_AT,
+  freshUntilExclusive: QWEN3_VL_OFFICIAL_EVIDENCE_FRESH_UNTIL_EXCLUSIVE,
+  requestedModelId: QWEN3_VL_REQUESTED_MODEL_ID,
+  region: 'Singapore' as const,
+  regionId: QWEN3_VL_REGION,
+  pricingScope: 'Singapore International' as const,
+  currency: 'USD' as const,
+  tierSelection: 'total-input-tokens-for-one-request' as const,
+  implicitContextCache: Object.freeze({
+    hitTokenUsageField: 'prompt_tokens_details.cached_tokens' as const,
+    hitTokenRateFraction: Object.freeze({ numerator: 1, denominator: 5 }),
+    explicitCacheControlSent: false as const,
+    sourceUrl: QWEN3_VL_OFFICIAL_DOCUMENTATION.contextCache,
+  }),
+  rounding: 'combined-rational-list-cost-rounded-up-to-whole-micro-usd' as const,
+  tiers: QWEN3_VL_PRICING_TIERS_V2,
+  freeQuota: Object.freeze({
+    tokens: 1_000_000,
+    validity: '90-days-after-activation',
+    scope: 'Singapore International',
+    inference: 'real-time-only',
+    sharedAt: 'Alibaba-account-and-RAM-level',
+    listCostIndependent: true,
+    sourceUrl: QWEN3_VL_OFFICIAL_DOCUMENTATION.freeQuota,
+  }),
+  sourceUrls: Object.freeze({
+    pricing: QWEN3_VL_OFFICIAL_DOCUMENTATION.pricing,
+    contextCache: QWEN3_VL_OFFICIAL_DOCUMENTATION.contextCache,
+    newFreeQuota: QWEN3_VL_OFFICIAL_DOCUMENTATION.freeQuota,
+  }),
+});
+export const QWEN3_VL_PRICING_EVIDENCE_V2_SHA256 = sha256Hex(
+  Buffer.from(canonicalizeJson(QWEN3_VL_PRICING_EVIDENCE_V2), 'utf8'),
+);
+export const QWEN3_VL_PRICING_EVIDENCE_SHA256 = QWEN3_VL_PRICING_EVIDENCE_V2_SHA256;
 
 export const assertQwen3VlOfficialEvidenceFresh = (nowMs: number): void => {
   const now = z.int().min(0).parse(nowMs);
@@ -336,33 +563,35 @@ export const assertQwen3VlOfficialEvidenceFresh = (nowMs: number): void => {
   }
 };
 
-const QwenUsageDetailTokenCountSchema = z.int().min(0).max(260_096);
-const QwenNullableAudioTokenCountSchema = QwenUsageDetailTokenCountSchema.nullable();
+const QwenProviderPromptDetailTokenCountSchema = z.int().min(0).max(256_000);
+const QwenProviderCompletionDetailTokenCountSchema = z.int().min(0).max(QWEN3_VL_MAX_OUTPUT_TOKENS);
+const QwenProviderNullableAudioTokenCountSchema =
+  QwenProviderPromptDetailTokenCountSchema.nullable();
 
 export const QwenCacheCreationDetailsV1Schema = z
   .strictObject({
-    ephemeral_5m_input_tokens: QwenUsageDetailTokenCountSchema,
-    cache_creation_input_tokens: QwenUsageDetailTokenCountSchema,
+    ephemeral_5m_input_tokens: QwenProviderPromptDetailTokenCountSchema,
+    cache_creation_input_tokens: QwenProviderPromptDetailTokenCountSchema,
     cache_type: z.literal('ephemeral'),
   })
   .readonly();
 
 export const QwenPromptTokensDetailsV1Schema = z
   .strictObject({
-    audio_tokens: QwenNullableAudioTokenCountSchema.optional(),
-    cached_tokens: QwenUsageDetailTokenCountSchema.optional(),
-    text_tokens: QwenUsageDetailTokenCountSchema.optional(),
-    image_tokens: QwenUsageDetailTokenCountSchema.optional(),
-    video_tokens: QwenUsageDetailTokenCountSchema.optional(),
+    audio_tokens: QwenProviderNullableAudioTokenCountSchema.optional(),
+    cached_tokens: QwenProviderPromptDetailTokenCountSchema.optional(),
+    text_tokens: QwenProviderPromptDetailTokenCountSchema.optional(),
+    image_tokens: QwenProviderPromptDetailTokenCountSchema.optional(),
+    video_tokens: QwenProviderPromptDetailTokenCountSchema.optional(),
     cache_creation: QwenCacheCreationDetailsV1Schema.optional(),
   })
   .readonly();
 
 export const QwenCompletionTokensDetailsV1Schema = z
   .strictObject({
-    audio_tokens: QwenNullableAudioTokenCountSchema.optional(),
-    reasoning_tokens: QwenUsageDetailTokenCountSchema.nullable().optional(),
-    text_tokens: QwenUsageDetailTokenCountSchema.optional(),
+    audio_tokens: QwenProviderNullableAudioTokenCountSchema.optional(),
+    reasoning_tokens: QwenProviderCompletionDetailTokenCountSchema.nullable().optional(),
+    text_tokens: QwenProviderCompletionDetailTokenCountSchema.optional(),
   })
   .readonly();
 
@@ -518,9 +747,80 @@ export const QwenCalculatedListCostV1Schema = z
   })
   .readonly();
 
-export const calculateQwen3VlListCostMicros = (usageInput: unknown) => {
+export const QwenCalculatedListCostV2Schema = z
+  .strictObject({
+    currency: z.literal('USD'),
+    unit: z.literal('micro-USD'),
+    calculation: z.literal('official-list-price-not-provider-reported-cost'),
+    rounding: z.literal('ceiling-after-combining-input-and-output-rationals'),
+    inputTokenTierMaximumInclusive: z.union([z.literal(256_000), z.literal(1_000_000)]),
+    inputMicrosPerMillionTokens: z.union([z.literal(250_000), z.literal(1_000_000)]),
+    outputMicrosPerMillionTokens: z.union([z.literal(1_500_000), z.literal(4_000_000)]),
+    cachedInputRateFractionOfStandard: z
+      .strictObject({ numerator: z.literal(1), denominator: z.literal(5) })
+      .readonly(),
+    cachedInputMicrosPerMillionTokens: z.union([z.literal(50_000), z.literal(200_000)]),
+    uncachedPromptTokens: z.int().min(0).max(1_000_000),
+    cachedPromptTokens: z.int().min(0).max(1_000_000),
+    completionTokens: z.int().min(0).max(QWEN3_VL_MAX_OUTPUT_TOKENS),
+    calculatedListCostMicros: CanonicalMicrosStringSchema,
+  })
+  .superRefine((cost, context) => {
+    const promptTokens = cost.uncachedPromptTokens + cost.cachedPromptTokens;
+    const selectedTier = QWEN3_VL_PRICING_TIERS_V2.find(
+      (candidate) =>
+        promptTokens > candidate.minimumInputTokensExclusive &&
+        promptTokens <= candidate.maximumInputTokensInclusive,
+    );
+    const declaredTier = QWEN3_VL_PRICING_TIERS_V2.find(
+      (candidate) => candidate.maximumInputTokensInclusive === cost.inputTokenTierMaximumInclusive,
+    );
+    const expectedCachedRate = cost.inputMicrosPerMillionTokens / 5;
+    if (cost.cachedInputMicrosPerMillionTokens !== expectedCachedRate) {
+      context.addIssue({
+        code: 'custom',
+        message: 'Singapore cached input rate drifted from the exact 20% fraction.',
+      });
+    }
+    const expectedTier =
+      cost.inputTokenTierMaximumInclusive === 256_000
+        ? { input: 250_000, cached: 50_000, output: 1_500_000 }
+        : { input: 1_000_000, cached: 200_000, output: 4_000_000 };
+    if (
+      selectedTier?.maximumInputTokensInclusive !== declaredTier?.maximumInputTokensInclusive ||
+      declaredTier === undefined ||
+      declaredTier.inputMicrosPerMillionTokens !== cost.inputMicrosPerMillionTokens ||
+      declaredTier.outputMicrosPerMillionTokens !== cost.outputMicrosPerMillionTokens ||
+      cost.inputMicrosPerMillionTokens !== expectedTier.input ||
+      cost.cachedInputMicrosPerMillionTokens !== expectedTier.cached ||
+      cost.outputMicrosPerMillionTokens !== expectedTier.output
+    ) {
+      context.addIssue({ code: 'custom', message: 'Singapore tier rates drifted.' });
+    }
+    const numerator =
+      BigInt(cost.uncachedPromptTokens) * BigInt(cost.inputMicrosPerMillionTokens) +
+      BigInt(cost.cachedPromptTokens) * BigInt(cost.cachedInputMicrosPerMillionTokens) +
+      BigInt(cost.completionTokens) * BigInt(cost.outputMicrosPerMillionTokens);
+    const expectedMicros = (numerator + 999_999n) / 1_000_000n;
+    if (formatMicros(expectedMicros) !== cost.calculatedListCostMicros) {
+      context.addIssue({ code: 'custom', message: 'Singapore calculated list cost drifted.' });
+    }
+  })
+  .readonly();
+
+const calculateQwenListCostMicros = (
+  usageInput: unknown,
+  tiers: readonly {
+    minimumInputTokensExclusive: number;
+    maximumInputTokensInclusive: number;
+    inputMicrosPerMillionTokens: number;
+    outputMicrosPerMillionTokens: number;
+    cachedInputMicrosPerMillionTokens?: number;
+  }[],
+  outputSchema: typeof QwenCalculatedListCostV1Schema | typeof QwenCalculatedListCostV2Schema,
+) => {
   const usage = QwenPricingUsageV1Schema.parse(usageInput);
-  const tier = QWEN3_VL_PRICING_TIERS_V1.find(
+  const tier = tiers.find(
     (candidate) =>
       usage.prompt_tokens > candidate.minimumInputTokensExclusive &&
       usage.prompt_tokens <= candidate.maximumInputTokensInclusive,
@@ -530,13 +830,14 @@ export const calculateQwen3VlListCostMicros = (usageInput: unknown) => {
   }
   const cachedPromptTokens = usage.prompt_tokens_details?.cached_tokens ?? 0;
   const uncachedPromptTokens = usage.prompt_tokens - cachedPromptTokens;
-  const cachedInputMicrosPerMillionTokens = tier.inputMicrosPerMillionTokens / 5;
+  const cachedInputMicrosPerMillionTokens =
+    tier.cachedInputMicrosPerMillionTokens ?? tier.inputMicrosPerMillionTokens / 5;
   const numerator =
     BigInt(uncachedPromptTokens) * BigInt(tier.inputMicrosPerMillionTokens) +
     BigInt(cachedPromptTokens) * BigInt(cachedInputMicrosPerMillionTokens) +
     BigInt(usage.completion_tokens) * BigInt(tier.outputMicrosPerMillionTokens);
   const calculatedListCostMicros = (numerator + 999_999n) / 1_000_000n;
-  return QwenCalculatedListCostV1Schema.parse({
+  return outputSchema.parse({
     currency: 'USD' as const,
     unit: 'micro-USD' as const,
     calculation: 'official-list-price-not-provider-reported-cost' as const,
@@ -552,3 +853,17 @@ export const calculateQwen3VlListCostMicros = (usageInput: unknown) => {
     calculatedListCostMicros: formatMicros(calculatedListCostMicros),
   });
 };
+
+export const calculateQwen3VlHistoricalListCostMicros = (usageInput: unknown) =>
+  calculateQwenListCostMicros(
+    usageInput,
+    QWEN3_VL_PRICING_TIERS_V1,
+    QwenCalculatedListCostV1Schema,
+  );
+
+export const calculateQwen3VlListCostMicros = (usageInput: unknown) =>
+  calculateQwenListCostMicros(
+    usageInput,
+    QWEN3_VL_PRICING_TIERS_V2,
+    QwenCalculatedListCostV2Schema,
+  );

@@ -12,6 +12,7 @@ import {
   QWEN3_VL_API_FAMILY,
   QWEN3_VL_CHAT_COMPLETIONS_ENDPOINT,
   QWEN3_VL_ENDPOINT_METHOD,
+  QWEN3_VL_HISTORICAL_FRANKFURT_CHAT_COMPLETIONS_ENDPOINT,
   QWEN3_VL_OFFICIAL_EVIDENCE_RETRIEVED_DATE,
   QWEN3_VL_PRICING_EVIDENCE_SHA256,
   QWEN3_VL_PROVIDER_KEY,
@@ -47,17 +48,27 @@ import {
   QWEN_FOUR_FIXTURE_ORDERED_MODEL_INPUT_DIGESTS_SHA256,
 } from '../src/server/qwen-four-fixture-request-catalog.js';
 import {
-  createQwenDryRunExecutionAuthorization,
+  createQwenDryRunExecutionAuthorization as createQwenDryRunExecutionAuthorizationImpl,
   preflightQwenLiveExecutionAuthorization,
   type QwenAdapterClockPort,
 } from '../src/server/qwen3-vl-scene-analysis-adapter.js';
 import {
   QWEN_FOUR_FIXTURE_REPORT_PATH,
+  QWEN_SINGAPORE_V4_REPORT_PATH,
+  QwenFourFixtureBenchmarkReportV4Schema,
   runQwenFourFixtureBenchmark,
   serializeQwenFourFixtureBenchmarkReport,
 } from '../src/server/qwen-four-fixture-benchmark.js';
 
-const fixedNowMs = Date.parse('2026-07-15T12:00:00.000Z');
+const fixedNowMs = Date.parse('2026-07-16T19:00:00.000Z');
+const createQwenDryRunExecutionAuthorization = (input: {
+  readonly nowMs: number;
+  readonly serverWorkspaceId?: string;
+}) =>
+  createQwenDryRunExecutionAuthorizationImpl({
+    ...input,
+    currentGitSha: '45b3ceaf311008fb5c84cc8f8ea236d7846a20bf',
+  });
 
 const cancellation = Object.freeze({
   cancelled: false,
@@ -134,7 +145,7 @@ describe('Qwen four-fixture benchmark runner', () => {
 
     expect(first.transport.getCallCount()).toBe(4);
     expect(first.report).toMatchObject({
-      reportVersion: 2,
+      reportVersion: 4,
       mode: 'deterministic-fake',
       providerNetworkUsed: false,
       providerCallCount: 4,
@@ -142,7 +153,7 @@ describe('Qwen four-fixture benchmark runner', () => {
       retryCount: 0,
       totalCalculatedListCost: {
         accountingStatus: 'complete',
-        knownAttemptCostMicros: '1452',
+        knownAttemptCostMicros: '2200',
         indeterminateAttemptCount: 0,
       },
       requestedModelId: 'qwen3.6-flash-2026-04-16',
@@ -150,7 +161,7 @@ describe('Qwen four-fixture benchmark runner', () => {
       requestShapeSha256: QWEN3_VL_REQUEST_SHAPE_SHA256,
       orderedModelInputDigestsSha256: QWEN_FOUR_FIXTURE_ACTIVE_MODEL_INPUT_DIGESTS_SHA256,
       endpoint:
-        'https://ws-vy71dtw49uzef5hz.eu-central-1.maas.aliyuncs.com/compatible-mode/v1/chat/completions',
+        'https://ws-4ei01ync8iyumgp4.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1/chat/completions',
       stoppedEarly: false,
       terminalFailureReason: 'none',
       overallPass: true,
@@ -165,6 +176,14 @@ describe('Qwen four-fixture benchmark runner', () => {
     expect(first.report.fixtureResults.every((result) => result.providerCallCount === 1)).toBe(
       true,
     );
+    expect(QwenFourFixtureBenchmarkReportV4Schema.parse(first.report)).toBeDefined();
+    expect(() =>
+      QwenFourFixtureBenchmarkReportV4Schema.parse({
+        ...first.report,
+        mode: 'live-provider',
+        providerNetworkUsed: true,
+      }),
+    ).toThrow();
     expect(first.report.fixtureResults.every((result) => result.retryCount === 0)).toBe(true);
     expect(
       first.report.fixtureResults.every((result) => result.accountingStatus === 'complete'),
@@ -227,7 +246,7 @@ describe('Qwen four-fixture benchmark runner', () => {
         ? {
             accountingStatus: 'complete',
             usage: { prompt_tokens: 1_000, completion_tokens: 200, total_tokens: 1_200 },
-            calculatedListCost: { calculatedListCostMicros: '363' },
+            calculatedListCost: { calculatedListCostMicros: '550' },
           }
         : {
             accountingStatus: 'indeterminate',
@@ -239,7 +258,7 @@ describe('Qwen four-fixture benchmark runner', () => {
       kind === 'schema-invalid'
         ? {
             accountingStatus: 'complete',
-            knownAttemptCostMicros: '363',
+            knownAttemptCostMicros: '550',
             indeterminateAttemptCount: 0,
           }
         : {
@@ -427,7 +446,7 @@ describe('Qwen four-fixture benchmark runner', () => {
         completion_tokens: 4_096,
         total_tokens: 260_096,
       }).calculatedListCostMicros,
-    ).toBe('46296');
+    ).toBe('70144');
   });
 
   it('fails live authorization preflight on absent authority, stale time, or identity/cap drift', () => {
@@ -532,6 +551,19 @@ describe('Qwen four-fixture benchmark runner', () => {
     expect(QWEN_FOUR_FIXTURE_REPORT_PATH).toBe(
       '.local-data/banner-ai/qwen3-vl-four-fixture-benchmark.json',
     );
+    expect(QWEN_SINGAPORE_V4_REPORT_PATH).toBe(
+      '.local-data/banner-ai/qwen3-vl-four-fixture-benchmark-singapore-v4.json',
+    );
+    expect(QWEN_SINGAPORE_V4_REPORT_PATH).not.toBe(QWEN_FOUR_FIXTURE_REPORT_PATH);
+    expect(() =>
+      QwenFourFixtureBenchmarkReportV4Schema.parse({ ...report, endpoint: null }),
+    ).toThrow();
+    expect(() =>
+      QwenFourFixtureBenchmarkReportV4Schema.parse({
+        ...report,
+        endpoint: QWEN3_VL_HISTORICAL_FRANKFURT_CHAT_COMPLETIONS_ENDPOINT,
+      }),
+    ).toThrow();
     expect(reportText).not.toMatch(/data:image|Bearer |DASHSCOPE_API_KEY|scene-analysis stage/iu);
     expect(reportText).not.toContain('rawResponse');
     expect(reportText).not.toContain('actualObservations');
@@ -566,8 +598,10 @@ describe('Qwen four-fixture benchmark runner', () => {
       cliSource.indexOf('const runDry ='),
       cliSource.indexOf('const authorizationPathFromArguments'),
     );
+    expect(dryRunSource).toContain('QWEN_SINGAPORE_V4_REPORT_PATH');
+    expect(dryRunSource).not.toContain('QWEN_FOUR_FIXTURE_REPORT_PATH');
     expect(dryRunSource).not.toContain('process.env');
-    expect(QWEN3_VL_CHAT_COMPLETIONS_ENDPOINT).toBe(
+    expect(QWEN3_VL_CHAT_COMPLETIONS_ENDPOINT).not.toBe(
       deriveQwenFrankfurtChatCompletionsEndpoint(QWEN3_VL_SERVER_WORKSPACE_ID),
     );
   });

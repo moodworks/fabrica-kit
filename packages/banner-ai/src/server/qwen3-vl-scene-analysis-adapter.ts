@@ -16,16 +16,24 @@ import {
 import {
   QWEN3_VL_API_FAMILY,
   QWEN3_VL_CHAT_COMPLETIONS_ENDPOINT,
+  QWEN3_VL_HISTORICAL_FRANKFURT_CHAT_COMPLETIONS_ENDPOINT,
+  QWEN3_VL_HISTORICAL_FRANKFURT_WORKSPACE_ID,
+  QWEN3_VL_HISTORICAL_EVIDENCE_RETRIEVED_DATE,
+  QWEN3_VL_HISTORICAL_PRICING_EVIDENCE_SHA256,
   QWEN3_VL_ENDPOINT_METHOD,
   QWEN3_VL_FLASH_MODEL_CONTRACT_V1,
   QWEN3_VL_MAX_OUTPUT_TOKENS,
   QWEN3_VL_OFFICIAL_EVIDENCE_RETRIEVED_DATE,
-  QWEN3_VL_PRICING_EVIDENCE_SHA256,
+  QWEN3_VL_OFFICIAL_EVIDENCE_RETRIEVED_AT,
+  QWEN3_VL_PRICING_EVIDENCE_V1_SHA256,
+  QWEN3_VL_PRICING_EVIDENCE_V2_SHA256,
+  QWEN3_VL_PROVIDER_IDENTITY_V2_SHA256,
   QWEN3_VL_PROVIDER_KEY,
   QWEN3_VL_PROVIDER_PROTOCOL_WRAPPER_V2,
   QWEN3_VL_PROVIDER_PROTOCOL_WRAPPER_V2_SHA256,
   QWEN3_VL_REQUESTED_MODEL_ID,
-  QWEN3_VL_REQUEST_SHAPE_SHA256,
+  QWEN3_VL_REQUEST_SHAPE_V2_SHA256,
+  QWEN3_VL_REQUEST_SHAPE_V3_SHA256,
   QWEN3_VL_SECRET_REFERENCE_NAME,
   QWEN3_VL_SERVER_WORKSPACE_ID,
   QWEN_FOUR_FIXTURE_BENCHMARK_CAPS_SHA256,
@@ -33,15 +41,17 @@ import {
   QWEN_FOUR_FIXTURE_PENDING_CORPUS_CORE_SHA256,
   QWEN_SINGLE_FIXTURE_DIAGNOSTIC_CAPS_V2,
   QWEN_SINGLE_FIXTURE_DIAGNOSTIC_CAPS_V2_SHA256,
+  QWEN_SINGLE_FIXTURE_DIAGNOSTIC_CAPS_V3,
+  QWEN_SINGLE_FIXTURE_DIAGNOSTIC_CAPS_V3_SHA256,
   assertQwen3VlOfficialEvidenceFresh,
   calculateQwen3VlListCostMicros,
-  deriveQwenFrankfurtChatCompletionsEndpoint,
   type QwenProviderUsageV1,
 } from '../evaluation/qwen3-vl-candidate-evidence.js';
 import { SCENE_ANALYSIS_PROMPT_V1 } from '../evaluation/prompt-catalog.js';
 import {
   QWEN_FOUR_FIXTURE_CANONICAL_REQUEST_CATALOG_V1,
   QWEN_FOUR_FIXTURE_ACTIVE_MODEL_INPUT_DIGESTS_SHA256,
+  QWEN_FOUR_FIXTURE_ORDERED_MODEL_INPUT_DIGESTS_V2_SHA256,
   requireCanonicalQwenBenchmarkRequestV1,
 } from './qwen-four-fixture-request-catalog.js';
 import {
@@ -98,8 +108,8 @@ export const QwenBenchmarkAuthorizationPacketV2Schema = z
     purpose: z.literal('one-capped-four-fixture-sequential-zero-retry-benchmark'),
     issuedAtMs: z.int().min(0),
     expiresAtMs: z.int().min(1),
-    serverWorkspaceId: z.literal(QWEN3_VL_SERVER_WORKSPACE_ID),
-    endpoint: z.string().url(),
+    serverWorkspaceId: z.literal('ws-vy71dtw49uzef5hz'),
+    endpoint: z.literal(QWEN3_VL_HISTORICAL_FRANKFURT_CHAT_COMPLETIONS_ENDPOINT),
     endpointMethod: z.literal(QWEN3_VL_ENDPOINT_METHOD),
     apiFamily: z.literal(QWEN3_VL_API_FAMILY),
     providerKey: z.literal(QWEN3_VL_PROVIDER_KEY),
@@ -107,24 +117,25 @@ export const QwenBenchmarkAuthorizationPacketV2Schema = z
     secretReferenceName: z.literal(QWEN3_VL_SECRET_REFERENCE_NAME),
     pendingCorpusCoreSha256: z.literal(QWEN_FOUR_FIXTURE_PENDING_CORPUS_CORE_SHA256),
     humanOracleCorpusSha256: z.literal(QWEN_FOUR_FIXTURE_HUMAN_ORACLE_CORPUS_SHA256),
-    pricingEvidenceSha256: z.literal(QWEN3_VL_PRICING_EVIDENCE_SHA256),
-    pricingEvidenceRetrievedDate: z.literal(QWEN3_VL_OFFICIAL_EVIDENCE_RETRIEVED_DATE),
+    pricingEvidenceSha256: z.literal(QWEN3_VL_PRICING_EVIDENCE_V1_SHA256),
+    pricingEvidenceRetrievedDate: z.literal('2026-07-15'),
     providerProtocolWrapperSha256: z.literal(QWEN3_VL_PROVIDER_PROTOCOL_WRAPPER_V2_SHA256),
-    requestShapeSha256: z.literal(QWEN3_VL_REQUEST_SHAPE_SHA256),
+    requestShapeSha256: z.literal(QWEN3_VL_REQUEST_SHAPE_V2_SHA256),
     benchmarkCapsSha256: z.literal(QWEN_FOUR_FIXTURE_BENCHMARK_CAPS_SHA256),
     contentPolicyDefinitionSha256: z.literal(
       BANNER_AI_MODEL_DISPATCH_CONTENT_POLICY_V1_DEFINITION_SHA256,
     ),
     workflowDefinitionSha256: z.literal(INITIAL_BANNER_ANALYZE_WORKFLOW_REF_V1.definitionSha256),
-    orderedModelInputDigestsSha256: z.literal(QWEN_FOUR_FIXTURE_ACTIVE_MODEL_INPUT_DIGESTS_SHA256),
+    orderedModelInputDigestsSha256: z.literal(
+      QWEN_FOUR_FIXTURE_ORDERED_MODEL_INPUT_DIGESTS_V2_SHA256,
+    ),
     diagnosticCapture: QwenDiagnosticCaptureAuthorizationV1Schema.optional(),
     executionAuthorized: z.literal(true),
   })
   .superRefine((authorization, context) => {
     if (
       authorization.issuedAtMs >= authorization.expiresAtMs ||
-      authorization.endpoint !==
-        deriveQwenFrankfurtChatCompletionsEndpoint(authorization.serverWorkspaceId)
+      authorization.endpoint !== QWEN3_VL_HISTORICAL_FRANKFURT_CHAT_COMPLETIONS_ENDPOINT
     ) {
       context.addIssue({
         code: 'custom',
@@ -187,12 +198,12 @@ export const QwenBenchmarkAuthorizationPacketV3Schema = z
   .strictObject({
     authorizationVersion: z.literal(3),
     authorizationId: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_.:-]{7,127}$/u),
-    mode: z.enum(['deterministic-fake', 'live-provider']),
+    mode: z.literal('live-provider'),
     purpose: z.literal('one-capped-single-fixture-diagnostic-response-capture'),
     issuedAtMs: z.int().min(0),
     expiresAtMs: z.int().min(1),
-    serverWorkspaceId: z.literal(QWEN3_VL_SERVER_WORKSPACE_ID),
-    endpoint: z.string().url(),
+    serverWorkspaceId: z.literal(QWEN3_VL_HISTORICAL_FRANKFURT_WORKSPACE_ID),
+    endpoint: z.literal(QWEN3_VL_HISTORICAL_FRANKFURT_CHAT_COMPLETIONS_ENDPOINT),
     endpointMethod: z.literal(QWEN3_VL_ENDPOINT_METHOD),
     apiFamily: z.literal(QWEN3_VL_API_FAMILY),
     providerKey: z.literal(QWEN3_VL_PROVIDER_KEY),
@@ -200,29 +211,201 @@ export const QwenBenchmarkAuthorizationPacketV3Schema = z
     secretReferenceName: z.literal(QWEN3_VL_SECRET_REFERENCE_NAME),
     pendingCorpusCoreSha256: z.literal(QWEN_FOUR_FIXTURE_PENDING_CORPUS_CORE_SHA256),
     humanOracleCorpusSha256: z.literal(QWEN_FOUR_FIXTURE_HUMAN_ORACLE_CORPUS_SHA256),
-    pricingEvidenceSha256: z.literal(QWEN3_VL_PRICING_EVIDENCE_SHA256),
+    pricingEvidenceSha256: z.literal(QWEN3_VL_HISTORICAL_PRICING_EVIDENCE_SHA256),
+    pricingEvidenceRetrievedDate: z.literal(QWEN3_VL_HISTORICAL_EVIDENCE_RETRIEVED_DATE),
+    providerProtocolWrapperSha256: z.literal(QWEN3_VL_PROVIDER_PROTOCOL_WRAPPER_V2_SHA256),
+    requestShapeSha256: z.literal(QWEN3_VL_REQUEST_SHAPE_V2_SHA256),
+    benchmarkCapsSha256: z.literal(QWEN_FOUR_FIXTURE_BENCHMARK_CAPS_SHA256),
+    contentPolicyDefinitionSha256: z.literal(
+      BANNER_AI_MODEL_DISPATCH_CONTENT_POLICY_V1_DEFINITION_SHA256,
+    ),
+    workflowDefinitionSha256: z.literal(INITIAL_BANNER_ANALYZE_WORKFLOW_REF_V1.definitionSha256),
+    orderedModelInputDigestsSha256: z.literal(
+      QWEN_FOUR_FIXTURE_ORDERED_MODEL_INPUT_DIGESTS_V2_SHA256,
+    ),
+    diagnosticCapture: z.strictObject({
+      diagnosticVersion: z.literal(2),
+      mode: z.literal('single-fixture-response-capture'),
+      fixtureId: z.literal('banner-person-v1'),
+      providerCallsMaximum: z.literal(1),
+      retryCount: z.literal(0),
+      perCallTimeoutMs: z.literal(QWEN_SINGLE_FIXTURE_DIAGNOSTIC_CAPS_V2.perCallTimeoutMs),
+      totalWallTimeMs: z.literal(QWEN_SINGLE_FIXTURE_DIAGNOSTIC_CAPS_V2.totalWallTimeMs),
+      totalCalculatedListCostMaximumMicroUsd: z.literal('50000'),
+      diagnosticCapsSha256: z.literal(QWEN_SINGLE_FIXTURE_DIAGNOSTIC_CAPS_V2_SHA256),
+      responseArtifactRelativePath: QwenDiagnosticResponseRelativePathV1Schema,
+      diagnosticReportRelativePath: QwenDiagnosticReportRelativePathV1Schema,
+      productionAdmissionAuthority: z.literal(false),
+      webRouteActivated: z.literal(false),
+    }),
+    executionAuthorized: z.literal(true),
+  })
+  .superRefine((authorization, context) => {
+    if (
+      authorization.issuedAtMs >= authorization.expiresAtMs ||
+      authorization.endpoint !== QWEN3_VL_HISTORICAL_FRANKFURT_CHAT_COMPLETIONS_ENDPOINT
+    ) {
+      context.addIssue({
+        code: 'custom',
+        message: 'Qwen historical diagnostic V3 timing or endpoint drifted.',
+      });
+    }
+  })
+  .readonly();
+
+export const QwenManualReleaseBindingV1Schema = z
+  .strictObject({
+    releaseVersion: z.literal(1),
+    releaseId: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_.:-]{7,127}$/u),
+    issuedAtMs: z.int().min(0),
+    expiresAtMs: z.int().min(1),
+    providerIdentitySha256: z.literal(QWEN3_VL_PROVIDER_IDENTITY_V2_SHA256),
+    productionAdmissionAuthority: z.literal(false),
+    webRouteActivated: z.literal(false),
+    releaseSha256: z.string().regex(/^[0-9a-f]{64}$/u),
+  })
+  .superRefine((release, context) => {
+    const releaseCore = {
+      releaseVersion: release.releaseVersion,
+      releaseId: release.releaseId,
+      issuedAtMs: release.issuedAtMs,
+      expiresAtMs: release.expiresAtMs,
+      providerIdentitySha256: release.providerIdentitySha256,
+      productionAdmissionAuthority: release.productionAdmissionAuthority,
+      webRouteActivated: release.webRouteActivated,
+    };
+    if (
+      release.issuedAtMs >= release.expiresAtMs ||
+      release.expiresAtMs - release.issuedAtMs > QWEN_ACTIVE_MANUAL_RELEASE_MAX_VALIDITY_MS
+    ) {
+      context.addIssue({ code: 'custom', message: 'Manual release timing is invalid.' });
+    }
+    if (sha256Hex(Buffer.from(canonicalizeJson(releaseCore), 'utf8')) !== release.releaseSha256) {
+      context.addIssue({ code: 'custom', message: 'Manual release digest drifted.' });
+    }
+  })
+  .readonly();
+export type QwenManualReleaseBindingV1 = z.infer<typeof QwenManualReleaseBindingV1Schema>;
+
+export const QWEN_ACTIVE_AUTHORIZATION_MAX_VALIDITY_MS = 600_000 as const;
+export const QWEN_ACTIVE_MANUAL_RELEASE_MAX_VALIDITY_MS = 900_000 as const;
+export const QWEN_ACTIVE_AUTHORIZATION_MAX_ISSUANCE_AGE_MS = 60_000 as const;
+
+export const createQwenManualReleaseBindingV1 = (input: {
+  readonly releaseId: string;
+  readonly issuedAtMs: number;
+  readonly expiresAtMs: number;
+}): QwenManualReleaseBindingV1 => {
+  const releaseCore = {
+    releaseVersion: 1 as const,
+    releaseId: z
+      .string()
+      .regex(/^[A-Za-z0-9][A-Za-z0-9_.:-]{7,127}$/u)
+      .parse(input.releaseId),
+    issuedAtMs: z.int().min(0).parse(input.issuedAtMs),
+    expiresAtMs: z.int().min(1).parse(input.expiresAtMs),
+    providerIdentitySha256: QWEN3_VL_PROVIDER_IDENTITY_V2_SHA256,
+    productionAdmissionAuthority: false as const,
+    webRouteActivated: false as const,
+  };
+  return QwenManualReleaseBindingV1Schema.parse({
+    ...releaseCore,
+    releaseSha256: sha256Hex(Buffer.from(canonicalizeJson(releaseCore), 'utf8')),
+  });
+};
+
+const activeDiagnosticCatalogEntry = QWEN_FOUR_FIXTURE_CANONICAL_REQUEST_CATALOG_V1[0]!;
+export const QWEN_ACTIVE_DIAGNOSTIC_FIXTURE_ID = 'banner-person-v1' as const;
+export const QWEN_ACTIVE_DIAGNOSTIC_NORMALIZED_SOURCE_SHA256 =
+  activeDiagnosticCatalogEntry.normalizedSource.sha256;
+export const QWEN_ACTIVE_DIAGNOSTIC_ORACLE_SHA256 = activeDiagnosticCatalogEntry.oracleSha256;
+export const QWEN_ACTIVE_DIAGNOSTIC_MODEL_INPUT_SHA256 =
+  activeDiagnosticCatalogEntry.inputDigest.sha256;
+
+const QwenActiveDiagnosticCaptureV3Schema = z
+  .strictObject({
+    diagnosticVersion: z.literal(3),
+    mode: z.literal('single-fixture-response-capture'),
+    fixtureId: z.literal(QWEN_ACTIVE_DIAGNOSTIC_FIXTURE_ID),
+    providerCallsMaximum: z.literal(1),
+    retryCount: z.literal(0),
+    perCallTimeoutMs: z.literal(QWEN_SINGLE_FIXTURE_DIAGNOSTIC_CAPS_V3.perCallTimeoutMs),
+    totalWallTimeMs: z.literal(QWEN_SINGLE_FIXTURE_DIAGNOSTIC_CAPS_V3.totalWallTimeMs),
+    totalCalculatedListCostMaximumMicroUsd: z.literal('100000'),
+    diagnosticCapsSha256: z.literal(QWEN_SINGLE_FIXTURE_DIAGNOSTIC_CAPS_V3_SHA256),
+    responseArtifactRelativePath: QwenDiagnosticResponseRelativePathV1Schema,
+    diagnosticReportRelativePath: QwenDiagnosticReportRelativePathV1Schema,
+    productionAdmissionAuthority: z.literal(false),
+    webRouteActivated: z.literal(false),
+  })
+  .readonly();
+
+export const QwenBenchmarkAuthorizationPacketV4Schema = z
+  .strictObject({
+    authorizationVersion: z.literal(4),
+    authorizationId: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_.:-]{7,127}$/u),
+    gitSha: z.string().regex(/^[0-9a-f]{40}$/u),
+    mode: z.enum(['deterministic-fake', 'live-provider']),
+    purpose: z.enum([
+      'one-capped-four-fixture-sequential-zero-retry-benchmark',
+      'one-capped-single-fixture-diagnostic-response-capture',
+    ]),
+    issuedAtMs: z.int().min(0),
+    expiresAtMs: z.int().min(1),
+    serverWorkspaceId: z.literal(QWEN3_VL_SERVER_WORKSPACE_ID),
+    endpoint: z.literal(QWEN3_VL_CHAT_COMPLETIONS_ENDPOINT),
+    endpointMethod: z.literal(QWEN3_VL_ENDPOINT_METHOD),
+    apiFamily: z.literal(QWEN3_VL_API_FAMILY),
+    providerKey: z.literal(QWEN3_VL_PROVIDER_KEY),
+    requestedModelId: z.literal(QWEN3_VL_REQUESTED_MODEL_ID),
+    providerIdentitySha256: z.literal(QWEN3_VL_PROVIDER_IDENTITY_V2_SHA256),
+    secretReferenceName: z.literal(QWEN3_VL_SECRET_REFERENCE_NAME),
+    pendingCorpusCoreSha256: z.literal(QWEN_FOUR_FIXTURE_PENDING_CORPUS_CORE_SHA256),
+    humanOracleCorpusSha256: z.literal(QWEN_FOUR_FIXTURE_HUMAN_ORACLE_CORPUS_SHA256),
+    pricingEvidenceSha256: z.literal(QWEN3_VL_PRICING_EVIDENCE_V2_SHA256),
+    pricingEvidenceVersion: z.literal(2),
+    pricingEvidenceRetrievedAt: z.literal(QWEN3_VL_OFFICIAL_EVIDENCE_RETRIEVED_AT),
     pricingEvidenceRetrievedDate: z.literal(QWEN3_VL_OFFICIAL_EVIDENCE_RETRIEVED_DATE),
     providerProtocolWrapperSha256: z.literal(QWEN3_VL_PROVIDER_PROTOCOL_WRAPPER_V2_SHA256),
-    requestShapeSha256: z.literal(QWEN3_VL_REQUEST_SHAPE_SHA256),
+    requestShapeSha256: z.literal(QWEN3_VL_REQUEST_SHAPE_V3_SHA256),
     benchmarkCapsSha256: z.literal(QWEN_FOUR_FIXTURE_BENCHMARK_CAPS_SHA256),
     contentPolicyDefinitionSha256: z.literal(
       BANNER_AI_MODEL_DISPATCH_CONTENT_POLICY_V1_DEFINITION_SHA256,
     ),
     workflowDefinitionSha256: z.literal(INITIAL_BANNER_ANALYZE_WORKFLOW_REF_V1.definitionSha256),
     orderedModelInputDigestsSha256: z.literal(QWEN_FOUR_FIXTURE_ACTIVE_MODEL_INPUT_DIGESTS_SHA256),
-    diagnosticCapture: QwenDiagnosticCaptureAuthorizationV2Schema,
+    activeProviderAggregateSha256: z.literal(QWEN_FOUR_FIXTURE_ACTIVE_MODEL_INPUT_DIGESTS_SHA256),
+    diagnosticFixtureId: z.literal(QWEN_ACTIVE_DIAGNOSTIC_FIXTURE_ID),
+    diagnosticNormalizedSourceSha256: z.literal(QWEN_ACTIVE_DIAGNOSTIC_NORMALIZED_SOURCE_SHA256),
+    diagnosticOracleSha256: z.literal(QWEN_ACTIVE_DIAGNOSTIC_ORACLE_SHA256),
+    diagnosticModelInputSha256: z.literal(QWEN_ACTIVE_DIAGNOSTIC_MODEL_INPUT_SHA256),
+    manualRelease: QwenManualReleaseBindingV1Schema,
+    productionAdmissionAuthority: z.literal(false),
+    webRouteActivated: z.literal(false),
+    diagnosticCapture: QwenActiveDiagnosticCaptureV3Schema.optional(),
     executionAuthorized: z.literal(true),
   })
   .superRefine((authorization, context) => {
+    const isFourFixturePurpose =
+      authorization.purpose === 'one-capped-four-fixture-sequential-zero-retry-benchmark';
+    const isDiagnosticPurpose =
+      authorization.purpose === 'one-capped-single-fixture-diagnostic-response-capture';
+    const modePurposeRelationIsValid =
+      (authorization.mode === 'deterministic-fake' &&
+        isFourFixturePurpose &&
+        authorization.diagnosticCapture === undefined) ||
+      (authorization.mode === 'live-provider' &&
+        isDiagnosticPurpose &&
+        authorization.diagnosticCapture !== undefined);
     if (
-      authorization.mode !== 'live-provider' ||
       authorization.issuedAtMs >= authorization.expiresAtMs ||
-      authorization.endpoint !==
-        deriveQwenFrankfurtChatCompletionsEndpoint(authorization.serverWorkspaceId)
+      authorization.expiresAtMs - authorization.issuedAtMs >
+        QWEN_ACTIVE_AUTHORIZATION_MAX_VALIDITY_MS ||
+      !modePurposeRelationIsValid
     ) {
       context.addIssue({
         code: 'custom',
-        message: 'Qwen diagnostic V3 timing, mode, or derived endpoint is stale or foreign.',
+        message: 'Qwen active V4 timing or diagnostic binding drifted.',
       });
     }
   })
@@ -234,17 +417,24 @@ export type QwenBenchmarkAuthorizationPacketV2 = z.infer<
 export type QwenBenchmarkAuthorizationPacketV3 = z.infer<
   typeof QwenBenchmarkAuthorizationPacketV3Schema
 >;
+export type QwenBenchmarkAuthorizationPacketV4 = z.infer<
+  typeof QwenBenchmarkAuthorizationPacketV4Schema
+>;
 
 export interface QwenBenchmarkExecutionAuthorization {
-  readonly authorizationVersion: 2 | 3;
+  readonly authorizationVersion: 2 | 3 | 4;
   readonly authorizationId: string;
   readonly mode: 'deterministic-fake' | 'live-provider';
   readonly providerKey: typeof QWEN3_VL_PROVIDER_KEY;
   readonly requestedModelId: typeof QWEN3_VL_REQUESTED_MODEL_ID;
+  readonly gitSha: string;
+  readonly manualReleaseSha256: string;
   readonly endpoint: string;
   readonly diagnosticCapture:
     | z.infer<typeof QwenDiagnosticCaptureAuthorizationV1Schema>
     | z.infer<typeof QwenDiagnosticCaptureAuthorizationV2Schema>
+    | z.infer<typeof QwenBenchmarkAuthorizationPacketV3Schema>['diagnosticCapture']
+    | z.infer<typeof QwenBenchmarkAuthorizationPacketV4Schema>['diagnosticCapture']
     | null;
   readonly dispatchAuthority: true;
 }
@@ -263,8 +453,8 @@ export const createQwenDiagnosticAuthorizationPacketV3 = (input: {
     purpose: 'one-capped-single-fixture-diagnostic-response-capture',
     issuedAtMs: input.issuedAtMs,
     expiresAtMs: input.expiresAtMs,
-    serverWorkspaceId: QWEN3_VL_SERVER_WORKSPACE_ID,
-    endpoint: QWEN3_VL_CHAT_COMPLETIONS_ENDPOINT,
+    serverWorkspaceId: QWEN3_VL_HISTORICAL_FRANKFURT_WORKSPACE_ID,
+    endpoint: QWEN3_VL_HISTORICAL_FRANKFURT_CHAT_COMPLETIONS_ENDPOINT,
     endpointMethod: QWEN3_VL_ENDPOINT_METHOD,
     apiFamily: QWEN3_VL_API_FAMILY,
     providerKey: QWEN3_VL_PROVIDER_KEY,
@@ -272,14 +462,14 @@ export const createQwenDiagnosticAuthorizationPacketV3 = (input: {
     secretReferenceName: QWEN3_VL_SECRET_REFERENCE_NAME,
     pendingCorpusCoreSha256: QWEN_FOUR_FIXTURE_PENDING_CORPUS_CORE_SHA256,
     humanOracleCorpusSha256: QWEN_FOUR_FIXTURE_HUMAN_ORACLE_CORPUS_SHA256,
-    pricingEvidenceSha256: QWEN3_VL_PRICING_EVIDENCE_SHA256,
-    pricingEvidenceRetrievedDate: QWEN3_VL_OFFICIAL_EVIDENCE_RETRIEVED_DATE,
+    pricingEvidenceSha256: QWEN3_VL_HISTORICAL_PRICING_EVIDENCE_SHA256,
+    pricingEvidenceRetrievedDate: QWEN3_VL_HISTORICAL_EVIDENCE_RETRIEVED_DATE,
     providerProtocolWrapperSha256: QWEN3_VL_PROVIDER_PROTOCOL_WRAPPER_V2_SHA256,
-    requestShapeSha256: QWEN3_VL_REQUEST_SHAPE_SHA256,
+    requestShapeSha256: QWEN3_VL_REQUEST_SHAPE_V2_SHA256,
     benchmarkCapsSha256: QWEN_FOUR_FIXTURE_BENCHMARK_CAPS_SHA256,
     contentPolicyDefinitionSha256: BANNER_AI_MODEL_DISPATCH_CONTENT_POLICY_V1_DEFINITION_SHA256,
     workflowDefinitionSha256: INITIAL_BANNER_ANALYZE_WORKFLOW_REF_V1.definitionSha256,
-    orderedModelInputDigestsSha256: QWEN_FOUR_FIXTURE_ACTIVE_MODEL_INPUT_DIGESTS_SHA256,
+    orderedModelInputDigestsSha256: QWEN_FOUR_FIXTURE_ORDERED_MODEL_INPUT_DIGESTS_V2_SHA256,
     diagnosticCapture: {
       diagnosticVersion: 2,
       mode: 'single-fixture-response-capture',
@@ -298,8 +488,79 @@ export const createQwenDiagnosticAuthorizationPacketV3 = (input: {
     executionAuthorized: true,
   });
 
+export const createQwenDiagnosticAuthorizationPacketV4 = (input: {
+  readonly authorizationId: string;
+  readonly issuedAtMs: number;
+  readonly expiresAtMs: number;
+  readonly gitSha: string;
+  readonly responseArtifactRelativePath: string;
+  readonly diagnosticReportRelativePath: string;
+  readonly manualRelease: unknown;
+}): QwenBenchmarkAuthorizationPacketV4 => {
+  const manualRelease = QwenManualReleaseBindingV1Schema.parse(input.manualRelease);
+  return QwenBenchmarkAuthorizationPacketV4Schema.parse({
+    authorizationVersion: 4,
+    authorizationId: input.authorizationId,
+    gitSha: z
+      .string()
+      .regex(/^[0-9a-f]{40}$/u)
+      .parse(input.gitSha),
+    mode: 'live-provider',
+    purpose: 'one-capped-single-fixture-diagnostic-response-capture',
+    issuedAtMs: input.issuedAtMs,
+    expiresAtMs: input.expiresAtMs,
+    serverWorkspaceId: QWEN3_VL_SERVER_WORKSPACE_ID,
+    endpoint: QWEN3_VL_CHAT_COMPLETIONS_ENDPOINT,
+    endpointMethod: QWEN3_VL_ENDPOINT_METHOD,
+    apiFamily: QWEN3_VL_API_FAMILY,
+    providerKey: QWEN3_VL_PROVIDER_KEY,
+    requestedModelId: QWEN3_VL_REQUESTED_MODEL_ID,
+    providerIdentitySha256: QWEN3_VL_PROVIDER_IDENTITY_V2_SHA256,
+    secretReferenceName: QWEN3_VL_SECRET_REFERENCE_NAME,
+    pendingCorpusCoreSha256: QWEN_FOUR_FIXTURE_PENDING_CORPUS_CORE_SHA256,
+    humanOracleCorpusSha256: QWEN_FOUR_FIXTURE_HUMAN_ORACLE_CORPUS_SHA256,
+    pricingEvidenceSha256: QWEN3_VL_PRICING_EVIDENCE_V2_SHA256,
+    pricingEvidenceVersion: 2,
+    pricingEvidenceRetrievedAt: QWEN3_VL_OFFICIAL_EVIDENCE_RETRIEVED_AT,
+    pricingEvidenceRetrievedDate: QWEN3_VL_OFFICIAL_EVIDENCE_RETRIEVED_DATE,
+    providerProtocolWrapperSha256: QWEN3_VL_PROVIDER_PROTOCOL_WRAPPER_V2_SHA256,
+    requestShapeSha256: QWEN3_VL_REQUEST_SHAPE_V3_SHA256,
+    benchmarkCapsSha256: QWEN_FOUR_FIXTURE_BENCHMARK_CAPS_SHA256,
+    contentPolicyDefinitionSha256: BANNER_AI_MODEL_DISPATCH_CONTENT_POLICY_V1_DEFINITION_SHA256,
+    workflowDefinitionSha256: INITIAL_BANNER_ANALYZE_WORKFLOW_REF_V1.definitionSha256,
+    orderedModelInputDigestsSha256: QWEN_FOUR_FIXTURE_ACTIVE_MODEL_INPUT_DIGESTS_SHA256,
+    activeProviderAggregateSha256: QWEN_FOUR_FIXTURE_ACTIVE_MODEL_INPUT_DIGESTS_SHA256,
+    diagnosticFixtureId: QWEN_ACTIVE_DIAGNOSTIC_FIXTURE_ID,
+    diagnosticNormalizedSourceSha256: QWEN_ACTIVE_DIAGNOSTIC_NORMALIZED_SOURCE_SHA256,
+    diagnosticOracleSha256: QWEN_ACTIVE_DIAGNOSTIC_ORACLE_SHA256,
+    diagnosticModelInputSha256: QWEN_ACTIVE_DIAGNOSTIC_MODEL_INPUT_SHA256,
+    manualRelease,
+    productionAdmissionAuthority: false,
+    webRouteActivated: false,
+    diagnosticCapture: {
+      diagnosticVersion: 3,
+      mode: 'single-fixture-response-capture',
+      fixtureId: QWEN_ACTIVE_DIAGNOSTIC_FIXTURE_ID,
+      providerCallsMaximum: 1,
+      retryCount: 0,
+      perCallTimeoutMs: QWEN_SINGLE_FIXTURE_DIAGNOSTIC_CAPS_V3.perCallTimeoutMs,
+      totalWallTimeMs: QWEN_SINGLE_FIXTURE_DIAGNOSTIC_CAPS_V3.totalWallTimeMs,
+      totalCalculatedListCostMaximumMicroUsd: '100000',
+      diagnosticCapsSha256: QWEN_SINGLE_FIXTURE_DIAGNOSTIC_CAPS_V3_SHA256,
+      responseArtifactRelativePath: input.responseArtifactRelativePath,
+      diagnosticReportRelativePath: input.diagnosticReportRelativePath,
+      productionAdmissionAuthority: false,
+      webRouteActivated: false,
+    },
+    executionAuthorized: true,
+  });
+};
+
 interface PrivateAuthorizationState {
-  readonly packet: QwenBenchmarkAuthorizationPacketV2 | QwenBenchmarkAuthorizationPacketV3;
+  readonly packet:
+    | QwenBenchmarkAuthorizationPacketV2
+    | QwenBenchmarkAuthorizationPacketV3
+    | QwenBenchmarkAuthorizationPacketV4;
   readonly claimedInvocationKeys: Set<string>;
   readonly claimedFixtureIds: Set<string>;
   diagnosticReservations: QwenDiagnosticReservationSetV1 | null;
@@ -308,23 +569,29 @@ interface PrivateAuthorizationState {
 const validAuthorizations = new WeakSet<object>();
 const privateAuthorizationState = new WeakMap<object, PrivateAuthorizationState>();
 
-export const mintQwenBenchmarkExecutionAuthorization = (
+const mintValidatedQwenBenchmarkExecutionAuthorization = (
   input: unknown,
 ): QwenBenchmarkExecutionAuthorization => {
-  const activePacket = QwenBenchmarkAuthorizationPacketV3Schema.safeParse(input);
-  const historicalPacket = activePacket.success
-    ? null
-    : QwenBenchmarkAuthorizationPacketV2Schema.parse(input);
-  if (historicalPacket?.diagnosticCapture !== undefined) {
+  const activePacket = QwenBenchmarkAuthorizationPacketV4Schema.safeParse(input);
+  if (activePacket.success === false) {
+    const historicalV3 = QwenBenchmarkAuthorizationPacketV3Schema.safeParse(input);
+    const historicalPacket = historicalV3.success
+      ? historicalV3.data
+      : QwenBenchmarkAuthorizationPacketV2Schema.parse(input);
+    if (historicalPacket.diagnosticCapture !== undefined) {
+      throw new QwenSceneAnalysisError('authorization-missing');
+    }
     throw new QwenSceneAnalysisError('authorization-missing');
   }
-  const packet = activePacket.success ? activePacket.data : historicalPacket!;
+  const packet = activePacket.data;
   const authorization = Object.freeze({
     authorizationVersion: packet.authorizationVersion,
     authorizationId: packet.authorizationId,
     mode: packet.mode,
     providerKey: QWEN3_VL_PROVIDER_KEY,
     requestedModelId: QWEN3_VL_REQUESTED_MODEL_ID,
+    gitSha: packet.gitSha,
+    manualReleaseSha256: packet.manualRelease.releaseSha256,
     endpoint: packet.endpoint,
     diagnosticCapture: packet.diagnosticCapture ?? null,
     dispatchAuthority: true as const,
@@ -339,21 +606,36 @@ export const mintQwenBenchmarkExecutionAuthorization = (
   return authorization;
 };
 
+export const mintQwenBenchmarkExecutionAuthorization = (
+  input: unknown,
+): QwenBenchmarkExecutionAuthorization => {
+  const activePacket = QwenBenchmarkAuthorizationPacketV4Schema.safeParse(input);
+  if (activePacket.success && activePacket.data.mode === 'live-provider') {
+    throw new QwenSceneAnalysisError('authorization-missing');
+  }
+  return mintValidatedQwenBenchmarkExecutionAuthorization(input);
+};
+
 export const createQwenDryRunExecutionAuthorization = (input: {
   readonly nowMs: number;
   readonly serverWorkspaceId?: string;
+  readonly currentGitSha: string;
 }): QwenBenchmarkExecutionAuthorization => {
   const nowMs = z.int().min(0).parse(input.nowMs);
   const serverWorkspaceId = z
     .literal(QWEN3_VL_SERVER_WORKSPACE_ID)
     .parse(input.serverWorkspaceId ?? QWEN3_VL_SERVER_WORKSPACE_ID);
   return mintQwenBenchmarkExecutionAuthorization({
-    authorizationVersion: 2,
-    authorizationId: 'qwen.deterministic.fake.authorization.v2',
+    authorizationVersion: 4,
+    authorizationId: 'qwen.deterministic.fake.authorization.v4',
+    gitSha: z
+      .string()
+      .regex(/^[0-9a-f]{40}$/u)
+      .parse(input.currentGitSha),
     mode: 'deterministic-fake',
     purpose: 'one-capped-four-fixture-sequential-zero-retry-benchmark',
     issuedAtMs: nowMs,
-    expiresAtMs: nowMs + 600_000,
+    expiresAtMs: nowMs + QWEN_ACTIVE_AUTHORIZATION_MAX_VALIDITY_MS,
     serverWorkspaceId,
     endpoint: QWEN3_VL_CHAT_COMPLETIONS_ENDPOINT,
     endpointMethod: QWEN3_VL_ENDPOINT_METHOD,
@@ -363,14 +645,29 @@ export const createQwenDryRunExecutionAuthorization = (input: {
     secretReferenceName: QWEN3_VL_SECRET_REFERENCE_NAME,
     pendingCorpusCoreSha256: QWEN_FOUR_FIXTURE_PENDING_CORPUS_CORE_SHA256,
     humanOracleCorpusSha256: QWEN_FOUR_FIXTURE_HUMAN_ORACLE_CORPUS_SHA256,
-    pricingEvidenceSha256: QWEN3_VL_PRICING_EVIDENCE_SHA256,
+    providerIdentitySha256: QWEN3_VL_PROVIDER_IDENTITY_V2_SHA256,
+    pricingEvidenceSha256: QWEN3_VL_PRICING_EVIDENCE_V2_SHA256,
+    pricingEvidenceVersion: 2,
+    pricingEvidenceRetrievedAt: QWEN3_VL_OFFICIAL_EVIDENCE_RETRIEVED_AT,
     pricingEvidenceRetrievedDate: QWEN3_VL_OFFICIAL_EVIDENCE_RETRIEVED_DATE,
     providerProtocolWrapperSha256: QWEN3_VL_PROVIDER_PROTOCOL_WRAPPER_V2_SHA256,
-    requestShapeSha256: QWEN3_VL_REQUEST_SHAPE_SHA256,
+    requestShapeSha256: QWEN3_VL_REQUEST_SHAPE_V3_SHA256,
     benchmarkCapsSha256: QWEN_FOUR_FIXTURE_BENCHMARK_CAPS_SHA256,
     contentPolicyDefinitionSha256: BANNER_AI_MODEL_DISPATCH_CONTENT_POLICY_V1_DEFINITION_SHA256,
     workflowDefinitionSha256: INITIAL_BANNER_ANALYZE_WORKFLOW_REF_V1.definitionSha256,
     orderedModelInputDigestsSha256: QWEN_FOUR_FIXTURE_ACTIVE_MODEL_INPUT_DIGESTS_SHA256,
+    activeProviderAggregateSha256: QWEN_FOUR_FIXTURE_ACTIVE_MODEL_INPUT_DIGESTS_SHA256,
+    diagnosticFixtureId: QWEN_ACTIVE_DIAGNOSTIC_FIXTURE_ID,
+    diagnosticNormalizedSourceSha256: QWEN_ACTIVE_DIAGNOSTIC_NORMALIZED_SOURCE_SHA256,
+    diagnosticOracleSha256: QWEN_ACTIVE_DIAGNOSTIC_ORACLE_SHA256,
+    diagnosticModelInputSha256: QWEN_ACTIVE_DIAGNOSTIC_MODEL_INPUT_SHA256,
+    manualRelease: createQwenManualReleaseBindingV1({
+      releaseId: 'qwen.deterministic.fake.release.v4',
+      issuedAtMs: nowMs,
+      expiresAtMs: nowMs + 600_000,
+    }),
+    productionAdmissionAuthority: false,
+    webRouteActivated: false,
     executionAuthorized: true,
   });
 };
@@ -379,21 +676,44 @@ export const preflightQwenLiveExecutionAuthorization = (input: {
   readonly packet: unknown;
   readonly secretPresent: unknown;
   readonly nowMs: number;
+  readonly currentGitSha?: string;
 }): QwenBenchmarkExecutionAuthorization => {
   const nowMs = z.int().min(0).parse(input.nowMs);
   z.literal(true).parse(input.secretPresent);
   assertQwen3VlOfficialEvidenceFresh(nowMs);
-  const activePacket = QwenBenchmarkAuthorizationPacketV3Schema.safeParse(input.packet);
-  const packet = activePacket.success
-    ? activePacket.data
-    : QwenBenchmarkAuthorizationPacketV2Schema.parse(input.packet);
-  if (packet.mode !== 'live-provider' || nowMs < packet.issuedAtMs || nowMs >= packet.expiresAtMs) {
-    throw new QwenSceneAnalysisError('authorization-stale');
-  }
-  if (packet.diagnosticCapture !== undefined && packet.authorizationVersion !== 3) {
+  const activePacket = QwenBenchmarkAuthorizationPacketV4Schema.safeParse(input.packet);
+  if (!activePacket.success) {
     throw new QwenSceneAnalysisError('authorization-missing');
   }
-  return mintQwenBenchmarkExecutionAuthorization(packet);
+  const packet = activePacket.data;
+  if (
+    packet.gitSha === undefined ||
+    input.currentGitSha === undefined ||
+    !/^[0-9a-f]{40}$/u.test(input.currentGitSha) ||
+    packet.gitSha !== input.currentGitSha
+  ) {
+    throw new QwenSceneAnalysisError('authorization-missing');
+  }
+  const release = QwenManualReleaseBindingV1Schema.parse(
+    packet.manualRelease,
+  ) as QwenManualReleaseBindingV1;
+  if (
+    nowMs < release.issuedAtMs ||
+    nowMs >= release.expiresAtMs ||
+    nowMs - release.issuedAtMs >= QWEN_ACTIVE_AUTHORIZATION_MAX_ISSUANCE_AGE_MS ||
+    release.providerIdentitySha256 !== QWEN3_VL_PROVIDER_IDENTITY_V2_SHA256
+  ) {
+    throw new QwenSceneAnalysisError('authorization-stale');
+  }
+  if (
+    packet.mode !== 'live-provider' ||
+    nowMs < packet.issuedAtMs ||
+    nowMs - packet.issuedAtMs >= QWEN_ACTIVE_AUTHORIZATION_MAX_ISSUANCE_AGE_MS ||
+    nowMs >= packet.expiresAtMs
+  ) {
+    throw new QwenSceneAnalysisError('authorization-stale');
+  }
+  return mintValidatedQwenBenchmarkExecutionAuthorization(packet);
 };
 
 const requireAuthorizationState = (input: unknown, nowMs: number): PrivateAuthorizationState => {
@@ -404,6 +724,26 @@ const requireAuthorizationState = (input: unknown, nowMs: number): PrivateAuthor
   if (state === undefined) throw new QwenSceneAnalysisError('authorization-missing');
   if (nowMs < state.packet.issuedAtMs || nowMs >= state.packet.expiresAtMs) {
     throw new QwenSceneAnalysisError('authorization-stale');
+  }
+  if (state.packet.authorizationVersion === 4) {
+    const release = QwenManualReleaseBindingV1Schema.parse(
+      state.packet.manualRelease,
+    ) as QwenManualReleaseBindingV1;
+    if (
+      nowMs < release.issuedAtMs ||
+      nowMs >= release.expiresAtMs ||
+      release.providerIdentitySha256 !== QWEN3_VL_PROVIDER_IDENTITY_V2_SHA256
+    ) {
+      throw new QwenSceneAnalysisError('authorization-stale');
+    }
+    if (
+      state.packet.mode === 'live-provider' &&
+      (nowMs < state.packet.issuedAtMs ||
+        nowMs - state.packet.issuedAtMs >= QWEN_ACTIVE_AUTHORIZATION_MAX_ISSUANCE_AGE_MS ||
+        nowMs - release.issuedAtMs >= QWEN_ACTIVE_AUTHORIZATION_MAX_ISSUANCE_AGE_MS)
+    ) {
+      throw new QwenSceneAnalysisError('authorization-stale');
+    }
   }
   return state;
 };
@@ -554,7 +894,59 @@ export interface QwenTransportRequest {
   readonly requestBodyText: string;
   readonly timeoutMs: number;
   readonly signal: AbortSignal;
+  readonly mode: 'deterministic-fake' | 'live-provider';
+  readonly dispatchCapability: QwenTransportDispatchCapability;
 }
+
+export interface QwenTransportDispatchCapability {
+  readonly marker: 'qwen-single-use-dispatch-capability-v1';
+}
+
+interface QwenDispatchCapabilityBinding {
+  readonly authorization: QwenBenchmarkExecutionAuthorization;
+  readonly transportKind: QwenTransportPort['transportKind'];
+  readonly mode: QwenTransportRequest['mode'];
+  readonly endpoint: string;
+  readonly method: typeof QWEN3_VL_ENDPOINT_METHOD;
+  readonly requestBodyText: string;
+  readonly timeoutMs: number;
+  readonly signal: AbortSignal;
+  readonly secretPresent: boolean;
+}
+
+const dispatchCapabilityBindings = new WeakMap<object, QwenDispatchCapabilityBinding>();
+const consumedDispatchCapabilities = new WeakSet<object>();
+
+const mintQwenTransportDispatchCapability = (binding: QwenDispatchCapabilityBinding) => {
+  const capability = Object.freeze({
+    marker: 'qwen-single-use-dispatch-capability-v1' as const,
+  });
+  dispatchCapabilityBindings.set(capability, binding);
+  return capability;
+};
+
+export const consumeQwenTransportDispatchCapability = (
+  request: QwenTransportRequest,
+  expectedTransportKind: QwenTransportPort['transportKind'],
+): void => {
+  const capability = request.dispatchCapability;
+  const binding = dispatchCapabilityBindings.get(capability);
+  if (
+    binding === undefined ||
+    consumedDispatchCapabilities.has(capability) ||
+    binding.transportKind !== expectedTransportKind ||
+    binding.mode !== request.mode ||
+    binding.endpoint !== request.endpoint ||
+    binding.method !== request.method ||
+    binding.requestBodyText !== request.requestBodyText ||
+    binding.timeoutMs !== request.timeoutMs ||
+    binding.signal !== request.signal ||
+    binding.secretPresent !== (typeof request.secret === 'string' && request.secret.length > 0)
+  ) {
+    throw new QwenSceneAnalysisError('authorization-missing');
+  }
+  consumedDispatchCapabilities.add(capability);
+};
 
 export interface QwenTransportResponse {
   readonly status: number;
@@ -740,7 +1132,9 @@ export const createQwen3VlSceneAnalysisAdapter = (input: {
       const fixtureId = canonicalRequest.fixtureId;
       const diagnosticCapture = authorizationState.packet.diagnosticCapture ?? null;
       const activeDiagnostic =
-        authorizationState.packet.authorizationVersion === 3 && diagnosticCapture !== null;
+        (authorizationState.packet.authorizationVersion === 3 ||
+          authorizationState.packet.authorizationVersion === 4) &&
+        diagnosticCapture !== null;
       if (diagnosticCapture !== null && fixtureId !== diagnosticCapture.fixtureId) {
         throw new QwenSceneAnalysisError('authorization-missing');
       }
@@ -794,7 +1188,7 @@ export const createQwen3VlSceneAnalysisAdapter = (input: {
       );
       const dispatchNowMs = z.int().min(0).parse(clock.nowEpochMs());
       const timeoutMs = Math.min(
-        activeDiagnostic ? QWEN_SINGLE_FIXTURE_DIAGNOSTIC_CAPS_V2.perCallTimeoutMs : 60_000,
+        activeDiagnostic ? QWEN_SINGLE_FIXTURE_DIAGNOSTIC_CAPS_V3.perCallTimeoutMs : 60_000,
         context.deadlineAtMs - dispatchNowMs,
       );
       if (timeoutMs <= 0) throw new QwenSceneAnalysisError('timeout');
@@ -819,6 +1213,18 @@ export const createQwen3VlSceneAnalysisAdapter = (input: {
       pollWithUnref.unref?.();
       const elapsedLatencyMs = (): number =>
         Math.max(0, Math.ceil(clock.nowMonotonicMs() - startedAt));
+      requireAuthorizationState(analyzeInput.authorization, dispatchNowMs);
+      const dispatchCapability = mintQwenTransportDispatchCapability({
+        authorization: analyzeInput.authorization!,
+        transportKind: transport.transportKind,
+        mode: authorizationState.packet.mode,
+        endpoint: authorizationState.packet.endpoint,
+        method: QWEN3_VL_ENDPOINT_METHOD,
+        requestBodyText,
+        timeoutMs,
+        signal: controller.signal,
+        secretPresent: typeof analyzeInput.secret === 'string' && analyzeInput.secret.length > 0,
+      });
       let transportResponse: QwenTransportResponse;
       try {
         transportResponse = await transport.dispatch({
@@ -828,6 +1234,8 @@ export const createQwen3VlSceneAnalysisAdapter = (input: {
           requestBodyText,
           timeoutMs,
           signal: controller.signal,
+          mode: authorizationState.packet.mode,
+          dispatchCapability,
         });
       } catch (error) {
         const accounting = indeterminateAccounting(elapsedLatencyMs());
