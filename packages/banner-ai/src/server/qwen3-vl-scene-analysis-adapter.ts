@@ -31,6 +31,8 @@ import {
   QWEN_FOUR_FIXTURE_BENCHMARK_CAPS_SHA256,
   QWEN_FOUR_FIXTURE_HUMAN_ORACLE_CORPUS_SHA256,
   QWEN_FOUR_FIXTURE_PENDING_CORPUS_CORE_SHA256,
+  QWEN_SINGLE_FIXTURE_DIAGNOSTIC_CAPS_V2,
+  QWEN_SINGLE_FIXTURE_DIAGNOSTIC_CAPS_V2_SHA256,
   assertQwen3VlOfficialEvidenceFresh,
   calculateQwen3VlListCostMicros,
   deriveQwenFrankfurtChatCompletionsEndpoint,
@@ -61,7 +63,7 @@ import {
   type QwenDiagnosticReservationSetV1,
 } from './qwen3-vl-response-diagnostics.js';
 
-const QwenDiagnosticCaptureAuthorizationV1Schema = z
+export const QwenDiagnosticCaptureAuthorizationV1Schema = z
   .strictObject({
     diagnosticVersion: z.literal(1),
     mode: z.literal('single-fixture-response-capture'),
@@ -88,7 +90,7 @@ const QwenDiagnosticCaptureAuthorizationV1Schema = z
   })
   .readonly();
 
-const QwenBenchmarkAuthorizationPacketV2Schema = z
+export const QwenBenchmarkAuthorizationPacketV2Schema = z
   .strictObject({
     authorizationVersion: z.literal(2),
     authorizationId: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_.:-]{7,127}$/u),
@@ -138,23 +140,166 @@ const QwenBenchmarkAuthorizationPacketV2Schema = z
   })
   .readonly();
 
+export const QwenDiagnosticCaptureAuthorizationV2Schema = z
+  .strictObject({
+    diagnosticVersion: z.literal(2),
+    mode: z.literal('single-fixture-response-capture'),
+    fixtureId: z.literal('banner-person-v1'),
+    providerCallsMaximum: z.literal(1),
+    retryCount: z.literal(0),
+    perCallTimeoutMs: z.literal(QWEN_SINGLE_FIXTURE_DIAGNOSTIC_CAPS_V2.perCallTimeoutMs),
+    totalWallTimeMs: z.literal(QWEN_SINGLE_FIXTURE_DIAGNOSTIC_CAPS_V2.totalWallTimeMs),
+    totalCalculatedListCostMaximumMicroUsd: z.literal('50000'),
+    diagnosticCapsSha256: z.literal(QWEN_SINGLE_FIXTURE_DIAGNOSTIC_CAPS_V2_SHA256),
+    responseArtifactRelativePath: QwenDiagnosticResponseRelativePathV1Schema,
+    diagnosticReportRelativePath: QwenDiagnosticReportRelativePathV1Schema,
+    productionAdmissionAuthority: z.literal(false),
+    webRouteActivated: z.literal(false),
+  })
+  .superRefine((diagnostic, context) => {
+    if (
+      diagnostic.perCallTimeoutMs !== QWEN_SINGLE_FIXTURE_DIAGNOSTIC_CAPS_V2.perCallTimeoutMs ||
+      diagnostic.totalWallTimeMs !== QWEN_SINGLE_FIXTURE_DIAGNOSTIC_CAPS_V2.totalWallTimeMs ||
+      diagnostic.totalCalculatedListCostMaximumMicroUsd !== '50000' ||
+      diagnostic.diagnosticCapsSha256 !== QWEN_SINGLE_FIXTURE_DIAGNOSTIC_CAPS_V2_SHA256
+    ) {
+      context.addIssue({
+        code: 'custom',
+        message: 'Qwen diagnostic caps are not exact active revision V2.',
+      });
+    }
+    if (
+      diagnostic.responseArtifactRelativePath === diagnostic.diagnosticReportRelativePath ||
+      diagnostic.responseArtifactRelativePath.endsWith('qwen3-vl-four-fixture-benchmark.json') ||
+      diagnostic.diagnosticReportRelativePath.endsWith('qwen3-vl-four-fixture-benchmark.json') ||
+      diagnostic.responseArtifactRelativePath.endsWith('qwen-live-execution-authorization.json') ||
+      diagnostic.diagnosticReportRelativePath.endsWith('qwen-live-execution-authorization.json')
+    ) {
+      context.addIssue({
+        code: 'custom',
+        message: 'Qwen diagnostic paths must be unique and new.',
+      });
+    }
+  })
+  .readonly();
+
+export const QwenBenchmarkAuthorizationPacketV3Schema = z
+  .strictObject({
+    authorizationVersion: z.literal(3),
+    authorizationId: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_.:-]{7,127}$/u),
+    mode: z.enum(['deterministic-fake', 'live-provider']),
+    purpose: z.literal('one-capped-single-fixture-diagnostic-response-capture'),
+    issuedAtMs: z.int().min(0),
+    expiresAtMs: z.int().min(1),
+    serverWorkspaceId: z.literal(QWEN3_VL_SERVER_WORKSPACE_ID),
+    endpoint: z.string().url(),
+    endpointMethod: z.literal(QWEN3_VL_ENDPOINT_METHOD),
+    apiFamily: z.literal(QWEN3_VL_API_FAMILY),
+    providerKey: z.literal(QWEN3_VL_PROVIDER_KEY),
+    requestedModelId: z.literal(QWEN3_VL_REQUESTED_MODEL_ID),
+    secretReferenceName: z.literal(QWEN3_VL_SECRET_REFERENCE_NAME),
+    pendingCorpusCoreSha256: z.literal(QWEN_FOUR_FIXTURE_PENDING_CORPUS_CORE_SHA256),
+    humanOracleCorpusSha256: z.literal(QWEN_FOUR_FIXTURE_HUMAN_ORACLE_CORPUS_SHA256),
+    pricingEvidenceSha256: z.literal(QWEN3_VL_PRICING_EVIDENCE_SHA256),
+    pricingEvidenceRetrievedDate: z.literal(QWEN3_VL_OFFICIAL_EVIDENCE_RETRIEVED_DATE),
+    providerProtocolWrapperSha256: z.literal(QWEN3_VL_PROVIDER_PROTOCOL_WRAPPER_V2_SHA256),
+    requestShapeSha256: z.literal(QWEN3_VL_REQUEST_SHAPE_SHA256),
+    benchmarkCapsSha256: z.literal(QWEN_FOUR_FIXTURE_BENCHMARK_CAPS_SHA256),
+    contentPolicyDefinitionSha256: z.literal(
+      BANNER_AI_MODEL_DISPATCH_CONTENT_POLICY_V1_DEFINITION_SHA256,
+    ),
+    workflowDefinitionSha256: z.literal(INITIAL_BANNER_ANALYZE_WORKFLOW_REF_V1.definitionSha256),
+    orderedModelInputDigestsSha256: z.literal(QWEN_FOUR_FIXTURE_ACTIVE_MODEL_INPUT_DIGESTS_SHA256),
+    diagnosticCapture: QwenDiagnosticCaptureAuthorizationV2Schema,
+    executionAuthorized: z.literal(true),
+  })
+  .superRefine((authorization, context) => {
+    if (
+      authorization.mode !== 'live-provider' ||
+      authorization.issuedAtMs >= authorization.expiresAtMs ||
+      authorization.endpoint !==
+        deriveQwenFrankfurtChatCompletionsEndpoint(authorization.serverWorkspaceId)
+    ) {
+      context.addIssue({
+        code: 'custom',
+        message: 'Qwen diagnostic V3 timing, mode, or derived endpoint is stale or foreign.',
+      });
+    }
+  })
+  .readonly();
+
 export type QwenBenchmarkAuthorizationPacketV2 = z.infer<
   typeof QwenBenchmarkAuthorizationPacketV2Schema
 >;
+export type QwenBenchmarkAuthorizationPacketV3 = z.infer<
+  typeof QwenBenchmarkAuthorizationPacketV3Schema
+>;
 
 export interface QwenBenchmarkExecutionAuthorization {
-  readonly authorizationVersion: 2;
+  readonly authorizationVersion: 2 | 3;
   readonly authorizationId: string;
   readonly mode: 'deterministic-fake' | 'live-provider';
   readonly providerKey: typeof QWEN3_VL_PROVIDER_KEY;
   readonly requestedModelId: typeof QWEN3_VL_REQUESTED_MODEL_ID;
   readonly endpoint: string;
-  readonly diagnosticCapture: z.infer<typeof QwenDiagnosticCaptureAuthorizationV1Schema> | null;
+  readonly diagnosticCapture:
+    | z.infer<typeof QwenDiagnosticCaptureAuthorizationV1Schema>
+    | z.infer<typeof QwenDiagnosticCaptureAuthorizationV2Schema>
+    | null;
   readonly dispatchAuthority: true;
 }
 
+export const createQwenDiagnosticAuthorizationPacketV3 = (input: {
+  readonly authorizationId: string;
+  readonly issuedAtMs: number;
+  readonly expiresAtMs: number;
+  readonly responseArtifactRelativePath: string;
+  readonly diagnosticReportRelativePath: string;
+}): QwenBenchmarkAuthorizationPacketV3 =>
+  QwenBenchmarkAuthorizationPacketV3Schema.parse({
+    authorizationVersion: 3,
+    authorizationId: input.authorizationId,
+    mode: 'live-provider',
+    purpose: 'one-capped-single-fixture-diagnostic-response-capture',
+    issuedAtMs: input.issuedAtMs,
+    expiresAtMs: input.expiresAtMs,
+    serverWorkspaceId: QWEN3_VL_SERVER_WORKSPACE_ID,
+    endpoint: QWEN3_VL_CHAT_COMPLETIONS_ENDPOINT,
+    endpointMethod: QWEN3_VL_ENDPOINT_METHOD,
+    apiFamily: QWEN3_VL_API_FAMILY,
+    providerKey: QWEN3_VL_PROVIDER_KEY,
+    requestedModelId: QWEN3_VL_REQUESTED_MODEL_ID,
+    secretReferenceName: QWEN3_VL_SECRET_REFERENCE_NAME,
+    pendingCorpusCoreSha256: QWEN_FOUR_FIXTURE_PENDING_CORPUS_CORE_SHA256,
+    humanOracleCorpusSha256: QWEN_FOUR_FIXTURE_HUMAN_ORACLE_CORPUS_SHA256,
+    pricingEvidenceSha256: QWEN3_VL_PRICING_EVIDENCE_SHA256,
+    pricingEvidenceRetrievedDate: QWEN3_VL_OFFICIAL_EVIDENCE_RETRIEVED_DATE,
+    providerProtocolWrapperSha256: QWEN3_VL_PROVIDER_PROTOCOL_WRAPPER_V2_SHA256,
+    requestShapeSha256: QWEN3_VL_REQUEST_SHAPE_SHA256,
+    benchmarkCapsSha256: QWEN_FOUR_FIXTURE_BENCHMARK_CAPS_SHA256,
+    contentPolicyDefinitionSha256: BANNER_AI_MODEL_DISPATCH_CONTENT_POLICY_V1_DEFINITION_SHA256,
+    workflowDefinitionSha256: INITIAL_BANNER_ANALYZE_WORKFLOW_REF_V1.definitionSha256,
+    orderedModelInputDigestsSha256: QWEN_FOUR_FIXTURE_ACTIVE_MODEL_INPUT_DIGESTS_SHA256,
+    diagnosticCapture: {
+      diagnosticVersion: 2,
+      mode: 'single-fixture-response-capture',
+      fixtureId: 'banner-person-v1',
+      providerCallsMaximum: 1,
+      retryCount: 0,
+      perCallTimeoutMs: QWEN_SINGLE_FIXTURE_DIAGNOSTIC_CAPS_V2.perCallTimeoutMs,
+      totalWallTimeMs: QWEN_SINGLE_FIXTURE_DIAGNOSTIC_CAPS_V2.totalWallTimeMs,
+      totalCalculatedListCostMaximumMicroUsd: '50000',
+      diagnosticCapsSha256: QWEN_SINGLE_FIXTURE_DIAGNOSTIC_CAPS_V2_SHA256,
+      responseArtifactRelativePath: input.responseArtifactRelativePath,
+      diagnosticReportRelativePath: input.diagnosticReportRelativePath,
+      productionAdmissionAuthority: false,
+      webRouteActivated: false,
+    },
+    executionAuthorized: true,
+  });
+
 interface PrivateAuthorizationState {
-  readonly packet: QwenBenchmarkAuthorizationPacketV2;
+  readonly packet: QwenBenchmarkAuthorizationPacketV2 | QwenBenchmarkAuthorizationPacketV3;
   readonly claimedInvocationKeys: Set<string>;
   readonly claimedFixtureIds: Set<string>;
   diagnosticReservations: QwenDiagnosticReservationSetV1 | null;
@@ -166,9 +311,16 @@ const privateAuthorizationState = new WeakMap<object, PrivateAuthorizationState>
 export const mintQwenBenchmarkExecutionAuthorization = (
   input: unknown,
 ): QwenBenchmarkExecutionAuthorization => {
-  const packet = QwenBenchmarkAuthorizationPacketV2Schema.parse(input);
+  const activePacket = QwenBenchmarkAuthorizationPacketV3Schema.safeParse(input);
+  const historicalPacket = activePacket.success
+    ? null
+    : QwenBenchmarkAuthorizationPacketV2Schema.parse(input);
+  if (historicalPacket?.diagnosticCapture !== undefined) {
+    throw new QwenSceneAnalysisError('authorization-missing');
+  }
+  const packet = activePacket.success ? activePacket.data : historicalPacket!;
   const authorization = Object.freeze({
-    authorizationVersion: 2 as const,
+    authorizationVersion: packet.authorizationVersion,
     authorizationId: packet.authorizationId,
     mode: packet.mode,
     providerKey: QWEN3_VL_PROVIDER_KEY,
@@ -231,9 +383,15 @@ export const preflightQwenLiveExecutionAuthorization = (input: {
   const nowMs = z.int().min(0).parse(input.nowMs);
   z.literal(true).parse(input.secretPresent);
   assertQwen3VlOfficialEvidenceFresh(nowMs);
-  const packet = QwenBenchmarkAuthorizationPacketV2Schema.parse(input.packet);
+  const activePacket = QwenBenchmarkAuthorizationPacketV3Schema.safeParse(input.packet);
+  const packet = activePacket.success
+    ? activePacket.data
+    : QwenBenchmarkAuthorizationPacketV2Schema.parse(input.packet);
   if (packet.mode !== 'live-provider' || nowMs < packet.issuedAtMs || nowMs >= packet.expiresAtMs) {
     throw new QwenSceneAnalysisError('authorization-stale');
+  }
+  if (packet.diagnosticCapture !== undefined && packet.authorizationVersion !== 3) {
+    throw new QwenSceneAnalysisError('authorization-missing');
   }
   return mintQwenBenchmarkExecutionAuthorization(packet);
 };
@@ -413,9 +571,23 @@ export interface QwenAdapterClockPort {
   nowMonotonicMs(): number;
 }
 
+export interface QwenAdapterTimerPort {
+  setTimeout(handler: () => void, delayMs: number): ReturnType<typeof setTimeout>;
+  clearTimeout(handle: ReturnType<typeof setTimeout>): void;
+  setInterval(handler: () => void, delayMs: number): ReturnType<typeof setInterval>;
+  clearInterval(handle: ReturnType<typeof setInterval>): void;
+}
+
 const defaultClock: QwenAdapterClockPort = Object.freeze({
   nowEpochMs: () => Date.now(),
   nowMonotonicMs: () => performance.now(),
+});
+
+const defaultTimers: QwenAdapterTimerPort = Object.freeze({
+  setTimeout: (handler: () => void, delayMs: number) => setTimeout(handler, delayMs),
+  clearTimeout: (handle: ReturnType<typeof setTimeout>) => clearTimeout(handle),
+  setInterval: (handler: () => void, delayMs: number) => setInterval(handler, delayMs),
+  clearInterval: (handle: ReturnType<typeof setInterval>) => clearInterval(handle),
 });
 
 const indeterminateAccounting = (latencyMs: number): QwenAttemptAccounting =>
@@ -494,9 +666,11 @@ const cancellationError = (): QwenSceneAnalysisError => new QwenSceneAnalysisErr
 export const createQwen3VlSceneAnalysisAdapter = (input: {
   readonly transport: QwenTransportPort;
   readonly clock?: QwenAdapterClockPort;
+  readonly timers?: QwenAdapterTimerPort;
 }) => {
   const transport = input.transport;
   const clock = input.clock ?? defaultClock;
+  const timers = input.timers ?? defaultTimers;
   return Object.freeze({
     adapterVersion: 1 as const,
     providerKey: QWEN3_VL_PROVIDER_KEY,
@@ -565,12 +739,18 @@ export const createQwen3VlSceneAnalysisAdapter = (input: {
       }
       const fixtureId = canonicalRequest.fixtureId;
       const diagnosticCapture = authorizationState.packet.diagnosticCapture ?? null;
+      const activeDiagnostic =
+        authorizationState.packet.authorizationVersion === 3 && diagnosticCapture !== null;
+      if (diagnosticCapture !== null && fixtureId !== diagnosticCapture.fixtureId) {
+        throw new QwenSceneAnalysisError('authorization-missing');
+      }
       if (
         diagnosticCapture !== null &&
-        (fixtureId !== diagnosticCapture.fixtureId ||
-          authorizationState.claimedFixtureIds.size >= diagnosticCapture.providerCallsMaximum ||
-          authorizationState.diagnosticReservations === null)
+        authorizationState.claimedFixtureIds.size >= diagnosticCapture.providerCallsMaximum
       ) {
+        throw new QwenSceneAnalysisError('duplicate-invocation');
+      }
+      if (diagnosticCapture !== null && authorizationState.diagnosticReservations === null) {
         throw new QwenSceneAnalysisError('authorization-missing');
       }
       if (authorizationState.diagnosticReservations !== null) {
@@ -609,26 +789,34 @@ export const createQwen3VlSceneAnalysisAdapter = (input: {
       authorizationState.claimedInvocationKeys.add(invocationKey);
       authorizationState.claimedFixtureIds.add(fixtureId);
 
-      const timeoutMs = Math.min(60_000, context.deadlineAtMs - nowMs);
-      if (timeoutMs <= 0) throw new QwenSceneAnalysisError('timeout');
       const requestBodyText = JSON.stringify(
         buildPrivateRequestBody(analyzeInput.normalizedImageBytes),
       );
+      const dispatchNowMs = z.int().min(0).parse(clock.nowEpochMs());
+      const timeoutMs = Math.min(
+        activeDiagnostic ? QWEN_SINGLE_FIXTURE_DIAGNOSTIC_CAPS_V2.perCallTimeoutMs : 60_000,
+        context.deadlineAtMs - dispatchNowMs,
+      );
+      if (timeoutMs <= 0) throw new QwenSceneAnalysisError('timeout');
       const controller = new AbortController();
+      const startedAt = clock.nowMonotonicMs();
       let termination: 'cancellation' | 'timeout' | null = null;
-      const timeout = setTimeout(() => {
+      const timeout = timers.setTimeout(() => {
         termination = 'timeout';
         controller.abort();
       }, timeoutMs);
-      timeout.unref?.();
-      const cancellationPoll = setInterval(() => {
+      const timeoutWithUnref = timeout as ReturnType<typeof setTimeout> & { unref?: () => void };
+      timeoutWithUnref.unref?.();
+      const cancellationPoll = timers.setInterval(() => {
         if (context.cancellation.cancelled) {
           termination = 'cancellation';
           controller.abort();
         }
       }, 25);
-      cancellationPoll.unref?.();
-      const startedAt = clock.nowMonotonicMs();
+      const pollWithUnref = cancellationPoll as ReturnType<typeof setInterval> & {
+        unref?: () => void;
+      };
+      pollWithUnref.unref?.();
       const elapsedLatencyMs = (): number =>
         Math.max(0, Math.ceil(clock.nowMonotonicMs() - startedAt));
       let transportResponse: QwenTransportResponse;
@@ -657,10 +845,15 @@ export const createQwen3VlSceneAnalysisAdapter = (input: {
         }
         throw new QwenSceneAnalysisError('transport-failure', accounting);
       } finally {
-        clearTimeout(timeout);
-        clearInterval(cancellationPoll);
+        timers.clearTimeout(timeout);
+        timers.clearInterval(cancellationPoll);
       }
-      const latencyMs = elapsedLatencyMs();
+      const rawElapsedMs = clock.nowMonotonicMs() - startedAt;
+      const latencyMs = Math.max(0, Math.ceil(rawElapsedMs));
+      if (termination === 'timeout' || rawElapsedMs >= timeoutMs) {
+        controller.abort();
+        throw new QwenSceneAnalysisError('timeout', indeterminateAccounting(latencyMs));
+      }
       if (context.cancellation.cancelled) {
         throw new QwenSceneAnalysisError('cancellation', indeterminateAccounting(latencyMs));
       }

@@ -37,6 +37,8 @@ import {
   deriveQwenFrankfurtChatCompletionsEndpoint,
   type QwenProviderUsageV1,
 } from '../src/evaluation/qwen3-vl-candidate-evidence.js';
+import { SCENE_ANALYSIS_OCR_OUTPUT_JSON_SCHEMA_SHA256 } from '../src/evaluation/openai-scene-analysis-output.js';
+import { SCENE_ANALYSIS_PROMPT_V1 } from '../src/evaluation/prompt-catalog.js';
 import {
   createDeterministicOracleMatchingQwenOutputV1,
   getQwenFourFixtureEvaluationBindingsV1,
@@ -185,6 +187,18 @@ describe('Qwen3-VL production adapter boundary', () => {
     expect(QWEN3_VL_REQUEST_SHAPE_SHA256).toBe(QWEN3_VL_REQUEST_SHAPE_V2_SHA256);
     expect(QWEN3_VL_REQUEST_SHAPE_V2_SHA256).toBe(
       '6a540409b86a7b7e7c677ddc5fb5bd3d9bab7ee35758a1da3679ade49af8fb27',
+    );
+    expect(SCENE_ANALYSIS_PROMPT_V1.contentSha256).toBe(
+      '5cc311b7b353e06c61bcdf840b40dff9d35de0aea12851ffa18a654177917227',
+    );
+    expect(QWEN_FOUR_FIXTURE_ACTIVE_MODEL_INPUT_DIGESTS_SHA256).toBe(
+      '1f2f53250b1032e12676041439e40f06532d8a69fb68d2cd00f5e388eaac5e2c',
+    );
+    expect(SCENE_ANALYSIS_OCR_OUTPUT_JSON_SCHEMA_SHA256).toBe(
+      '2bdfd91875bc097b6bac93eadad924cdfb89b9fe9dc4f8293f494c721179dc9d',
+    );
+    expect(QWEN_FOUR_FIXTURE_BENCHMARK_CAPS_SHA256).toBe(
+      '5db7c7525440174bcbedbe6a1ab3e335a7ac9211e350fb8889ede111c0953c48',
     );
     expect(QWEN3_VL_PROVIDER_PROTOCOL_WRAPPER_V1_SHA256).toBe(
       '339186794127e07e8be27959c07400e04e4b14f528d56da259613ce8942d2ab5',

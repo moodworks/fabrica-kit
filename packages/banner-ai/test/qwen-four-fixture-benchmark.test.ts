@@ -29,6 +29,11 @@ import {
   QWEN_FOUR_FIXTURE_BENCHMARK_CAPS_V1,
   QWEN_FOUR_FIXTURE_HUMAN_ORACLE_CORPUS_SHA256,
   QWEN_FOUR_FIXTURE_PENDING_CORPUS_CORE_SHA256,
+  QWEN_SINGLE_FIXTURE_DIAGNOSTIC_CAPS_V1,
+  QWEN_SINGLE_FIXTURE_DIAGNOSTIC_CAPS_V1_SHA256,
+  QWEN_SINGLE_FIXTURE_DIAGNOSTIC_CAPS_V2,
+  QWEN_SINGLE_FIXTURE_DIAGNOSTIC_CAPS_V2_SHA256,
+  calculateQwen3VlListCostMicros,
   deriveQwenFrankfurtChatCompletionsEndpoint,
 } from '../src/evaluation/qwen3-vl-candidate-evidence.js';
 import {
@@ -385,6 +390,44 @@ describe('Qwen four-fixture benchmark runner', () => {
     expect(BigInt(QWEN_FOUR_FIXTURE_BENCHMARK_CAPS_V1.totalCalculatedListCostMaximumMicroUsd)).toBe(
       500_000n,
     );
+  });
+
+  it('pins both versioned diagnostic cap revisions and their canonical digests', () => {
+    expect(QWEN_SINGLE_FIXTURE_DIAGNOSTIC_CAPS_V1_SHA256).toBe(
+      '6f0df176ddae07d69e244d5ff9cb696f92f4a53d0a8f8150909dbd8c11451fa0',
+    );
+    expect(QWEN_SINGLE_FIXTURE_DIAGNOSTIC_CAPS_V2_SHA256).toBe(
+      '4099960771c16079383d6f520633265c3113a5fd4b121154afeda5935314b81c',
+    );
+    expect(QWEN_SINGLE_FIXTURE_DIAGNOSTIC_CAPS_V1).toMatchObject({
+      diagnosticCapsVersion: 1,
+      perCallTimeoutMs: 60_000,
+      totalWallTimeMs: 120_000,
+      totalCalculatedListCostMaximumMicroUsd: '50000',
+      productionAdmissionAuthority: false,
+      webRouteActivated: false,
+    });
+    expect(QWEN_SINGLE_FIXTURE_DIAGNOSTIC_CAPS_V2).toMatchObject({
+      diagnosticCapsVersion: 2,
+      perCallTimeoutMs: 120_000,
+      totalWallTimeMs: 150_000,
+      totalCalculatedListCostMaximumMicroUsd: '50000',
+      productionAdmissionAuthority: false,
+      webRouteActivated: false,
+    });
+    expect(sha256Hex(Buffer.from(canonicalizeJson(QWEN_SINGLE_FIXTURE_DIAGNOSTIC_CAPS_V1)))).toBe(
+      QWEN_SINGLE_FIXTURE_DIAGNOSTIC_CAPS_V1_SHA256,
+    );
+    expect(sha256Hex(Buffer.from(canonicalizeJson(QWEN_SINGLE_FIXTURE_DIAGNOSTIC_CAPS_V2)))).toBe(
+      QWEN_SINGLE_FIXTURE_DIAGNOSTIC_CAPS_V2_SHA256,
+    );
+    expect(
+      calculateQwen3VlListCostMicros({
+        prompt_tokens: 256_000,
+        completion_tokens: 4_096,
+        total_tokens: 260_096,
+      }).calculatedListCostMicros,
+    ).toBe('46296');
   });
 
   it('fails live authorization preflight on absent authority, stale time, or identity/cap drift', () => {

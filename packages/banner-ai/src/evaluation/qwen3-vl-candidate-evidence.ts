@@ -232,6 +232,49 @@ export const QWEN_FOUR_FIXTURE_BENCHMARK_CAPS_SHA256 = sha256Hex(
   Buffer.from(canonicalizeJson(QWEN_FOUR_FIXTURE_BENCHMARK_CAPS_V1), 'utf8'),
 );
 
+/** Historical one-person diagnostic limits. This revision is parseable evidence only. */
+export const QWEN_SINGLE_FIXTURE_DIAGNOSTIC_CAPS_V1 = Object.freeze({
+  diagnosticCapsVersion: 1 as const,
+  mode: 'single-fixture-response-capture' as const,
+  fixtureId: 'banner-person-v1' as const,
+  providerCallsMaximum: 1 as const,
+  retryCount: 0 as const,
+  perCallTimeoutMs: 60_000 as const,
+  totalWallTimeMs: 120_000 as const,
+  totalCalculatedListCostMaximumMicroUsd: '50000' as const,
+  productionAdmissionAuthority: false as const,
+  webRouteActivated: false as const,
+});
+
+export const QWEN_SINGLE_FIXTURE_DIAGNOSTIC_CAPS_V1_SHA256 =
+  '6f0df176ddae07d69e244d5ff9cb696f92f4a53d0a8f8150909dbd8c11451fa0' as const;
+
+/** Active diagnostic limits. A new authorization must bind this exact revision. */
+export const QWEN_SINGLE_FIXTURE_DIAGNOSTIC_CAPS_V2 = Object.freeze({
+  diagnosticCapsVersion: 2 as const,
+  mode: 'single-fixture-response-capture' as const,
+  fixtureId: 'banner-person-v1' as const,
+  providerCallsMaximum: 1 as const,
+  retryCount: 0 as const,
+  perCallTimeoutMs: 120_000 as const,
+  totalWallTimeMs: 150_000 as const,
+  totalCalculatedListCostMaximumMicroUsd: '50000' as const,
+  productionAdmissionAuthority: false as const,
+  webRouteActivated: false as const,
+});
+
+export const QWEN_SINGLE_FIXTURE_DIAGNOSTIC_CAPS_V2_SHA256 =
+  '4099960771c16079383d6f520633265c3113a5fd4b121154afeda5935314b81c' as const;
+
+for (const [caps, expected, label] of [
+  [QWEN_SINGLE_FIXTURE_DIAGNOSTIC_CAPS_V1, QWEN_SINGLE_FIXTURE_DIAGNOSTIC_CAPS_V1_SHA256, 'V1'],
+  [QWEN_SINGLE_FIXTURE_DIAGNOSTIC_CAPS_V2, QWEN_SINGLE_FIXTURE_DIAGNOSTIC_CAPS_V2_SHA256, 'V2'],
+] as const) {
+  if (sha256Hex(Buffer.from(canonicalizeJson(caps), 'utf8')) !== expected) {
+    throw new TypeError(`Historical Qwen diagnostic caps ${label} evidence drifted.`);
+  }
+}
+
 export const QWEN_FOUR_FIXTURE_PENDING_CORPUS_CORE_SHA256 =
   'fa3ecc650a14611e6274b123b65ee7fcf34fe9443cb1125655b70393195e7f51' as const;
 export const QWEN_FOUR_FIXTURE_HUMAN_ORACLE_CORPUS_SHA256 =

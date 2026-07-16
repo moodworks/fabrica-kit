@@ -220,6 +220,30 @@ same-handle response/report finalization. Response and report writers retain tho
 reopen the paths. A collision, escape, symlink, parent rename/replacement, containment drift, file
 swap, mode drift, or unsafe parent therefore fails closed.
 
+Diagnostic caps are separately versioned from the unchanged four-fixture benchmark caps. Historical
+diagnostic V1 is parseable evidence only (60,000 ms call / 120,000 ms total), digest
+`6f0df176ddae07d69e244d5ff9cb696f92f4a53d0a8f8150909dbd8c11451fa0`; active diagnostic V2
+requires its own canonical cap digest
+`4099960771c16079383d6f520633265c3113a5fd4b121154afeda5935314b81c` and exact 120,000 ms call / 150,000 ms total limits, one call,
+zero retries, and a 50,000 micro-USD ceiling. Its V3 authorization and report retain the four-fixture
+binding as historical context and bind the diagnostic digest separately; old V2 diagnostic packets
+cannot dispatch. Diagnostic deadlines use strict equality as timeout, abort the request, and leave
+missing usage indeterminate. The exact worst-case reservation is 256,000 prompt plus 4,096 completion
+tokens: `ceil(42240 + 4055.04) = 46296` micro-USD, below the exact 50,000 ceiling. The concise
+non-authorizing timeout evidence is recorded below.
+
+### c0004 historical evidence
+
+- Git SHA `464ae5ac6efcf9aba02f298fc2c50179df7b87a0`
+- `banner-person-v1`
+- calls `1`
+- retries `0`
+- terminal timeout
+- no response artifact
+- indeterminate accounting
+- report digest `43f4910cecaec179447ae851d7eb03638d84616307986a6cbfc4455dea7ba4b5`
+- production `false`
+
 The response artifact is a self-digesting sanitized structural projection that retains only
 allowlisted fields and safe leaves needed to reproduce the strict boundary result. Wrong-typed
 objects, arrays, and strings become type-preserving placeholders. Valid assistant JSON is projected

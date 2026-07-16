@@ -4,6 +4,7 @@ import {
   QWEN3_VL_CHAT_COMPLETIONS_ENDPOINT,
   QWEN3_VL_ENDPOINT_METHOD,
   QWEN3_VL_SECRET_REFERENCE_NAME,
+  QWEN_SINGLE_FIXTURE_DIAGNOSTIC_CAPS_V2,
 } from '../evaluation/qwen3-vl-candidate-evidence.js';
 import type {
   QwenTransportPort,
@@ -83,7 +84,11 @@ export const createQwen3VlNativeFetchTransport = (input?: {
         throw new TypeError('Qwen transport method differs from the pinned request shape.');
       }
       const secret = z.string().min(1).max(16_384).parse(request.secret);
-      const timeoutMs = z.int().min(1).max(60_000).parse(request.timeoutMs);
+      const timeoutMs = z
+        .int()
+        .min(1)
+        .max(QWEN_SINGLE_FIXTURE_DIAGNOSTIC_CAPS_V2.perCallTimeoutMs)
+        .parse(request.timeoutMs);
       if (request.signal.aborted || timeoutMs < 1) {
         throw new DOMException('Qwen request was aborted.', 'AbortError');
       }

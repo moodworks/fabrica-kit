@@ -38,6 +38,7 @@ import {
   QWEN_FOUR_FIXTURE_BENCHMARK_CAPS_SHA256,
   QWEN_FOUR_FIXTURE_HUMAN_ORACLE_CORPUS_SHA256,
   QWEN_FOUR_FIXTURE_PENDING_CORPUS_CORE_SHA256,
+  QWEN_SINGLE_FIXTURE_DIAGNOSTIC_CAPS_V2_SHA256,
 } from '../src/evaluation/qwen3-vl-candidate-evidence.js';
 import { createDeterministicOracleMatchingQwenOutputV1 } from '../src/evaluation/qwen-four-fixture-quality.js';
 import { EpochMillisecondsSchema } from '../src/jobs/timing.js';
@@ -47,13 +48,17 @@ import {
 } from '../src/server/qwen-four-fixture-request-catalog.js';
 import {
   QwenSceneAnalysisError,
+  QwenBenchmarkAuthorizationPacketV2Schema,
   createQwen3VlSceneAnalysisAdapter,
+  createQwenDiagnosticAuthorizationPacketV3,
   createQwenDryRunExecutionAuthorization,
   finalizeQwenDiagnosticReportForAuthorizationV1,
   mintQwenBenchmarkExecutionAuthorization,
+  preflightQwenLiveExecutionAuthorization,
   releaseQwenDiagnosticArtifactsForAuthorizationV1,
   reserveQwenDiagnosticArtifactsForAuthorizationV1,
   type QwenAdapterClockPort,
+  type QwenAdapterTimerPort,
   type QwenTransportPort,
   type QwenTransportResponse,
 } from '../src/server/qwen3-vl-scene-analysis-adapter.js';
@@ -75,10 +80,12 @@ import {
 import {
   QwenFourFixtureBenchmarkReportV1Schema,
   QwenFourFixtureBenchmarkReportV2Schema,
+  QwenFourFixtureBenchmarkReportV3Schema,
   replayQwenDiagnosticArtifactStatusV1,
   runQwenFourFixtureBenchmark,
   serializeQwenFourFixtureBenchmarkReport,
 } from '../src/server/qwen-four-fixture-benchmark.js';
+import { createQwen3VlNativeFetchTransport } from '../src/server/qwen3-vl-native-fetch-transport.js';
 import {
   REAL_MODEL_BENCHMARK_PENDING_STATIC_SOURCE_REGISTRY_V2,
   readPendingCorpusPackageFileV2,
@@ -231,10 +238,10 @@ const diagnosticPaths = (token: string) => {
 };
 
 const livePacket = (token: string) => ({
-  authorizationVersion: 2 as const,
+  authorizationVersion: 3 as const,
   authorizationId: `qwen.live.diagnostic.${token}`,
   mode: 'live-provider' as const,
-  purpose: 'one-capped-four-fixture-sequential-zero-retry-benchmark' as const,
+  purpose: 'one-capped-single-fixture-diagnostic-response-capture' as const,
   issuedAtMs: fixedNowMs - 1_000,
   expiresAtMs: fixedNowMs + 600_000,
   serverWorkspaceId: QWEN3_VL_SERVER_WORKSPACE_ID,
@@ -255,13 +262,18 @@ const livePacket = (token: string) => ({
   workflowDefinitionSha256: INITIAL_BANNER_ANALYZE_WORKFLOW_REF_V1.definitionSha256,
   orderedModelInputDigestsSha256: QWEN_FOUR_FIXTURE_ACTIVE_MODEL_INPUT_DIGESTS_SHA256,
   diagnosticCapture: {
-    diagnosticVersion: 1 as const,
+    diagnosticVersion: 2 as const,
     mode: 'single-fixture-response-capture' as const,
     fixtureId: 'banner-person-v1' as const,
     providerCallsMaximum: 1 as const,
     retryCount: 0 as const,
+    perCallTimeoutMs: 120_000 as const,
+    totalWallTimeMs: 150_000 as const,
+    totalCalculatedListCostMaximumMicroUsd: '50000' as const,
+    diagnosticCapsSha256: QWEN_SINGLE_FIXTURE_DIAGNOSTIC_CAPS_V2_SHA256,
     ...diagnosticPaths(token),
     productionAdmissionAuthority: false as const,
+    webRouteActivated: false as const,
   },
   executionAuthorized: true as const,
 });
@@ -275,6 +287,26 @@ const fixedClock = (): QwenAdapterClockPort => {
       return monotonicMs;
     },
   });
+};
+
+const manualTimerPort = (): QwenAdapterTimerPort & { fireTimeout(): void } => {
+  let timeoutHandler: (() => void) | null = null;
+  return {
+    setTimeout(handler) {
+      timeoutHandler = handler;
+      return {} as ReturnType<typeof setTimeout>;
+    },
+    clearTimeout() {
+      timeoutHandler = null;
+    },
+    setInterval() {
+      return {} as ReturnType<typeof setInterval>;
+    },
+    clearInterval() {},
+    fireTimeout() {
+      timeoutHandler?.();
+    },
+  };
 };
 
 const firstFixtureInput = async () => {
@@ -1328,8 +1360,13 @@ describe('Qwen response diagnostics and offline replay', () => {
     ] as const;
     for (const testCase of cases) {
       const packet = livePacket(testCase.token);
-      const { diagnosticCapture: _diagnosticCapture, ...packetWithoutDiagnostic } = packet;
+      const { diagnosticCapture: _diagnosticCapture, ...packetWithoutDiagnosticBase } = packet;
       void _diagnosticCapture;
+      const packetWithoutDiagnostic = {
+        ...packetWithoutDiagnosticBase,
+        authorizationVersion: 2 as const,
+        purpose: 'one-capped-four-fixture-sequential-zero-retry-benchmark' as const,
+      };
       const authorization = mintQwenBenchmarkExecutionAuthorization(packetWithoutDiagnostic);
       const transport = liveLikeTransport(testCase.response);
       let captured: QwenSceneAnalysisError | null = null;
@@ -1416,6 +1453,368 @@ describe('Qwen response diagnostics and offline replay', () => {
       }),
     ).rejects.toMatchObject({ reason: 'authorization-missing' });
     expect(transport.dispatchMock).not.toHaveBeenCalled();
+  });
+
+  it('builds a strict diagnostic V3 packet from only bounded identity, time, and paths', () => {
+    const packet = createQwenDiagnosticAuthorizationPacketV3({
+      authorizationId: 'qwen.diag.builder.0001',
+      issuedAtMs: fixedNowMs,
+      expiresAtMs: fixedNowMs + 600_000,
+      ...diagnosticPaths('builder-0001'),
+    });
+    expect(packet).toMatchObject({
+      authorizationVersion: 3,
+      purpose: 'one-capped-single-fixture-diagnostic-response-capture',
+      mode: 'live-provider',
+      benchmarkCapsSha256: QWEN_FOUR_FIXTURE_BENCHMARK_CAPS_SHA256,
+      diagnosticCapture: {
+        diagnosticVersion: 2,
+        perCallTimeoutMs: 120_000,
+        totalWallTimeMs: 150_000,
+        totalCalculatedListCostMaximumMicroUsd: '50000',
+        productionAdmissionAuthority: false,
+        webRouteActivated: false,
+      },
+    });
+    expect(() =>
+      createQwenDiagnosticAuthorizationPacketV3({
+        authorizationId: 'qwen.diag.builder.0002',
+        issuedAtMs: fixedNowMs + 1,
+        expiresAtMs: fixedNowMs,
+        ...diagnosticPaths('builder-0002'),
+      }),
+    ).toThrow();
+  });
+
+  it('accepts native 120000ms transport requests, rejects larger values, and keeps ordinary calls <=60000ms', async () => {
+    const fetchImplementation = vi.fn(async () => new Response('{}', { status: 200 }));
+    const native = createQwen3VlNativeFetchTransport({ fetchImplementation });
+    const request = {
+      endpoint: QWEN3_VL_CHAT_COMPLETIONS_ENDPOINT,
+      method: QWEN3_VL_ENDPOINT_METHOD,
+      secret: 'unit-test-secret-not-a-provider-key',
+      requestBodyText: '{}',
+      signal: new AbortController().signal,
+    } as const;
+    await expect(native.dispatch({ ...request, timeoutMs: 120_000 })).resolves.toMatchObject({
+      status: 200,
+    });
+    await expect(native.dispatch({ ...request, timeoutMs: 120_001 })).rejects.toThrow();
+    expect(fetchImplementation).toHaveBeenCalledTimes(1);
+
+    const ordinaryPacket = livePacket('ordinary-timeout-0001');
+    const { diagnosticCapture: _diagnostic, ...ordinaryBase } = ordinaryPacket;
+    void _diagnostic;
+    const ordinaryAuthorization = mintQwenBenchmarkExecutionAuthorization({
+      ...ordinaryBase,
+      authorizationVersion: 2 as const,
+      purpose: 'one-capped-four-fixture-sequential-zero-retry-benchmark' as const,
+    });
+    const ordinaryTransport = liveLikeTransport(responseFor(validEnvelope()));
+    await createQwen3VlSceneAnalysisAdapter({
+      transport: ordinaryTransport,
+      clock: fixedClock(),
+    }).analyze({
+      ...(await firstFixtureInput()),
+      authorization: ordinaryAuthorization,
+      secret: 'unit-test-secret-not-a-provider-key',
+    });
+    expect(ordinaryTransport.dispatchMock.mock.calls[0]?.[0].timeoutMs).toBeLessThanOrEqual(60_000);
+  });
+
+  it('preflights active V3 120000/150000 caps and rejects historical diagnostic authority', () => {
+    const active = createQwenDiagnosticAuthorizationPacketV3({
+      authorizationId: 'qwen.diag.preflight.0001',
+      issuedAtMs: fixedNowMs - 1_000,
+      expiresAtMs: fixedNowMs + 600_000,
+      ...diagnosticPaths('preflight-v3-0001'),
+    });
+    const authorization = preflightQwenLiveExecutionAuthorization({
+      packet: active,
+      secretPresent: true,
+      nowMs: fixedNowMs,
+    });
+    expect(authorization.diagnosticCapture).toMatchObject({
+      perCallTimeoutMs: 120_000,
+      totalWallTimeMs: 150_000,
+    });
+
+    const historical = structuredClone(livePacket('preflight-v2-old-0001')) as Record<
+      string,
+      unknown
+    >;
+    historical.authorizationVersion = 2;
+    historical.purpose = 'one-capped-four-fixture-sequential-zero-retry-benchmark';
+    const diagnostic = historical.diagnosticCapture as Record<string, unknown>;
+    diagnostic.diagnosticVersion = 1;
+    delete diagnostic.perCallTimeoutMs;
+    delete diagnostic.totalWallTimeMs;
+    delete diagnostic.totalCalculatedListCostMaximumMicroUsd;
+    delete diagnostic.diagnosticCapsSha256;
+    delete diagnostic.webRouteActivated;
+    expect(() =>
+      preflightQwenLiveExecutionAuthorization({
+        packet: historical,
+        secretPresent: true,
+        nowMs: fixedNowMs,
+      }),
+    ).toThrow();
+  });
+
+  it('rejects every non-active diagnostic cap mutation before authorization activation', () => {
+    const packet = createQwenDiagnosticAuthorizationPacketV3({
+      authorizationId: 'qwen.diag.cap-boundary.0001',
+      issuedAtMs: fixedNowMs,
+      expiresAtMs: fixedNowMs + 600_000,
+      ...diagnosticPaths('cap-boundary-0001'),
+    });
+    for (const mutation of [
+      { perCallTimeoutMs: 119_999 },
+      { perCallTimeoutMs: 120_001 },
+      { totalWallTimeMs: 149_999 },
+      { totalWallTimeMs: 150_001 },
+      { providerCallsMaximum: 2 },
+      { retryCount: 1 },
+      { totalCalculatedListCostMaximumMicroUsd: '49999' },
+      { totalCalculatedListCostMaximumMicroUsd: '50001' },
+    ]) {
+      expect(() =>
+        createQwenDiagnosticAuthorizationPacketV3({
+          authorizationId: 'qwen.diag.cap-boundary.0002',
+          issuedAtMs: fixedNowMs,
+          expiresAtMs: fixedNowMs + 600_000,
+          ...diagnosticPaths(`cap-boundary-${Object.keys(mutation)[0]}`),
+        }),
+      ).not.toThrow();
+      const mutated = structuredClone(packet) as Record<string, unknown>;
+      Object.assign(mutated.diagnosticCapture as Record<string, unknown>, mutation);
+      expect(() => mintQwenBenchmarkExecutionAuthorization(mutated)).toThrow();
+    }
+  });
+
+  it('uses strict raw elapsed diagnostic timeout boundaries and leaves late responses inert', async () => {
+    for (const [elapsedMs, expectedReason] of [
+      [119_999, null],
+      [120_000, 'timeout'],
+      [120_001, 'timeout'],
+    ] as const) {
+      const packet = livePacket(`timeout-boundary-${elapsedMs}`);
+      const authorization = mintQwenBenchmarkExecutionAuthorization(packet);
+      await reserveQwenDiagnosticArtifactsForAuthorizationV1(authorization);
+      let monotonicCalls = 0;
+      const clock: QwenAdapterClockPort = Object.freeze({
+        nowEpochMs: () => fixedNowMs,
+        nowMonotonicMs: () => (monotonicCalls++ === 0 ? 0 : elapsedMs),
+      });
+      const controllerSignals: AbortSignal[] = [];
+      const transport: QwenTransportPort = Object.freeze({
+        transportKind: 'native-fetch' as const,
+        dispatch: vi.fn(async (request) => {
+          controllerSignals.push(request.signal);
+          return responseFor(validEnvelope());
+        }),
+      });
+      const input = await firstFixtureInput();
+      let captured: QwenSceneAnalysisError | null = null;
+      try {
+        await createQwen3VlSceneAnalysisAdapter({ transport, clock }).analyze({
+          ...input,
+          context: {
+            ...input.context,
+            deadlineAtMs: EpochMillisecondsSchema.parse(fixedNowMs + 120_000),
+          },
+          authorization,
+          secret: 'unit-test-secret-not-a-provider-key',
+        });
+      } catch (error) {
+        if (error instanceof QwenSceneAnalysisError) captured = error;
+        else throw error;
+      }
+      if (expectedReason === null) {
+        expect(captured).toBeNull();
+      } else {
+        expect(captured).toMatchObject({
+          reason: expectedReason,
+          accounting: { status: 'indeterminate', usage: null, calculatedListCost: null },
+        });
+        expect(controllerSignals[0]?.aborted).toBe(true);
+        expect(captured?.diagnosticArtifact).toBeNull();
+      }
+      await releaseQwenDiagnosticArtifactsForAuthorizationV1(authorization);
+    }
+  });
+
+  it('fires the injected timeout before an abort-ignoring late response and finalizes nothing', async () => {
+    const packet = livePacket('manual-timeout-late-0001');
+    const authorization = mintQwenBenchmarkExecutionAuthorization(packet);
+    await reserveQwenDiagnosticArtifactsForAuthorizationV1(authorization);
+    const timers = manualTimerPort();
+    let dispatchStarted!: () => void;
+    const started = new Promise<void>((resolve) => {
+      dispatchStarted = resolve;
+    });
+    let resolveLate!: (response: QwenTransportResponse) => void;
+    const transport: QwenTransportPort = Object.freeze({
+      transportKind: 'native-fetch' as const,
+      dispatch: vi.fn(async (request) => {
+        dispatchStarted();
+        return new Promise<QwenTransportResponse>((resolve) => {
+          resolveLate = () => resolve(responseFor(validEnvelope()));
+          void request.signal;
+        });
+      }),
+    });
+    const input = await firstFixtureInput();
+    const analysis = createQwen3VlSceneAnalysisAdapter({
+      transport,
+      clock: Object.freeze({ nowEpochMs: () => fixedNowMs, nowMonotonicMs: () => 0 }),
+      timers,
+    }).analyze({
+      ...input,
+      context: {
+        ...input.context,
+        deadlineAtMs: EpochMillisecondsSchema.parse(fixedNowMs + 120_000),
+      },
+      authorization,
+      secret: 'unit-test-secret-not-a-provider-key',
+    });
+    await started;
+    timers.fireTimeout();
+    expect((transport.dispatch as ReturnType<typeof vi.fn>).mock.calls[0]![0].signal.aborted).toBe(
+      true,
+    );
+    resolveLate(responseFor(validEnvelope()));
+    await expect(analysis).rejects.toMatchObject({
+      reason: 'timeout',
+      accounting: { status: 'indeterminate', usage: null, calculatedListCost: null },
+      diagnosticArtifact: null,
+    });
+    expect((transport.dispatch as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(1);
+    await releaseQwenDiagnosticArtifactsForAuthorizationV1(authorization);
+  });
+
+  it('rejects a second V3 diagnostic invocation without dispatch or retry', async () => {
+    const packet = livePacket('second-invocation-0001');
+    const authorization = mintQwenBenchmarkExecutionAuthorization(packet);
+    await reserveQwenDiagnosticArtifactsForAuthorizationV1(authorization);
+    const transport = liveLikeTransport(responseFor(validEnvelope()));
+    const adapter = createQwen3VlSceneAnalysisAdapter({ transport, clock: fixedClock() });
+    const input = await firstFixtureInput();
+    const requestInput = {
+      ...input,
+      context: {
+        ...input.context,
+        deadlineAtMs: EpochMillisecondsSchema.parse(fixedNowMs + 120_000),
+      },
+      authorization,
+      secret: 'unit-test-secret-not-a-provider-key',
+    };
+    await adapter.analyze(requestInput);
+    await expect(adapter.analyze(requestInput)).rejects.toMatchObject({
+      reason: 'duplicate-invocation',
+    });
+    expect(transport.dispatchMock).toHaveBeenCalledTimes(1);
+    expect(authorization.diagnosticCapture?.retryCount).toBe(0);
+    await releaseQwenDiagnosticArtifactsForAuthorizationV1(authorization);
+  });
+
+  it('fails diagnostic runner closed at total equality and does not start a second call', async () => {
+    const packet = livePacket('runner-total-equality-0001');
+    const authorization = mintQwenBenchmarkExecutionAuthorization(packet);
+    await reserveQwenDiagnosticArtifactsForAuthorizationV1(authorization);
+    let monotonicCalls = 0;
+    const clock: QwenAdapterClockPort = Object.freeze({
+      nowEpochMs: () => fixedNowMs,
+      nowMonotonicMs: () => (monotonicCalls++ === 0 ? 0 : 150_000),
+    });
+    const transport = liveLikeTransport(responseFor(validEnvelope()));
+    const report = await runQwenFourFixtureBenchmark({
+      mode: 'live-provider',
+      transport,
+      authorization,
+      secret: 'unit-test-secret-not-a-provider-key',
+      cancellation: { cancelled: false, throwIfCancelled(): void {} },
+      clock,
+    });
+    expect(report).toMatchObject({
+      providerCallCount: 0,
+      retryCount: 0,
+      stoppedEarly: true,
+      terminalFailureReason: 'total-time-limit-exceeded',
+    });
+    expect(transport.dispatchMock).not.toHaveBeenCalled();
+    await releaseQwenDiagnosticArtifactsForAuthorizationV1(authorization);
+  });
+
+  it('does not let diagnostic setup time inherit the old per-fixture cap', async () => {
+    const packet = livePacket('runner-setup-budget-0001');
+    const authorization = mintQwenBenchmarkExecutionAuthorization(packet);
+    await reserveQwenDiagnosticArtifactsForAuthorizationV1(authorization);
+    const monotonicSequence = [0, 0, 10, 10] as const;
+    let monotonicCalls = 0;
+    const clock: QwenAdapterClockPort = Object.freeze({
+      nowEpochMs: () => fixedNowMs,
+      nowMonotonicMs: () =>
+        monotonicSequence[Math.min(monotonicCalls++, monotonicSequence.length - 1)]!,
+    });
+    const transport = liveLikeTransport(responseFor(validEnvelope()));
+    await runQwenFourFixtureBenchmark({
+      mode: 'live-provider',
+      transport,
+      authorization,
+      secret: 'unit-test-secret-not-a-provider-key',
+      cancellation: { cancelled: false, throwIfCancelled(): void {} },
+      clock,
+    });
+    expect(transport.dispatchMock.mock.calls[0]?.[0].timeoutMs).toBe(120_000);
+    await releaseQwenDiagnosticArtifactsForAuthorizationV1(authorization);
+  });
+
+  it('samples the fresh dispatch epoch after setup when deriving the V3 timeout', async () => {
+    const packet = livePacket('fresh-dispatch-epoch-0001');
+    const authorization = mintQwenBenchmarkExecutionAuthorization(packet);
+    await reserveQwenDiagnosticArtifactsForAuthorizationV1(authorization);
+    let epochCalls = 0;
+    const clock: QwenAdapterClockPort = Object.freeze({
+      nowEpochMs: () => (epochCalls++ === 0 ? fixedNowMs : fixedNowMs + 250),
+      nowMonotonicMs: () => 0,
+    });
+    const transport = liveLikeTransport(responseFor(validEnvelope()));
+    const input = await firstFixtureInput();
+    await createQwen3VlSceneAnalysisAdapter({ transport, clock }).analyze({
+      ...input,
+      context: {
+        ...input.context,
+        deadlineAtMs: EpochMillisecondsSchema.parse(fixedNowMs + 120_000),
+      },
+      authorization,
+      secret: 'unit-test-secret-not-a-provider-key',
+    });
+    expect(transport.dispatchMock.mock.calls[0]?.[0].timeoutMs).toBe(119_750);
+    await releaseQwenDiagnosticArtifactsForAuthorizationV1(authorization);
+  });
+
+  it('keeps historical V2 diagnostic packets parseable but non-dispatchable', () => {
+    const active = livePacket('historical-v2-0001');
+    const historicalDiagnostic = {
+      ...active.diagnosticCapture,
+      diagnosticVersion: 1 as const,
+    };
+    delete (historicalDiagnostic as Record<string, unknown>).perCallTimeoutMs;
+    delete (historicalDiagnostic as Record<string, unknown>).totalWallTimeMs;
+    delete (historicalDiagnostic as Record<string, unknown>).totalCalculatedListCostMaximumMicroUsd;
+    delete (historicalDiagnostic as Record<string, unknown>).diagnosticCapsSha256;
+    delete (historicalDiagnostic as Record<string, unknown>).webRouteActivated;
+    const historical = {
+      ...active,
+      authorizationVersion: 2 as const,
+      purpose: 'one-capped-four-fixture-sequential-zero-retry-benchmark' as const,
+      diagnosticCapture: historicalDiagnostic,
+    };
+    expect(QwenBenchmarkAuthorizationPacketV2Schema.parse(historical)).toBeDefined();
+    expect(() => mintQwenBenchmarkExecutionAuthorization(historical)).toThrow(
+      QwenSceneAnalysisError,
+    );
   });
 
   it('captures an exclusively written 0600 projection and exactly replays its rejection offline', async () => {
@@ -2383,12 +2782,23 @@ describe('Qwen response diagnostics and offline replay', () => {
       ],
     });
     expect(report.caps).toMatchObject({ providerCallsMaximum: 4, retryCount: 0 });
+    expect(QwenFourFixtureBenchmarkReportV3Schema.parse(report)).toBeDefined();
     expect(serializeQwenFourFixtureBenchmarkReport(report)).not.toMatch(
       /data:image|assistant.*content|Bearer|unit-test-secret/iu,
     );
 
-    expect(QwenFourFixtureBenchmarkReportV2Schema.parse(report)).toBeDefined();
+    expect(QwenFourFixtureBenchmarkReportV3Schema.parse(report)).toBeDefined();
     const historicalShape = structuredClone(report) as Record<string, unknown>;
+    expect(() => QwenFourFixtureBenchmarkReportV1Schema.parse(historicalShape)).toThrow();
+    expect(() => QwenFourFixtureBenchmarkReportV2Schema.parse(historicalShape)).toThrow();
+    const historicalV2Shape = structuredClone(report) as Record<string, unknown>;
+    historicalV2Shape.reportVersion = 2;
+    delete historicalV2Shape.diagnosticCapsSha256;
+    delete historicalV2Shape.diagnosticCaps;
+    expect(QwenFourFixtureBenchmarkReportV2Schema.parse(historicalV2Shape)).toBeDefined();
+    const v2WithNewCaps = structuredClone(historicalV2Shape) as Record<string, unknown>;
+    v2WithNewCaps.diagnosticCapsSha256 = QWEN_SINGLE_FIXTURE_DIAGNOSTIC_CAPS_V2_SHA256;
+    expect(() => QwenFourFixtureBenchmarkReportV2Schema.parse(v2WithNewCaps)).toThrow();
     historicalShape.reportVersion = 1;
     historicalShape.requestShapeSha256 =
       '06963aab79297adf81adb33f1c3c97b070ab5f30feb7ce6982d4e751afdf1fbf';
@@ -2397,6 +2807,8 @@ describe('Qwen response diagnostics and offline replay', () => {
     delete historicalShape.providerProtocolWrapperSha256;
     delete historicalShape.diagnosticOneFixtureMode;
     delete historicalShape.diagnosticReportRelativePath;
+    delete historicalShape.diagnosticCapsSha256;
+    delete historicalShape.diagnosticCaps;
     const fixtureResults = historicalShape.fixtureResults as Record<string, unknown>[];
     delete fixtureResults[0]!.diagnosticArtifact;
     delete fixtureResults[0]!.diagnosticReplayStatus;
