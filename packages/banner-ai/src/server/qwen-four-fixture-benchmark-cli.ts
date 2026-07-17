@@ -3,7 +3,7 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { createDeterministicOracleMatchingQwenOutputV1 } from '../evaluation/qwen-four-fixture-quality.js';
+import { createDeterministicOracleMatchingQwenSemanticOutputV1 } from '../evaluation/qwen-four-fixture-quality.js';
 import { createDeterministicQwenTransport } from './qwen3-vl-deterministic-fake-transport.js';
 import {
   createQwenDryRunExecutionAuthorization,
@@ -14,7 +14,7 @@ import {
   type QwenAdapterClockPort,
 } from './qwen3-vl-scene-analysis-adapter.js';
 import {
-  QWEN_SINGAPORE_V4_REPORT_PATH,
+  QWEN_SINGAPORE_V5_REPORT_PATH,
   runQwenFourFixtureBenchmark,
   serializeQwenFourFixtureBenchmarkReport,
 } from './qwen-four-fixture-benchmark.js';
@@ -66,7 +66,7 @@ const runDry = async (): Promise<void> => {
   const transport = createDeterministicQwenTransport(
     fixtureIds.map((fixtureId) => ({
       kind: 'success' as const,
-      output: createDeterministicOracleMatchingQwenOutputV1(fixtureId),
+      output: createDeterministicOracleMatchingQwenSemanticOutputV1(fixtureId),
     })),
   );
   const authorization = createQwenDryRunExecutionAuthorization({
@@ -83,10 +83,10 @@ const runDry = async (): Promise<void> => {
   });
   await writeReport({
     report,
-    relativePath: QWEN_SINGAPORE_V4_REPORT_PATH,
+    relativePath: QWEN_SINGAPORE_V5_REPORT_PATH,
     exclusive: false,
   });
-  process.stdout.write(`${QWEN_SINGAPORE_V4_REPORT_PATH}\n`);
+  process.stdout.write(`${QWEN_SINGAPORE_V5_REPORT_PATH}\n`);
   if (!report.overallPass) process.exitCode = 1;
 };
 
@@ -107,6 +107,19 @@ const assertCleanWorkingTree = (): void => {
   if (status !== '') throw new TypeError('Live Qwen benchmark requires a clean working tree.');
 };
 
+const liveDispatchGitGuard = Object.freeze({
+  assertCurrentGitState(expectedGitSha: string): void {
+    assertCleanWorkingTree();
+    const currentGitSha = execFileSync('git', ['rev-parse', 'HEAD'], {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+    }).trim();
+    if (currentGitSha !== expectedGitSha) {
+      throw new TypeError('Live Qwen benchmark Git SHA changed after preflight.');
+    }
+  },
+});
+
 const runLive = async (): Promise<void> => {
   const secret = process.env.DASHSCOPE_API_KEY;
   if (secret === undefined || secret.length < 1) {
@@ -123,6 +136,7 @@ const runLive = async (): Promise<void> => {
     secretPresent: true,
     nowMs: Date.now(),
     currentGitSha: execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim(),
+    liveDispatchGitGuard,
   });
   const diagnosticEnabled = authorization.diagnosticCapture !== null;
   if (diagnosticEnabled) await reserveQwenDiagnosticArtifactsForAuthorizationV1(authorization);
@@ -138,7 +152,7 @@ const runLive = async (): Promise<void> => {
     });
     const reportPath =
       authorization.diagnosticCapture?.diagnosticReportRelativePath ??
-      QWEN_SINGAPORE_V4_REPORT_PATH;
+      QWEN_SINGAPORE_V5_REPORT_PATH;
     if (diagnosticEnabled) {
       await finalizeQwenDiagnosticReportForAuthorizationV1({
         authorization,

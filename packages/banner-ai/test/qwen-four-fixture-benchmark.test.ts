@@ -17,13 +17,15 @@ import {
   QWEN3_VL_PRICING_EVIDENCE_SHA256,
   QWEN3_VL_PROVIDER_KEY,
   QWEN3_VL_PROVIDER_PROTOCOL_WRAPPER_V1_SHA256,
-  QWEN3_VL_PROVIDER_PROTOCOL_WRAPPER_V2,
-  QWEN3_VL_PROVIDER_PROTOCOL_WRAPPER_V2_REQUIRED_CONSTRAINTS,
   QWEN3_VL_PROVIDER_PROTOCOL_WRAPPER_V2_SHA256,
+  QWEN3_VL_PROVIDER_PROTOCOL_WRAPPER_V3,
+  QWEN3_VL_PROVIDER_PROTOCOL_WRAPPER_V3_REQUIRED_CONSTRAINTS,
+  QWEN3_VL_PROVIDER_PROTOCOL_WRAPPER_V3_SHA256,
   QWEN3_VL_REQUESTED_MODEL_ID,
   QWEN3_VL_REQUEST_SHAPE_SHA256,
   QWEN3_VL_REQUEST_SHAPE_V1_SHA256,
-  QWEN3_VL_REQUEST_SHAPE_V2,
+  QWEN3_VL_REQUEST_SHAPE_V4,
+  QWEN3_VL_REQUEST_SHAPE_V4_SHA256,
   QWEN3_VL_SECRET_REFERENCE_NAME,
   QWEN3_VL_SERVER_WORKSPACE_ID,
   QWEN_FOUR_FIXTURE_BENCHMARK_CAPS_SHA256,
@@ -39,8 +41,12 @@ import {
 } from '../src/evaluation/qwen3-vl-candidate-evidence.js';
 import {
   QwenBenchmarkFixtureIdSchema,
-  createDeterministicOracleMatchingQwenOutputV1,
+  createDeterministicOracleMatchingQwenSemanticOutputV1,
 } from '../src/evaluation/qwen-four-fixture-quality.js';
+import {
+  QWEN_DIAGNOSTIC_V2_SEMANTIC_PROJECTION_V1_SHA256,
+  QWEN_DIAGNOSTIC_V2_SEMANTIC_PROJECTION_VERSION,
+} from '../src/evaluation/qwen-response-contract-evidence.js';
 import { createDeterministicQwenTransport } from '../src/server/qwen3-vl-deterministic-fake-transport.js';
 import { canonicalizeJson, sha256Hex } from '../src/scene/canonical-scene-json.js';
 import {
@@ -55,7 +61,8 @@ import {
 import {
   QWEN_FOUR_FIXTURE_REPORT_PATH,
   QWEN_SINGAPORE_V4_REPORT_PATH,
-  QwenFourFixtureBenchmarkReportV4Schema,
+  QWEN_SINGAPORE_V5_REPORT_PATH,
+  QwenFourFixtureBenchmarkReportV5Schema,
   runQwenFourFixtureBenchmark,
   serializeQwenFourFixtureBenchmarkReport,
 } from '../src/server/qwen-four-fixture-benchmark.js';
@@ -90,7 +97,7 @@ const deterministicClock = (): QwenAdapterClockPort => {
 const successSteps = () =>
   QwenBenchmarkFixtureIdSchema.options.map((fixtureId) => ({
     kind: 'success' as const,
-    output: createDeterministicOracleMatchingQwenOutputV1(fixtureId),
+    output: createDeterministicOracleMatchingQwenSemanticOutputV1(fixtureId),
   }));
 
 const runDryBenchmark = async () => {
@@ -145,7 +152,7 @@ describe('Qwen four-fixture benchmark runner', () => {
 
     expect(first.transport.getCallCount()).toBe(4);
     expect(first.report).toMatchObject({
-      reportVersion: 4,
+      reportVersion: 5,
       mode: 'deterministic-fake',
       providerNetworkUsed: false,
       providerCallCount: 4,
@@ -157,8 +164,12 @@ describe('Qwen four-fixture benchmark runner', () => {
         indeterminateAttemptCount: 0,
       },
       requestedModelId: 'qwen3.6-flash-2026-04-16',
-      providerProtocolWrapperSha256: QWEN3_VL_PROVIDER_PROTOCOL_WRAPPER_V2_SHA256,
-      requestShapeSha256: QWEN3_VL_REQUEST_SHAPE_SHA256,
+      providerProtocolWrapperSha256: QWEN3_VL_PROVIDER_PROTOCOL_WRAPPER_V3_SHA256,
+      requestShapeSha256: QWEN3_VL_REQUEST_SHAPE_V4_SHA256,
+      adapterVersion: 2,
+      adapterResultVersion: 2,
+      diagnosticSemanticProjectionVersion: QWEN_DIAGNOSTIC_V2_SEMANTIC_PROJECTION_VERSION,
+      diagnosticSemanticProjectionSha256: QWEN_DIAGNOSTIC_V2_SEMANTIC_PROJECTION_V1_SHA256,
       orderedModelInputDigestsSha256: QWEN_FOUR_FIXTURE_ACTIVE_MODEL_INPUT_DIGESTS_SHA256,
       endpoint:
         'https://ws-4ei01ync8iyumgp4.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1/chat/completions',
@@ -176,9 +187,33 @@ describe('Qwen four-fixture benchmark runner', () => {
     expect(first.report.fixtureResults.every((result) => result.providerCallCount === 1)).toBe(
       true,
     );
-    expect(QwenFourFixtureBenchmarkReportV4Schema.parse(first.report)).toBeDefined();
+    expect(QwenFourFixtureBenchmarkReportV5Schema.parse(first.report)).toBeDefined();
     expect(() =>
-      QwenFourFixtureBenchmarkReportV4Schema.parse({
+      QwenFourFixtureBenchmarkReportV5Schema.parse({
+        ...first.report,
+        adapterVersion: 1,
+      }),
+    ).toThrow();
+    expect(() =>
+      QwenFourFixtureBenchmarkReportV5Schema.parse({
+        ...first.report,
+        adapterResultVersion: 1,
+      }),
+    ).toThrow();
+    expect(() =>
+      QwenFourFixtureBenchmarkReportV5Schema.parse({
+        ...first.report,
+        diagnosticSemanticProjectionVersion: 2,
+      }),
+    ).toThrow();
+    expect(() =>
+      QwenFourFixtureBenchmarkReportV5Schema.parse({
+        ...first.report,
+        diagnosticSemanticProjectionSha256: '0'.repeat(64),
+      }),
+    ).toThrow();
+    expect(() =>
+      QwenFourFixtureBenchmarkReportV5Schema.parse({
         ...first.report,
         mode: 'live-provider',
         providerNetworkUsed: true,
@@ -188,7 +223,8 @@ describe('Qwen four-fixture benchmark runner', () => {
     expect(
       first.report.fixtureResults.every((result) => result.accountingStatus === 'complete'),
     ).toBe(true);
-    const correctedPersonOutput = createDeterministicOracleMatchingQwenOutputV1('banner-person-v1');
+    const correctedPersonOutput =
+      createDeterministicOracleMatchingQwenSemanticOutputV1('banner-person-v1');
     expect(correctedPersonOutput.composition.kind).toBe('composition_proposal');
     if (correctedPersonOutput.composition.kind !== 'composition_proposal') {
       throw new TypeError('Expected the deterministic person composition proposal.');
@@ -354,7 +390,7 @@ describe('Qwen four-fixture benchmark runner', () => {
 
   it('records a quality failure without silently admitting the model', async () => {
     const outputs = QwenBenchmarkFixtureIdSchema.options.map((fixtureId) =>
-      createDeterministicOracleMatchingQwenOutputV1(fixtureId),
+      createDeterministicOracleMatchingQwenSemanticOutputV1(fixtureId),
     );
     const firstValid = outputs[0]!;
     if (firstValid.composition.kind !== 'composition_proposal') {
@@ -514,9 +550,9 @@ describe('Qwen four-fixture benchmark runner', () => {
   });
 
   it('binds every required wrapper constraint into both active wrapper and request-shape hashes', () => {
-    for (const constraint of QWEN3_VL_PROVIDER_PROTOCOL_WRAPPER_V2_REQUIRED_CONSTRAINTS) {
-      expect(QWEN3_VL_PROVIDER_PROTOCOL_WRAPPER_V2.content).toContain(constraint);
-      const mutatedWrapperContent = QWEN3_VL_PROVIDER_PROTOCOL_WRAPPER_V2.content.replace(
+    for (const constraint of QWEN3_VL_PROVIDER_PROTOCOL_WRAPPER_V3_REQUIRED_CONSTRAINTS) {
+      expect(QWEN3_VL_PROVIDER_PROTOCOL_WRAPPER_V3.content).toContain(constraint);
+      const mutatedWrapperContent = QWEN3_VL_PROVIDER_PROTOCOL_WRAPPER_V3.content.replace(
         constraint,
         `${constraint} mutated`,
       );
@@ -524,13 +560,13 @@ describe('Qwen four-fixture benchmark runner', () => {
       const mutatedRequestShapeSha256 = sha256Hex(
         Buffer.from(
           canonicalizeJson({
-            ...QWEN3_VL_REQUEST_SHAPE_V2,
+            ...QWEN3_VL_REQUEST_SHAPE_V4,
             providerProtocolWrapperSha256: mutatedWrapperSha256,
           }),
           'utf8',
         ),
       );
-      expect(mutatedWrapperSha256).not.toBe(QWEN3_VL_PROVIDER_PROTOCOL_WRAPPER_V2_SHA256);
+      expect(mutatedWrapperSha256).not.toBe(QWEN3_VL_PROVIDER_PROTOCOL_WRAPPER_V3_SHA256);
       expect(mutatedRequestShapeSha256).not.toBe(QWEN3_VL_REQUEST_SHAPE_SHA256);
       expect(() =>
         preflightQwenLiveExecutionAuthorization({
@@ -555,11 +591,15 @@ describe('Qwen four-fixture benchmark runner', () => {
       '.local-data/banner-ai/qwen3-vl-four-fixture-benchmark-singapore-v4.json',
     );
     expect(QWEN_SINGAPORE_V4_REPORT_PATH).not.toBe(QWEN_FOUR_FIXTURE_REPORT_PATH);
+    expect(QWEN_SINGAPORE_V5_REPORT_PATH).toBe(
+      '.local-data/banner-ai/qwen3-vl-four-fixture-benchmark-singapore-v5.json',
+    );
+    expect(QWEN_SINGAPORE_V5_REPORT_PATH).not.toBe(QWEN_SINGAPORE_V4_REPORT_PATH);
     expect(() =>
-      QwenFourFixtureBenchmarkReportV4Schema.parse({ ...report, endpoint: null }),
+      QwenFourFixtureBenchmarkReportV5Schema.parse({ ...report, endpoint: null }),
     ).toThrow();
     expect(() =>
-      QwenFourFixtureBenchmarkReportV4Schema.parse({
+      QwenFourFixtureBenchmarkReportV5Schema.parse({
         ...report,
         endpoint: QWEN3_VL_HISTORICAL_FRANKFURT_CHAT_COMPLETIONS_ENDPOINT,
       }),
@@ -585,10 +625,14 @@ describe('Qwen four-fixture benchmark runner', () => {
       join(packageRoot, 'src/server/qwen-four-fixture-benchmark-cli.ts'),
       'utf8',
     );
-    const secretCheck = cliSource.indexOf('process.env.DASHSCOPE_API_KEY');
-    const cleanTreeCheck = cliSource.indexOf('assertCleanWorkingTree();');
-    const authorizationCheck = cliSource.indexOf('preflightQwenLiveExecutionAuthorization({');
-    const nativeImport = cliSource.indexOf("'./qwen3-vl-native-fetch-transport.js'");
+    const liveSource = cliSource.slice(
+      cliSource.indexOf('const runLive ='),
+      cliSource.indexOf('const main ='),
+    );
+    const secretCheck = liveSource.indexOf('process.env.DASHSCOPE_API_KEY');
+    const cleanTreeCheck = liveSource.indexOf('assertCleanWorkingTree();');
+    const authorizationCheck = liveSource.indexOf('preflightQwenLiveExecutionAuthorization({');
+    const nativeImport = liveSource.indexOf("'./qwen3-vl-native-fetch-transport.js'");
     expect(secretCheck).toBeGreaterThan(0);
     expect(cleanTreeCheck).toBeGreaterThan(secretCheck);
     expect(authorizationCheck).toBeGreaterThan(cleanTreeCheck);
@@ -598,7 +642,7 @@ describe('Qwen four-fixture benchmark runner', () => {
       cliSource.indexOf('const runDry ='),
       cliSource.indexOf('const authorizationPathFromArguments'),
     );
-    expect(dryRunSource).toContain('QWEN_SINGAPORE_V4_REPORT_PATH');
+    expect(dryRunSource).toContain('QWEN_SINGAPORE_V5_REPORT_PATH');
     expect(dryRunSource).not.toContain('QWEN_FOUR_FIXTURE_REPORT_PATH');
     expect(dryRunSource).not.toContain('process.env');
     expect(QWEN3_VL_CHAT_COMPLETIONS_ENDPOINT).not.toBe(

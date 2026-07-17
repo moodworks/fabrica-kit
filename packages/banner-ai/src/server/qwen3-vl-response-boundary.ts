@@ -2,9 +2,11 @@ import { z } from 'zod';
 
 import {
   createModelProducedActualTextObservationSetV1,
+  validateSceneAnalysisRequestContextV1,
   type SceneAnalysisModelRequestV1,
 } from '../evaluation/ai-contracts.js';
 import {
+  QWEN3_VL_FLASH_MODEL_CONTRACT_V1,
   QWEN3_VL_REQUESTED_MODEL_ID,
   QwenProviderUsageV1Schema,
   type QwenProviderUsageV1,
@@ -13,8 +15,17 @@ import {
   ProposedSceneAnalysisOcrOutputV1Schema,
   type ProposedSceneAnalysisOcrOutputV1,
 } from '../evaluation/openai-scene-analysis-output.js';
+import {
+  QWEN_RESPONSE_BOUNDARY_V2_DEFINITION_SHA256,
+  QWEN_SEMANTIC_MATERIALIZER_V1_DEFINITION_SHA256,
+} from '../evaluation/qwen-response-contract-evidence.js';
+import {
+  QwenSemanticSceneAnalysisOutputV1Schema,
+  type QwenSemanticSceneAnalysisOutputV1,
+} from '../evaluation/qwen-semantic-scene-analysis-output.js';
 import { canonicalizeJson, sha256Hex } from '../scene/canonical-scene-json.js';
 import { validateCompositionAnalysisResultV1 } from '../workflows/composition-contracts.js';
+import { requireCanonicalQwenBenchmarkRequestV1 } from './qwen-four-fixture-request-catalog.js';
 
 export const QwenValidationStageV1Schema = z.enum([
   'http-envelope',
@@ -35,6 +46,14 @@ export const QwenValidationStageV1Schema = z.enum([
 ]);
 
 export type QwenValidationStageV1 = z.infer<typeof QwenValidationStageV1Schema>;
+
+export const QwenValidationStageV2Schema = z.enum([
+  ...QwenValidationStageV1Schema.options,
+  'semantic-output-schema',
+  'materialization-invariant',
+]);
+
+export type QwenValidationStageV2 = z.infer<typeof QwenValidationStageV2Schema>;
 
 const QwenSanitizedValueTypeV1Schema = z.enum([
   'undefined',
@@ -152,6 +171,40 @@ export const QwenValidationDiagnosticV1Schema = z
 
 export type QwenValidationDiagnosticV1 = z.infer<typeof QwenValidationDiagnosticV1Schema>;
 
+export const QwenValidationDiagnosticV2Schema = z
+  .strictObject({
+    diagnosticVersion: z.literal(2),
+    stage: QwenValidationStageV2Schema,
+    issues: z.array(QwenSanitizedValidationIssueV1Schema).min(1).max(256).readonly(),
+    totalIssueCount: z.int().min(1),
+    retainedIssueCount: z.int().min(1).max(256),
+    truncatedIssueCount: z.int().min(0),
+    issueDigestSha256: z.string().regex(/^[0-9a-f]{64}$/u),
+  })
+  .superRefine((diagnostic, context) => {
+    const digestPayload = {
+      diagnosticVersion: diagnostic.diagnosticVersion,
+      stage: diagnostic.stage,
+      issues: diagnostic.issues,
+      totalIssueCount: diagnostic.totalIssueCount,
+      retainedIssueCount: diagnostic.retainedIssueCount,
+      truncatedIssueCount: diagnostic.truncatedIssueCount,
+    };
+    if (
+      diagnostic.retainedIssueCount !== diagnostic.issues.length ||
+      diagnostic.totalIssueCount !==
+        diagnostic.retainedIssueCount + diagnostic.truncatedIssueCount ||
+      diagnostic.issueDigestSha256 !==
+        sha256Hex(Buffer.from(canonicalizeJson(digestPayload), 'utf8'))
+    ) {
+      context.addIssue({ code: 'custom', message: 'Qwen V2 diagnostic digest or count drifted.' });
+    }
+  })
+  .readonly();
+
+export type QwenValidationDiagnosticV2 = z.infer<typeof QwenValidationDiagnosticV2Schema>;
+export type QwenValidationDiagnostic = QwenValidationDiagnosticV1 | QwenValidationDiagnosticV2;
+
 type BoundaryFailureReason =
   | 'http-error'
   | 'identity-mismatch'
@@ -165,12 +218,12 @@ type BoundaryFailureReason =
 export class QwenResponseBoundaryFailure extends Error {
   readonly reason: BoundaryFailureReason;
   readonly usage: QwenProviderUsageV1 | null;
-  readonly diagnostic: QwenValidationDiagnosticV1;
+  readonly diagnostic: QwenValidationDiagnostic;
 
   constructor(input: {
     readonly reason: BoundaryFailureReason;
     readonly usage: QwenProviderUsageV1 | null;
-    readonly diagnostic: QwenValidationDiagnosticV1;
+    readonly diagnostic: QwenValidationDiagnostic;
   }) {
     super('Qwen response boundary rejected a provider response.');
     this.name = 'QwenResponseBoundaryFailure';
@@ -477,6 +530,66 @@ export const createSyntheticQwenValidationDiagnosticV1 = (input: {
     }),
   ]);
 
+const createDiagnosticV2 = (
+  stage: QwenValidationStageV2,
+  issuesInput: readonly QwenSanitizedValidationIssueV1[],
+): QwenValidationDiagnosticV2 => {
+  const sortedIssues = [...issuesInput].toSorted((left, right) =>
+    compareQwenDiagnosticCodeUnits(canonicalizeJson(left), canonicalizeJson(right)),
+  );
+  const issues = Object.freeze(sortedIssues.slice(0, 256));
+  const digestPayload = {
+    diagnosticVersion: 2 as const,
+    stage,
+    issues,
+    totalIssueCount: sortedIssues.length,
+    retainedIssueCount: issues.length,
+    truncatedIssueCount: sortedIssues.length - issues.length,
+  };
+  const parsed = QwenValidationDiagnosticV2Schema.safeParse({
+    ...digestPayload,
+    issueDigestSha256: sha256Hex(Buffer.from(canonicalizeJson(digestPayload), 'utf8')),
+  });
+  if (parsed.success) return parsed.data;
+  const fallbackIssues = Object.freeze([
+    QwenSanitizedValidationIssueV1Schema.parse({
+      path: '',
+      validatorIssueCode: 'custom',
+      classification: 'constraint',
+    }),
+  ]);
+  const fallbackPayload = {
+    diagnosticVersion: 2 as const,
+    stage,
+    issues: fallbackIssues,
+    totalIssueCount: 1,
+    retainedIssueCount: 1,
+    truncatedIssueCount: 0,
+  };
+  return QwenValidationDiagnosticV2Schema.parse({
+    ...fallbackPayload,
+    issueDigestSha256: sha256Hex(Buffer.from(canonicalizeJson(fallbackPayload), 'utf8')),
+  });
+};
+
+export const createSyntheticQwenValidationDiagnosticV2 = (input: {
+  readonly stage: QwenValidationStageV2;
+  readonly path: readonly PropertyKey[];
+  readonly validatorIssueCode: z.infer<typeof QwenSanitizedIssueCodeV1Schema>;
+  readonly classification: z.infer<typeof QwenSanitizedIssueClassificationV1Schema>;
+  readonly expectedType?: z.infer<typeof QwenSanitizedValueTypeV1Schema>;
+  readonly receivedType?: z.infer<typeof QwenSanitizedValueTypeV1Schema>;
+}): QwenValidationDiagnosticV2 =>
+  createDiagnosticV2(input.stage, [
+    QwenSanitizedValidationIssueV1Schema.parse({
+      path: jsonPointer(input.path),
+      validatorIssueCode: input.validatorIssueCode,
+      classification: input.classification,
+      ...(input.expectedType === undefined ? {} : { expectedType: input.expectedType }),
+      ...(input.receivedType === undefined ? {} : { receivedType: input.receivedType }),
+    }),
+  ]);
+
 const stageForEnvelopeIssues = (issues: readonly ZodIssueLike[]): QwenValidationStageV1 => {
   if (issues.some((issue) => issue.code === 'unrecognized_keys')) {
     return 'unknown-field-rejection';
@@ -573,6 +686,38 @@ const syntheticFailure = (input: {
     reason: input.reason,
     usage: input.usage,
     diagnostic: createSyntheticQwenValidationDiagnosticV1(input),
+  });
+
+const failureFromZodV2 = (input: {
+  readonly reason: BoundaryFailureReason;
+  readonly usage: QwenProviderUsageV1 | null;
+  readonly stage: QwenValidationStageV2;
+  readonly error: z.ZodError;
+  readonly receivedRoot?: unknown;
+}): QwenResponseBoundaryFailure =>
+  new QwenResponseBoundaryFailure({
+    reason: input.reason,
+    usage: input.usage,
+    diagnostic: createDiagnosticV2(
+      input.stage,
+      sanitizeZodIssues(input.error.issues as readonly ZodIssueLike[], input.receivedRoot),
+    ),
+  });
+
+const syntheticFailureV2 = (input: {
+  readonly reason: BoundaryFailureReason;
+  readonly usage: QwenProviderUsageV1 | null;
+  readonly stage: QwenValidationStageV2;
+  readonly path: readonly PropertyKey[];
+  readonly validatorIssueCode: z.infer<typeof QwenSanitizedIssueCodeV1Schema>;
+  readonly classification: z.infer<typeof QwenSanitizedIssueClassificationV1Schema>;
+  readonly expectedType?: z.infer<typeof QwenSanitizedValueTypeV1Schema>;
+  readonly receivedType?: z.infer<typeof QwenSanitizedValueTypeV1Schema>;
+}): QwenResponseBoundaryFailure =>
+  new QwenResponseBoundaryFailure({
+    reason: input.reason,
+    usage: input.usage,
+    diagnostic: createSyntheticQwenValidationDiagnosticV2(input),
   });
 
 export const QwenProviderErrorPayloadSchema = z
@@ -954,5 +1099,388 @@ export const validateQwenProviderResponseBoundaryV1 = (input: {
       });
     }
     throw error;
+  }
+};
+
+const stageForSemanticIssues = (issues: readonly ZodIssueLike[]): QwenValidationStageV2 => {
+  if (issues.some((issue) => issue.code === 'unrecognized_keys')) {
+    return 'unknown-field-rejection';
+  }
+  return 'semantic-output-schema';
+};
+
+const requireExactCanonicalQwenRequest = (
+  requestInput: SceneAnalysisModelRequestV1,
+): SceneAnalysisModelRequestV1 => {
+  try {
+    const request = validateSceneAnalysisRequestContextV1({
+      request: requestInput,
+      expectedModel: QWEN3_VL_FLASH_MODEL_CONTRACT_V1,
+    });
+    return requireCanonicalQwenBenchmarkRequestV1(request).request;
+  } catch {
+    throw syntheticFailureV2({
+      reason: 'identity-mismatch',
+      usage: null,
+      stage: 'request-relative-identity',
+      path: [],
+      validatorIssueCode: 'identity-mismatch',
+      classification: 'identity-mismatch',
+      expectedType: 'object',
+      receivedType: 'object',
+    });
+  }
+};
+
+export const materializeQwenSemanticSceneAnalysisOutputV1 = (input: {
+  readonly request: SceneAnalysisModelRequestV1;
+  readonly semanticOutput: QwenSemanticSceneAnalysisOutputV1;
+}) => {
+  const request = requireExactCanonicalQwenRequest(input.request);
+  const semanticOutput = QwenSemanticSceneAnalysisOutputV1Schema.parse(input.semanticOutput);
+  if (semanticOutput.composition.kind !== 'composition_proposal') {
+    throw syntheticFailureV2({
+      reason: 'schema-invalid',
+      usage: null,
+      stage: 'semantic-output-schema',
+      path: ['composition'],
+      validatorIssueCode: 'request-constraint',
+      classification: 'constraint',
+      expectedType: 'object',
+      receivedType: 'object',
+    });
+  }
+  const composition = {
+    kind: semanticOutput.composition.kind,
+    proposalVersion: 1 as const,
+    sourceAssetSha256: request.input.sourceAsset.sha256,
+    parts: semanticOutput.composition.parts,
+  };
+  const layerEvidence = semanticOutput.layerEvidence.map((evidence) => ({
+    partKey: evidence.partKey,
+    observationBasis: evidence.observationBasis,
+    confidence: {
+      unit: 'basis-points' as const,
+      valueBps: evidence.confidence.valueBps,
+    },
+    reviewFlags: evidence.reviewFlags,
+  }));
+  const observations = semanticOutput.textObservations.map((observation) => ({
+    observationVersion: 1 as const,
+    observationId: observation.observationId,
+    text: {
+      kind: 'observed-text' as const,
+      value: observation.text.value,
+      normalization: 'unicode-nfc-single-space-v1' as const,
+      contentTrust: 'untrusted-user-image-content' as const,
+      instructionAuthority: 'none' as const,
+    },
+    boundingBox: {
+      unit: 'normalized-basis-points' as const,
+      xBps: observation.boundingBox.xBps,
+      yBps: observation.boundingBox.yBps,
+      widthBps: observation.boundingBox.widthBps,
+      heightBps: observation.boundingBox.heightBps,
+    },
+    confidence: {
+      unit: 'basis-points' as const,
+      valueBps: observation.confidence.valueBps,
+    },
+  }));
+  const canonicalScene = ProposedSceneAnalysisOcrOutputV1Schema.parse({
+    outputVersion: 1,
+    visibleContentConstraint: 'only-directly-visible-objects-and-text',
+    composition,
+    layerEvidence,
+    ocrCompletion: {
+      kind: semanticOutput.ocrCompletion.kind,
+      observationCount: observations.length,
+    },
+    textObservations: observations,
+    reviewFlags: semanticOutput.reviewFlags,
+    humanReview: {
+      required: true,
+      proposalOnly: true,
+      automaticCutoutExportOrOtherDecisionAuthority: 'none',
+    },
+  });
+  const canonicalComposition = canonicalScene.composition;
+  if (canonicalComposition.kind !== 'composition_proposal') {
+    throw syntheticFailureV2({
+      reason: 'schema-invalid',
+      usage: null,
+      stage: 'materialization-invariant',
+      path: ['composition'],
+      validatorIssueCode: 'custom',
+      classification: 'constraint',
+      expectedType: 'object',
+      receivedType: 'object',
+    });
+  }
+  validateCompositionAnalysisResultV1({
+    request: {
+      sourceAsset: request.input.sourceAsset,
+      maxParts: request.input.options.maxParts,
+      includeBackground: request.input.options.includeBackground,
+    },
+    result: canonicalComposition,
+  });
+  const isNoTextFixture = request.input.fixture.repositoryPath.endsWith('/banner-no-text-v1.png');
+  if (
+    (isNoTextFixture &&
+      (canonicalScene.ocrCompletion.kind !== 'no-visible-text-observed' ||
+        canonicalScene.textObservations.length !== 0)) ||
+    (!isNoTextFixture &&
+      (canonicalScene.ocrCompletion.kind !== 'visible-text-observations-complete' ||
+        canonicalScene.textObservations.length === 0))
+  ) {
+    throw syntheticFailureV2({
+      reason: 'identity-mismatch',
+      usage: null,
+      stage: 'request-relative-identity',
+      path: ['ocrCompletion'],
+      validatorIssueCode: 'identity-mismatch',
+      classification: 'identity-mismatch',
+      expectedType: 'object',
+      receivedType: 'object',
+    });
+  }
+  const textObservations = createModelProducedActualTextObservationSetV1({
+    request,
+    observations: canonicalScene.textObservations,
+  });
+  return Object.freeze({
+    materializerVersion: 1 as const,
+    materializerSha256: QWEN_SEMANTIC_MATERIALIZER_V1_DEFINITION_SHA256,
+    canonicalScene,
+    composition: canonicalComposition,
+    layerEvidence: canonicalScene.layerEvidence,
+    ocrCompletion: canonicalScene.ocrCompletion,
+    textObservations,
+    reviewFlags: canonicalScene.reviewFlags,
+    humanReview: canonicalScene.humanReview,
+    trustedProvenance: textObservations.provenance,
+    observationBasisAuthority: 'untrusted-provider-semantic-claim' as const,
+    observationIdAuthority: 'untrusted-validated-local-semantic-reference' as const,
+    decisionAuthority: 'proposal-requires-user-review' as const,
+  });
+};
+
+/**
+ * Active Qwen boundary. Historical replay must continue to call the frozen V1 entry point above.
+ */
+export const validateQwenProviderResponseBoundaryV2 = (input: {
+  readonly response: QwenBoundaryTransportResponse;
+  readonly request: SceneAnalysisModelRequestV1;
+}) => {
+  const request = requireExactCanonicalQwenRequest(input.request);
+  if (input.response.status < 200 || input.response.status >= 300) {
+    try {
+      const parsedError = JSON.parse(input.response.bodyText) as unknown;
+      const providerError = QwenProviderErrorPayloadSchema.safeParse(parsedError);
+      if (providerError.success) {
+        throw syntheticFailureV2({
+          reason: 'provider-error',
+          usage: null,
+          stage: 'provider-error-envelope',
+          path: ['error'],
+          validatorIssueCode: 'provider-error',
+          classification: 'provider-error',
+          expectedType: 'object',
+          receivedType: 'object',
+        });
+      }
+      if (isRecord(parsedError) && Object.hasOwn(parsedError, 'error')) {
+        throw failureFromZodV2({
+          reason: 'http-error',
+          usage: null,
+          stage: 'provider-error-envelope',
+          error: providerError.error,
+          receivedRoot: parsedError,
+        });
+      }
+    } catch (error) {
+      if (error instanceof QwenResponseBoundaryFailure) throw error;
+    }
+    throw syntheticFailureV2({
+      reason: 'http-error',
+      usage: null,
+      stage: 'http-envelope',
+      path: [],
+      validatorIssueCode: 'http-status',
+      classification: 'http-status',
+    });
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(input.response.bodyText) as unknown;
+  } catch {
+    throw syntheticFailureV2({
+      reason: 'malformed-json',
+      usage: null,
+      stage: 'http-envelope',
+      path: [],
+      validatorIssueCode: 'invalid-json',
+      classification: 'json-syntax',
+      expectedType: 'object',
+      receivedType: 'string',
+    });
+  }
+  const providerError = QwenProviderErrorPayloadSchema.safeParse(parsed);
+  if (providerError.success) {
+    throw syntheticFailureV2({
+      reason: 'provider-error',
+      usage: null,
+      stage: 'provider-error-envelope',
+      path: ['error'],
+      validatorIssueCode: 'provider-error',
+      classification: 'provider-error',
+      expectedType: 'object',
+      receivedType: 'object',
+    });
+  }
+  if (!isRecord(parsed) || !Object.hasOwn(parsed, 'usage')) {
+    throw syntheticFailureV2({
+      reason: 'missing-usage',
+      usage: null,
+      stage: 'usage-accounting',
+      path: ['usage'],
+      validatorIssueCode: 'missing-required',
+      classification: 'missing-required',
+      expectedType: 'object',
+      receivedType: isRecord(parsed) ? 'undefined' : valueType(parsed),
+    });
+  }
+  const parsedUsage = QwenProviderUsageV1Schema.safeParse(parsed.usage);
+  if (!parsedUsage.success) {
+    throw failureFromZodV2({
+      reason: 'schema-invalid',
+      usage: null,
+      stage: 'usage-accounting',
+      error: parsedUsage.error,
+      receivedRoot: parsed.usage,
+    });
+  }
+  const usage = parsedUsage.data;
+  if (Object.hasOwn(parsed, 'error')) {
+    throw failureFromZodV2({
+      reason: 'schema-invalid',
+      usage,
+      stage: 'provider-error-envelope',
+      error: providerError.error,
+      receivedRoot: parsed,
+    });
+  }
+  if (!Array.isArray(parsed.choices) || parsed.choices.length !== 1) {
+    throw syntheticFailureV2({
+      reason: 'schema-invalid',
+      usage,
+      stage: 'choice-count',
+      path: ['choices'],
+      validatorIssueCode: 'request-constraint',
+      classification: 'constraint',
+      expectedType: 'array',
+      receivedType: valueType(parsed.choices),
+    });
+  }
+  const envelope = QwenSuccessEnvelopeSchema.safeParse(parsed);
+  if (!envelope.success) {
+    const issues = envelope.error.issues as readonly ZodIssueLike[];
+    throw failureFromZodV2({
+      reason: 'schema-invalid',
+      usage,
+      stage: stageForEnvelopeIssues(issues),
+      error: envelope.error,
+      receivedRoot: parsed,
+    });
+  }
+  if (envelope.data.model !== QWEN3_VL_REQUESTED_MODEL_ID) {
+    throw syntheticFailureV2({
+      reason: 'unexpected-model',
+      usage,
+      stage: 'model-identity',
+      path: ['model'],
+      validatorIssueCode: 'identity-mismatch',
+      classification: 'identity-mismatch',
+      expectedType: 'string',
+      receivedType: 'string',
+    });
+  }
+  if (envelope.data.choices[0].finish_reason !== 'stop') {
+    throw syntheticFailureV2({
+      reason: 'unexpected-finish',
+      usage,
+      stage: 'finish-reason',
+      path: ['choices', 0, 'finish_reason'],
+      validatorIssueCode: 'invalid-value',
+      classification: 'enum-mismatch',
+      expectedType: 'enum',
+      receivedType: valueType(envelope.data.choices[0].finish_reason),
+    });
+  }
+  let parsedAssistant: unknown;
+  try {
+    parsedAssistant = JSON.parse(envelope.data.choices[0].message.content) as unknown;
+  } catch {
+    throw syntheticFailureV2({
+      reason: 'malformed-json',
+      usage,
+      stage: 'assistant-json-syntax',
+      path: ['choices', 0, 'message', 'content'],
+      validatorIssueCode: 'invalid-json',
+      classification: 'json-syntax',
+      expectedType: 'object',
+      receivedType: 'string',
+    });
+  }
+  const semanticOutput = QwenSemanticSceneAnalysisOutputV1Schema.safeParse(parsedAssistant);
+  if (!semanticOutput.success) {
+    const issues = semanticOutput.error.issues as readonly ZodIssueLike[];
+    throw failureFromZodV2({
+      reason: 'schema-invalid',
+      usage,
+      stage: stageForSemanticIssues(issues),
+      error: semanticOutput.error,
+      receivedRoot: parsedAssistant,
+    });
+  }
+  try {
+    const proposal = materializeQwenSemanticSceneAnalysisOutputV1({
+      request,
+      semanticOutput: semanticOutput.data,
+    });
+    return Object.freeze({
+      boundaryVersion: 2 as const,
+      boundarySha256: QWEN_RESPONSE_BOUNDARY_V2_DEFINITION_SHA256,
+      envelope: envelope.data,
+      proposal,
+    });
+  } catch (error) {
+    if (error instanceof QwenResponseBoundaryFailure) {
+      throw new QwenResponseBoundaryFailure({
+        reason: error.reason,
+        usage,
+        diagnostic: error.diagnostic,
+      });
+    }
+    if (error instanceof z.ZodError) {
+      throw failureFromZodV2({
+        reason: 'schema-invalid',
+        usage,
+        stage: 'materialization-invariant',
+        error,
+        receivedRoot: semanticOutput.data,
+      });
+    }
+    throw syntheticFailureV2({
+      reason: 'schema-invalid',
+      usage,
+      stage: 'materialization-invariant',
+      path: [],
+      validatorIssueCode: 'custom',
+      classification: 'constraint',
+      expectedType: 'object',
+      receivedType: 'object',
+    });
   }
 };

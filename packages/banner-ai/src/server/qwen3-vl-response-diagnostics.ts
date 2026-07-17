@@ -6,17 +6,30 @@ import { fileURLToPath } from 'node:url';
 import { z } from 'zod';
 
 import {
+  QWEN3_VL_PROVIDER_PROTOCOL_WRAPPER_V3_SHA256,
   QWEN3_VL_PROVIDER_KEY,
   QWEN3_VL_REQUESTED_MODEL_ID,
+  QWEN3_VL_REQUEST_SHAPE_V4_SHA256,
 } from '../evaluation/qwen3-vl-candidate-evidence.js';
+import { SCENE_ANALYSIS_OCR_OUTPUT_JSON_SCHEMA_SHA256 } from '../evaluation/openai-scene-analysis-output.js';
+import {
+  QWEN_DIAGNOSTIC_V2_SEMANTIC_PROJECTION_V1,
+  QWEN_DIAGNOSTIC_V2_SEMANTIC_PROJECTION_V1_SHA256,
+  QWEN_DIAGNOSTIC_V2_SEMANTIC_PROJECTION_VERSION,
+  QWEN_RESPONSE_BOUNDARY_V2_DEFINITION_SHA256,
+  QWEN_SEMANTIC_MATERIALIZER_V1_DEFINITION_SHA256,
+} from '../evaluation/qwen-response-contract-evidence.js';
+import { QWEN_SEMANTIC_SCENE_ANALYSIS_JSON_SCHEMA_V1_SHA256 } from '../evaluation/qwen-semantic-scene-analysis-output.js';
 import { canonicalizeJson, sha256Hex } from '../scene/canonical-scene-json.js';
 import { createCanonicalQwenBenchmarkRequestV1 } from './qwen-four-fixture-request-catalog.js';
 import {
   QwenResponseBoundaryFailure,
   QwenValidationDiagnosticV1Schema,
+  QwenValidationDiagnosticV2Schema,
   compareQwenDiagnosticCodeUnits,
   pseudonymizeQwenDiagnosticFieldNameV1,
   validateQwenProviderResponseBoundaryV1,
+  validateQwenProviderResponseBoundaryV2,
   type QwenBoundaryTransportResponse,
 } from './qwen3-vl-response-boundary.js';
 
@@ -169,6 +182,30 @@ const QwenCapturedExpectedOutcomeV1Schema = z.discriminatedUnion('kind', [
     .readonly(),
 ]);
 
+const QwenCapturedExpectedOutcomeV2Schema = z.discriminatedUnion('kind', [
+  z
+    .strictObject({
+      kind: z.literal('replay-valid'),
+    })
+    .readonly(),
+  z
+    .strictObject({
+      kind: z.literal('rejected'),
+      failureReason: z.enum([
+        'http-error',
+        'identity-mismatch',
+        'malformed-json',
+        'missing-usage',
+        'provider-error',
+        'schema-invalid',
+        'unexpected-finish',
+        'unexpected-model',
+      ]),
+      diagnostic: QwenValidationDiagnosticV2Schema,
+    })
+    .readonly(),
+]);
+
 export const QwenSanitizedResponseCapturePayloadV1Schema = z
   .strictObject({
     captureVersion: z.literal(1),
@@ -221,6 +258,74 @@ export const QwenDiagnosticArtifactMetadataV1Schema = z
 
 export type QwenDiagnosticArtifactMetadataV1 = z.infer<
   typeof QwenDiagnosticArtifactMetadataV1Schema
+>;
+
+export const QwenSanitizedResponseCapturePayloadV2Schema = z
+  .strictObject({
+    captureVersion: z.literal(2),
+    artifactKind: z.literal('qwen-sanitized-provider-response-capture'),
+    fixtureId: z.literal('banner-person-v1'),
+    providerKey: z.literal(QWEN3_VL_PROVIDER_KEY),
+    requestedModelId: z.literal(QWEN3_VL_REQUESTED_MODEL_ID),
+    providerProtocolWrapperSha256: z.literal(QWEN3_VL_PROVIDER_PROTOCOL_WRAPPER_V3_SHA256),
+    requestShapeSha256: z.literal(QWEN3_VL_REQUEST_SHAPE_V4_SHA256),
+    semanticOutputSchemaVersion: z.literal(1),
+    semanticOutputSchemaSha256: z.literal(QWEN_SEMANTIC_SCENE_ANALYSIS_JSON_SCHEMA_V1_SHA256),
+    canonicalOutputSchemaVersion: z.literal(1),
+    canonicalOutputSchemaSha256: z.literal(SCENE_ANALYSIS_OCR_OUTPUT_JSON_SCHEMA_SHA256),
+    responseBoundaryVersion: z.literal(2),
+    responseBoundarySha256: z.literal(QWEN_RESPONSE_BOUNDARY_V2_DEFINITION_SHA256),
+    semanticMaterializerVersion: z.literal(1),
+    semanticMaterializerSha256: z.literal(QWEN_SEMANTIC_MATERIALIZER_V1_DEFINITION_SHA256),
+    diagnosticSemanticProjectionVersion: z.literal(QWEN_DIAGNOSTIC_V2_SEMANTIC_PROJECTION_VERSION),
+    diagnosticSemanticProjectionSha256: z.literal(QWEN_DIAGNOSTIC_V2_SEMANTIC_PROJECTION_V1_SHA256),
+    capturedAtMs: z.int().min(0),
+    response: z
+      .strictObject({
+        status: z.int().min(0).max(999),
+        body: QwenCapturedBodyProjectionV1Schema,
+      })
+      .readonly(),
+    expectedOutcome: QwenCapturedExpectedOutcomeV2Schema,
+    providerCallCount: z.literal(1),
+    retryCount: z.literal(0),
+    productionAdmissionAuthority: z.literal(false),
+    humanOracleModified: z.literal(false),
+  })
+  .readonly();
+
+export const QwenSanitizedResponseCaptureArtifactV2Schema = z
+  .strictObject({
+    artifactVersion: z.literal(2),
+    payload: QwenSanitizedResponseCapturePayloadV2Schema,
+    canonicalPayloadSha256: z.string().regex(/^[0-9a-f]{64}$/u),
+  })
+  .superRefine((artifact, context) => {
+    if (
+      artifact.canonicalPayloadSha256 !==
+      sha256Hex(Buffer.from(canonicalizeJson(artifact.payload), 'utf8'))
+    ) {
+      context.addIssue({ code: 'custom', message: 'Diagnostic V2 payload digest drifted.' });
+    }
+  })
+  .readonly();
+
+export type QwenSanitizedResponseCaptureArtifactV2 = z.infer<
+  typeof QwenSanitizedResponseCaptureArtifactV2Schema
+>;
+
+export const QwenDiagnosticArtifactMetadataV2Schema = z
+  .strictObject({
+    metadataVersion: z.literal(2),
+    artifactVersion: z.literal(2),
+    relativePath: QwenDiagnosticResponseRelativePathV1Schema,
+    rawFileSha256: z.string().regex(/^[0-9a-f]{64}$/u),
+    mode: z.literal('0600'),
+  })
+  .readonly();
+
+export type QwenDiagnosticArtifactMetadataV2 = z.infer<
+  typeof QwenDiagnosticArtifactMetadataV2Schema
 >;
 
 export class QwenDiagnosticCaptureError extends Error {
@@ -804,6 +909,55 @@ const providerEnvelopeNode = objectNode({
   }),
   request_id: leaf(['string'], { stringMode: 'redact', maximumLength: 256 }),
 });
+const providerEnvelopeNodeV2 = objectNode({
+  id: leaf(['string'], { stringMode: 'redact', maximumLength: 256 }),
+  object: enumString(['chat.completion']),
+  created: numberLeaf,
+  model: leaf(['string'], { stringMode: 'model', maximumLength: 256 }),
+  choices: arrayNode(
+    objectNode({
+      index: numberLeaf,
+      message: objectNode({
+        role: enumString(['assistant']),
+        content: {
+          kind: 'assistant-json',
+          schema: QWEN_DIAGNOSTIC_V2_SEMANTIC_PROJECTION_V1,
+          maximumLength: 2_000_000,
+        },
+        reasoning_content: leaf(['string', 'null'], {
+          stringMode: 'enum',
+          allowedStrings: [''],
+        }),
+        refusal: nullLeaf,
+        audio: nullLeaf,
+        function_call: nullLeaf,
+        tool_calls: arrayNode(objectNode({}), 0),
+      }),
+      finish_reason: leaf(['string', 'null'], {
+        stringMode: 'enum',
+        allowedStrings: ['stop', 'length', 'tool_calls', 'content_filter', 'function_call'],
+      }),
+      logprobs: nullLeaf,
+    }),
+    1,
+  ),
+  usage: objectNode({
+    prompt_tokens: numberLeaf,
+    completion_tokens: numberLeaf,
+    total_tokens: numberLeaf,
+    prompt_tokens_details: usageDetailsNode,
+    completion_tokens_details: completionUsageDetailsNode,
+  }),
+  system_fingerprint: leaf(['string', 'null'], { stringMode: 'redact', maximumLength: 256 }),
+  service_tier: nullLeaf,
+  error: objectNode({
+    message: leaf(['string'], { stringMode: 'redact', maximumLength: 4_096 }),
+    type: leaf(['string'], { stringMode: 'redact', maximumLength: 256 }),
+    param: leaf(['string', 'null'], { stringMode: 'redact', maximumLength: 256 }),
+    code: leaf(['string', 'number'], { stringMode: 'redact', maximumLength: 256 }),
+  }),
+  request_id: leaf(['string'], { stringMode: 'redact', maximumLength: 256 }),
+});
 
 const sanitizedWrongTypePlaceholder = (value: unknown): unknown => {
   if (typeof value === 'string') return 'sanitized-wrong-type-string';
@@ -1037,6 +1191,76 @@ const projectBody = (bodyText: string): z.infer<typeof QwenCapturedBodyProjectio
   }
 };
 
+const projectBodyV2 = (bodyText: string): z.infer<typeof QwenCapturedBodyProjectionV1Schema> => {
+  if (Buffer.byteLength(bodyText, 'utf8') > MAX_PROVIDER_RESPONSE_CAPTURE_INPUT_BYTES) {
+    throw new QwenDiagnosticCaptureError('artifact-write-failed');
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(bodyText) as unknown;
+  } catch {
+    return { kind: 'malformed-json' };
+  }
+  try {
+    const allUnknownFields: CapturedUnknownField[] = [];
+    const projection = projectWithSchema({
+      value: parsed,
+      node: providerEnvelopeNodeV2,
+      path: [],
+      scope: 'provider-envelope',
+      unknownFields: allUnknownFields,
+    });
+    const sortedUnknownFields = allUnknownFields.toSorted(unknownFieldComparator);
+    const unknownFields = sortedUnknownFields.slice(0, MAX_PRIMARY_UNKNOWN_FIELDS);
+    const overflowFields = sortedUnknownFields.slice(MAX_PRIMARY_UNKNOWN_FIELDS);
+    const overflowGroups = new Map<string, CapturedUnknownField[]>();
+    for (const field of overflowFields) {
+      const key = `${field.scope}:${field.parentPath}`;
+      const group = overflowGroups.get(key) ?? [];
+      group.push(field);
+      overflowGroups.set(key, group);
+      if (overflowGroups.size > MAX_UNKNOWN_FIELD_OVERFLOW_GROUPS) {
+        throw new QwenDiagnosticCaptureError('artifact-write-failed');
+      }
+    }
+    const unknownFieldOverflow = [...overflowGroups.values()]
+      .map((fields) => {
+        const retainedFields = fields.slice(0, MAX_RETAINED_OVERFLOW_FIELDS_PER_PARENT);
+        return {
+          scope: fields[0]!.scope,
+          parentPath: fields[0]!.parentPath,
+          retainedFields,
+          actualFieldCount: fields.length,
+          retainedFieldCount: retainedFields.length,
+          generatedFieldCount: fields.length - retainedFields.length,
+        };
+      })
+      .toSorted((left, right) =>
+        compareQwenDiagnosticCodeUnits(canonicalizeJson(left), canonicalizeJson(right)),
+      );
+    const retainedOverflowFieldCount = unknownFieldOverflow.reduce(
+      (total, overflow) => total + overflow.retainedFieldCount,
+      0,
+    );
+    const generatedOverflowFieldCount = unknownFieldOverflow.reduce(
+      (total, overflow) => total + overflow.generatedFieldCount,
+      0,
+    );
+    return QwenCapturedBodyProjectionV1Schema.parse({
+      kind: 'json-projection',
+      canonicalBodyProjection: canonicalizeJson(projection),
+      unknownFields,
+      actualUnknownFieldCount: sortedUnknownFields.length,
+      retainedUnknownFieldCount: unknownFields.length + retainedOverflowFieldCount,
+      truncatedUnknownFieldCount: generatedOverflowFieldCount,
+      unknownFieldOverflow,
+    });
+  } catch (error) {
+    if (error instanceof QwenDiagnosticCaptureError) throw error;
+    throw new QwenDiagnosticCaptureError('artifact-write-failed');
+  }
+};
+
 const placeholderForType = (type: z.infer<typeof CapturedValueTypeV1Schema>): unknown => {
   switch (type) {
     case 'null':
@@ -1139,16 +1363,67 @@ const reconstructResponse = (
   });
 };
 
+const reconstructResponseV2 = (
+  artifact: QwenSanitizedResponseCaptureArtifactV2,
+): QwenBoundaryTransportResponse => {
+  const body = artifact.payload.response.body;
+  if (body.kind === 'malformed-json') {
+    return Object.freeze({ status: artifact.payload.response.status, bodyText: '{' });
+  }
+  const projection = JSON.parse(body.canonicalBodyProjection) as unknown;
+  const unknownFields = reconstructionUnknownFields(body);
+  const providerUnknownFields = unknownFields.filter(
+    (field) => field.scope === 'provider-envelope',
+  );
+  const assistantUnknownFields = unknownFields.filter((field) => field.scope === 'assistant-json');
+  if (
+    assistantUnknownFields.length > 0 &&
+    isRecord(projection) &&
+    Array.isArray(projection.choices)
+  ) {
+    const choice = projection.choices[0];
+    if (
+      isRecord(choice) &&
+      isRecord(choice.message) &&
+      typeof choice.message.content === 'string'
+    ) {
+      const assistantProjection = JSON.parse(choice.message.content) as unknown;
+      choice.message.content = canonicalizeJson(
+        applyUnknownFields(assistantProjection, assistantUnknownFields),
+      );
+    }
+  }
+  return Object.freeze({
+    status: artifact.payload.response.status,
+    bodyText: canonicalizeJson(applyUnknownFields(projection, providerUnknownFields)),
+  });
+};
+
 const expectedOutcome = (input: {
   readonly failure: QwenResponseBoundaryFailure | null;
 }): z.infer<typeof QwenCapturedExpectedOutcomeV1Schema> =>
-  input.failure === null
-    ? { kind: 'replay-valid' }
-    : {
-        kind: 'rejected',
-        failureReason: input.failure.reason,
-        diagnostic: input.failure.diagnostic,
-      };
+  QwenCapturedExpectedOutcomeV1Schema.parse(
+    input.failure === null
+      ? { kind: 'replay-valid' }
+      : {
+          kind: 'rejected',
+          failureReason: input.failure.reason,
+          diagnostic: input.failure.diagnostic,
+        },
+  );
+
+const expectedOutcomeV2 = (input: {
+  readonly failure: QwenResponseBoundaryFailure | null;
+}): z.infer<typeof QwenCapturedExpectedOutcomeV2Schema> =>
+  QwenCapturedExpectedOutcomeV2Schema.parse(
+    input.failure === null
+      ? { kind: 'replay-valid' }
+      : {
+          kind: 'rejected',
+          failureReason: input.failure.reason,
+          diagnostic: input.failure.diagnostic,
+        },
+  );
 
 export const captureSanitizedQwenResponseV1 = async (input: {
   readonly reservations: QwenDiagnosticReservationSetV1;
@@ -1190,6 +1465,72 @@ export const captureSanitizedQwenResponseV1 = async (input: {
       throw new QwenDiagnosticCaptureError('artifact-write-failed');
     }
     const metadata = QwenDiagnosticArtifactMetadataV1Schema.parse({
+      relativePath,
+      rawFileSha256: sha256Hex(bytes),
+      mode: '0600',
+    });
+    await finalizeReservedFile(reservationState.response, bytes);
+    return metadata;
+  } catch (error) {
+    if (error instanceof QwenDiagnosticCaptureError) throw error;
+    throw new QwenDiagnosticCaptureError('artifact-write-failed');
+  }
+};
+
+export const captureSanitizedQwenResponseV2 = async (input: {
+  readonly reservations: QwenDiagnosticReservationSetV1;
+  readonly capturedAtMs: number;
+  readonly fixtureId: 'banner-person-v1';
+  readonly response: QwenBoundaryTransportResponse;
+  readonly failure: QwenResponseBoundaryFailure | null;
+}): Promise<QwenDiagnosticArtifactMetadataV2> => {
+  try {
+    const reservationState = requireReservationState(input.reservations);
+    const relativePath = input.reservations.responseArtifactRelativePath;
+    if (reservationState.response.relativePath !== relativePath) {
+      throw new QwenDiagnosticCaptureError('artifact-reservation-failed');
+    }
+    const payload = QwenSanitizedResponseCapturePayloadV2Schema.parse({
+      captureVersion: 2,
+      artifactKind: 'qwen-sanitized-provider-response-capture',
+      fixtureId: input.fixtureId,
+      providerKey: QWEN3_VL_PROVIDER_KEY,
+      requestedModelId: QWEN3_VL_REQUESTED_MODEL_ID,
+      providerProtocolWrapperSha256: QWEN3_VL_PROVIDER_PROTOCOL_WRAPPER_V3_SHA256,
+      requestShapeSha256: QWEN3_VL_REQUEST_SHAPE_V4_SHA256,
+      semanticOutputSchemaVersion: 1,
+      semanticOutputSchemaSha256: QWEN_SEMANTIC_SCENE_ANALYSIS_JSON_SCHEMA_V1_SHA256,
+      canonicalOutputSchemaVersion: 1,
+      canonicalOutputSchemaSha256: SCENE_ANALYSIS_OCR_OUTPUT_JSON_SCHEMA_SHA256,
+      responseBoundaryVersion: 2,
+      responseBoundarySha256: QWEN_RESPONSE_BOUNDARY_V2_DEFINITION_SHA256,
+      semanticMaterializerVersion: 1,
+      semanticMaterializerSha256: QWEN_SEMANTIC_MATERIALIZER_V1_DEFINITION_SHA256,
+      diagnosticSemanticProjectionVersion: QWEN_DIAGNOSTIC_V2_SEMANTIC_PROJECTION_VERSION,
+      diagnosticSemanticProjectionSha256: QWEN_DIAGNOSTIC_V2_SEMANTIC_PROJECTION_V1_SHA256,
+      capturedAtMs: z.int().min(0).parse(input.capturedAtMs),
+      response: {
+        status: input.response.status,
+        body: projectBodyV2(input.response.bodyText),
+      },
+      expectedOutcome: expectedOutcomeV2({ failure: input.failure }),
+      providerCallCount: 1,
+      retryCount: 0,
+      productionAdmissionAuthority: false,
+      humanOracleModified: false,
+    });
+    const artifact = QwenSanitizedResponseCaptureArtifactV2Schema.parse({
+      artifactVersion: 2,
+      payload,
+      canonicalPayloadSha256: sha256Hex(Buffer.from(canonicalizeJson(payload), 'utf8')),
+    });
+    const bytes = Buffer.from(`${canonicalizeJson(artifact)}\n`, 'utf8');
+    if (bytes.byteLength < 2 || bytes.byteLength > MAX_DIAGNOSTIC_ARTIFACT_BYTES) {
+      throw new QwenDiagnosticCaptureError('artifact-write-failed');
+    }
+    const metadata = QwenDiagnosticArtifactMetadataV2Schema.parse({
+      metadataVersion: 2,
+      artifactVersion: 2,
       relativePath,
       rawFileSha256: sha256Hex(bytes),
       mode: '0600',
@@ -1301,10 +1642,7 @@ export const QwenReplayResultV1Schema = z
 
 export type QwenReplayResultV1 = z.infer<typeof QwenReplayResultV1Schema>;
 
-export const replaySanitizedQwenResponseV1 = async (input: {
-  readonly responseFile: unknown;
-}): Promise<QwenReplayResultV1> => {
-  const bytes = await readSafeReplayBytes(input.responseFile);
+const replaySanitizedQwenResponseV1FromBytes = (bytes: Buffer): QwenReplayResultV1 => {
   const artifact = QwenSanitizedResponseCaptureArtifactV1Schema.parse(
     JSON.parse(bytes.toString('utf8')),
   );
@@ -1345,4 +1683,126 @@ export const replaySanitizedQwenResponseV1 = async (input: {
     providerSuccessAuthority: false,
     humanOracleModified: false,
   });
+};
+
+export const replaySanitizedQwenResponseV1 = async (input: {
+  readonly responseFile: unknown;
+}): Promise<QwenReplayResultV1> =>
+  replaySanitizedQwenResponseV1FromBytes(await readSafeReplayBytes(input.responseFile));
+
+export const QwenReplayResultV2Schema = z
+  .strictObject({
+    replayVersion: z.literal(2),
+    artifactVersion: z.literal(2),
+    replayKind: z.literal('qwen-offline-response-validation-replay'),
+    fixtureId: z.literal('banner-person-v1'),
+    providerProtocolWrapperSha256: z.literal(QWEN3_VL_PROVIDER_PROTOCOL_WRAPPER_V3_SHA256),
+    requestShapeSha256: z.literal(QWEN3_VL_REQUEST_SHAPE_V4_SHA256),
+    semanticOutputSchemaVersion: z.literal(1),
+    semanticOutputSchemaSha256: z.literal(QWEN_SEMANTIC_SCENE_ANALYSIS_JSON_SCHEMA_V1_SHA256),
+    canonicalOutputSchemaVersion: z.literal(1),
+    canonicalOutputSchemaSha256: z.literal(SCENE_ANALYSIS_OCR_OUTPUT_JSON_SCHEMA_SHA256),
+    responseBoundaryVersion: z.literal(2),
+    responseBoundarySha256: z.literal(QWEN_RESPONSE_BOUNDARY_V2_DEFINITION_SHA256),
+    semanticMaterializerVersion: z.literal(1),
+    semanticMaterializerSha256: z.literal(QWEN_SEMANTIC_MATERIALIZER_V1_DEFINITION_SHA256),
+    diagnosticSemanticProjectionVersion: z.literal(QWEN_DIAGNOSTIC_V2_SEMANTIC_PROJECTION_VERSION),
+    diagnosticSemanticProjectionSha256: z.literal(QWEN_DIAGNOSTIC_V2_SEMANTIC_PROJECTION_V1_SHA256),
+    providerCallCount: z.literal(0),
+    networkUsed: z.literal(false),
+    validationStatus: z.enum(['replay-valid', 'replay-rejected']),
+    failureReason: z
+      .enum([
+        'http-error',
+        'identity-mismatch',
+        'malformed-json',
+        'missing-usage',
+        'provider-error',
+        'schema-invalid',
+        'unexpected-finish',
+        'unexpected-model',
+      ])
+      .nullable(),
+    diagnostic: QwenValidationDiagnosticV2Schema.nullable(),
+    replayReproduced: z.boolean(),
+    sourceRawFileSha256: z.string().regex(/^[0-9a-f]{64}$/u),
+    productionAdmissionAuthority: z.literal(false),
+    providerSuccessAuthority: z.literal(false),
+    humanOracleModified: z.literal(false),
+  })
+  .readonly();
+
+export type QwenReplayResultV2 = z.infer<typeof QwenReplayResultV2Schema>;
+
+const replaySanitizedQwenResponseV2FromBytes = (bytes: Buffer): QwenReplayResultV2 => {
+  const artifact = QwenSanitizedResponseCaptureArtifactV2Schema.parse(
+    JSON.parse(bytes.toString('utf8')),
+  );
+  const request = createCanonicalQwenBenchmarkRequestV1(artifact.payload.fixtureId);
+  let failure: QwenResponseBoundaryFailure | null = null;
+  try {
+    validateQwenProviderResponseBoundaryV2({
+      response: reconstructResponseV2(artifact),
+      request,
+    });
+  } catch (error) {
+    if (!(error instanceof QwenResponseBoundaryFailure)) throw error;
+    failure = error;
+  }
+  const expected = artifact.payload.expectedOutcome;
+  const replayReproduced =
+    (expected.kind === 'replay-valid' && failure === null) ||
+    (expected.kind === 'rejected' &&
+      failure !== null &&
+      expected.failureReason === failure.reason &&
+      expected.diagnostic.stage === failure.diagnostic.stage &&
+      expected.diagnostic.issueDigestSha256 === failure.diagnostic.issueDigestSha256 &&
+      expected.diagnostic.totalIssueCount === failure.diagnostic.totalIssueCount &&
+      expected.diagnostic.retainedIssueCount === failure.diagnostic.retainedIssueCount &&
+      expected.diagnostic.truncatedIssueCount === failure.diagnostic.truncatedIssueCount);
+  return QwenReplayResultV2Schema.parse({
+    replayVersion: 2,
+    artifactVersion: 2,
+    replayKind: 'qwen-offline-response-validation-replay',
+    fixtureId: artifact.payload.fixtureId,
+    providerProtocolWrapperSha256: QWEN3_VL_PROVIDER_PROTOCOL_WRAPPER_V3_SHA256,
+    requestShapeSha256: QWEN3_VL_REQUEST_SHAPE_V4_SHA256,
+    semanticOutputSchemaVersion: 1,
+    semanticOutputSchemaSha256: QWEN_SEMANTIC_SCENE_ANALYSIS_JSON_SCHEMA_V1_SHA256,
+    canonicalOutputSchemaVersion: 1,
+    canonicalOutputSchemaSha256: SCENE_ANALYSIS_OCR_OUTPUT_JSON_SCHEMA_SHA256,
+    responseBoundaryVersion: 2,
+    responseBoundarySha256: QWEN_RESPONSE_BOUNDARY_V2_DEFINITION_SHA256,
+    semanticMaterializerVersion: 1,
+    semanticMaterializerSha256: QWEN_SEMANTIC_MATERIALIZER_V1_DEFINITION_SHA256,
+    diagnosticSemanticProjectionVersion: artifact.payload.diagnosticSemanticProjectionVersion,
+    diagnosticSemanticProjectionSha256: artifact.payload.diagnosticSemanticProjectionSha256,
+    providerCallCount: 0,
+    networkUsed: false,
+    validationStatus: failure === null ? 'replay-valid' : 'replay-rejected',
+    failureReason: failure?.reason ?? null,
+    diagnostic: failure?.diagnostic ?? null,
+    replayReproduced,
+    sourceRawFileSha256: sha256Hex(bytes),
+    productionAdmissionAuthority: false,
+    providerSuccessAuthority: false,
+    humanOracleModified: false,
+  });
+};
+
+export const replaySanitizedQwenResponseV2 = async (input: {
+  readonly responseFile: unknown;
+}): Promise<QwenReplayResultV2> =>
+  replaySanitizedQwenResponseV2FromBytes(await readSafeReplayBytes(input.responseFile));
+
+export const replaySanitizedQwenResponse = async (input: {
+  readonly responseFile: unknown;
+}): Promise<QwenReplayResultV1 | QwenReplayResultV2> => {
+  const bytes = await readSafeReplayBytes(input.responseFile);
+  const candidate = JSON.parse(bytes.toString('utf8')) as unknown;
+  if (!isRecord(candidate)) throw new TypeError('Qwen replay artifact must be an object.');
+  const artifactVersion = z.union([z.literal(1), z.literal(2)]).parse(candidate.artifactVersion);
+  return artifactVersion === 2
+    ? replaySanitizedQwenResponseV2FromBytes(bytes)
+    : replaySanitizedQwenResponseV1FromBytes(bytes);
 };

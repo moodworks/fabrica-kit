@@ -12,6 +12,8 @@ import {
   QWEN3_VL_MODEL_AVAILABILITY_EVIDENCE_V1_SHA256,
   QWEN3_VL_MODEL_LIFECYCLE_EVIDENCE_V1_SHA256,
   QWEN3_VL_REQUEST_SHAPE_V3_SHA256,
+  QWEN3_VL_REQUEST_SHAPE_V4,
+  QWEN3_VL_REQUEST_SHAPE_V4_SHA256,
   QWEN3_VL_SERVER_WORKSPACE_ID,
   QWEN_SINGLE_FIXTURE_DIAGNOSTIC_CAPS_V2_SHA256,
   QWEN_SINGLE_FIXTURE_DIAGNOSTIC_CAPS_V3,
@@ -25,15 +27,24 @@ import {
   deriveQwenSingaporeChatCompletionsEndpoint,
 } from '../src/evaluation/qwen3-vl-candidate-evidence.js';
 import {
+  QWEN_DIAGNOSTIC_V2_SEMANTIC_PROJECTION_V1_SHA256,
+  QWEN_DIAGNOSTIC_V2_SEMANTIC_PROJECTION_VERSION,
+} from '../src/evaluation/qwen-response-contract-evidence.js';
+import {
   createQwenDryRunExecutionAuthorization,
   createQwenDiagnosticAuthorizationPacketV4,
+  createQwenDiagnosticAuthorizationPacketV5,
   createQwenDiagnosticAuthorizationPacketV3,
   createQwenManualReleaseBindingV1,
   mintQwenBenchmarkExecutionAuthorization,
   preflightQwenLiveExecutionAuthorization,
 } from '../src/server/qwen3-vl-scene-analysis-adapter.js';
 import { createQwen3VlNativeFetchTransport } from '../src/server/qwen3-vl-native-fetch-transport.js';
-import { QWEN_FOUR_FIXTURE_ACTIVE_MODEL_INPUT_DIGESTS_SHA256 } from '../src/server/qwen-four-fixture-request-catalog.js';
+import {
+  QWEN_FOUR_FIXTURE_ACTIVE_MODEL_INPUT_DIGESTS_SHA256,
+  QWEN_FOUR_FIXTURE_PROVIDER_SPECIFIC_AGGREGATE_V3_SHA256,
+  QWEN_FOUR_FIXTURE_PROVIDER_SPECIFIC_AGGREGATE_V4_SHA256,
+} from '../src/server/qwen-four-fixture-request-catalog.js';
 
 describe('Qwen Singapore provider revision', () => {
   const currentGitSha = '45b3ceaf311008fb5c84cc8f8ea236d7846a20bf';
@@ -123,6 +134,15 @@ describe('Qwen Singapore provider revision', () => {
     expect(QWEN3_VL_REQUEST_SHAPE_V3_SHA256).toBe(
       '6db92da8ad630244d1e45ee63d9fb64de97f57c03ebdd5b851952436549a3252',
     );
+    expect(QWEN3_VL_REQUEST_SHAPE_V4_SHA256).toBe(
+      '1f864a8efccdaaa59539bc745963c98284913979703fb1e38966b59e4d56d580',
+    );
+    expect(QWEN3_VL_REQUEST_SHAPE_V4).toMatchObject({
+      adapterVersion: 2,
+      adapterResultVersion: 2,
+      diagnosticSemanticProjectionVersion: QWEN_DIAGNOSTIC_V2_SEMANTIC_PROJECTION_VERSION,
+      diagnosticSemanticProjectionSha256: QWEN_DIAGNOSTIC_V2_SEMANTIC_PROJECTION_V1_SHA256,
+    });
   });
 
   it('dry-run binds Singapore without reading a secret, and historical packets cannot mint', () => {
@@ -185,8 +205,14 @@ describe('Qwen Singapore provider revision', () => {
     expect(QWEN3_VL_REQUEST_SHAPE_V2_SHA256).toBe(
       '6a540409b86a7b7e7c677ddc5fb5bd3d9bab7ee35758a1da3679ade49af8fb27',
     );
-    expect(QWEN_FOUR_FIXTURE_ACTIVE_MODEL_INPUT_DIGESTS_SHA256).toBe(
+    expect(QWEN_FOUR_FIXTURE_PROVIDER_SPECIFIC_AGGREGATE_V3_SHA256).toBe(
       '3f054e4b8ed25273bb71fed3416583b49619334aea67c1b9c34897fd3632e8f7',
+    );
+    expect(QWEN_FOUR_FIXTURE_PROVIDER_SPECIFIC_AGGREGATE_V4_SHA256).toBe(
+      'b1f515a9e29bce8a6acbb6a5c371f235402023428989b682a6af0b27a85666cc',
+    );
+    expect(QWEN_FOUR_FIXTURE_ACTIVE_MODEL_INPUT_DIGESTS_SHA256).toBe(
+      QWEN_FOUR_FIXTURE_PROVIDER_SPECIFIC_AGGREGATE_V4_SHA256,
     );
     expect(() =>
       QwenCalculatedListCostV2Schema.parse({
@@ -218,13 +244,13 @@ describe('Qwen Singapore provider revision', () => {
       diagnosticReportRelativePath:
         '.local-data/banner-ai/qwen-response-diagnostic-report-manual-acceptance-report.json',
     } as const;
-    expect(() => createQwenDiagnosticAuthorizationPacketV4(base as never)).toThrow();
+    expect(() => createQwenDiagnosticAuthorizationPacketV5(base as never)).toThrow();
     const release = createQwenManualReleaseBindingV1({
       releaseId: 'qwen.manual.acceptance.release.0001',
       issuedAtMs: base.issuedAtMs - 1_000,
       expiresAtMs: base.expiresAtMs + 1_000,
     });
-    const packet = createQwenDiagnosticAuthorizationPacketV4({ ...base, manualRelease: release });
+    const packet = createQwenDiagnosticAuthorizationPacketV5({ ...base, manualRelease: release });
     expect(() => mintQwenBenchmarkExecutionAuthorization(packet)).toThrow();
     expect(
       preflightQwenLiveExecutionAuthorization({
@@ -233,7 +259,30 @@ describe('Qwen Singapore provider revision', () => {
         nowMs: liveNowMs,
         currentGitSha,
       }).authorizationVersion,
-    ).toBe(4);
+    ).toBe(5);
+    expect(packet).toMatchObject({
+      modelAvailabilityEvidenceSha256: QWEN3_VL_MODEL_AVAILABILITY_EVIDENCE_V2_SHA256,
+      modelLifecycleEvidenceSha256: QWEN3_VL_MODEL_LIFECYCLE_EVIDENCE_V2_SHA256,
+      requestShapeSha256: QWEN3_VL_REQUEST_SHAPE_V4_SHA256,
+      orderedModelInputDigestsSha256: QWEN_FOUR_FIXTURE_PROVIDER_SPECIFIC_AGGREGATE_V4_SHA256,
+      activeProviderAggregateSha256: QWEN_FOUR_FIXTURE_PROVIDER_SPECIFIC_AGGREGATE_V4_SHA256,
+      diagnosticCapture: {
+        responseCaptureVersion: 2,
+      },
+    });
+    const historicalV4Packet = createQwenDiagnosticAuthorizationPacketV4({
+      ...base,
+      manualRelease: release,
+    });
+    expect(historicalV4Packet.authorizationVersion).toBe(4);
+    expect(() =>
+      preflightQwenLiveExecutionAuthorization({
+        packet: historicalV4Packet,
+        secretPresent: true,
+        nowMs: liveNowMs,
+        currentGitSha,
+      }),
+    ).toThrow();
     expect(() =>
       preflightQwenLiveExecutionAuthorization({
         packet,
@@ -249,7 +298,7 @@ describe('Qwen Singapore provider revision', () => {
         expiresAtMs: liveNowMs + 900_001,
       }),
     ).toThrow();
-    const oldPacket = createQwenDiagnosticAuthorizationPacketV4({
+    const oldPacket = createQwenDiagnosticAuthorizationPacketV5({
       ...base,
       issuedAtMs: liveNowMs - 60_000,
       expiresAtMs: liveNowMs + 539_000,
@@ -276,7 +325,7 @@ describe('Qwen Singapore provider revision', () => {
       issuedAtMs: liveNowMs - 700_000,
       expiresAtMs: liveNowMs - 200_000,
     });
-    const stalePacket = createQwenDiagnosticAuthorizationPacketV4({
+    const stalePacket = createQwenDiagnosticAuthorizationPacketV5({
       ...base,
       manualRelease: staleRelease,
     });
@@ -288,6 +337,96 @@ describe('Qwen Singapore provider revision', () => {
         currentGitSha,
       }),
     ).toThrow();
+  });
+
+  it('rejects every active V5 binding or authority mutation before execution authority mints', () => {
+    const packet = createQwenDiagnosticAuthorizationPacketV5({
+      authorizationId: 'qwen.manual.binding-matrix.0001',
+      issuedAtMs: liveNowMs - 1_000,
+      expiresAtMs: liveNowMs + 599_000,
+      gitSha: currentGitSha,
+      manualRelease: manualReleaseFor('binding-matrix'),
+      responseArtifactRelativePath:
+        '.local-data/banner-ai/qwen-response-diagnostic-binding-matrix-response.json',
+      diagnosticReportRelativePath:
+        '.local-data/banner-ai/qwen-response-diagnostic-report-binding-matrix-report.json',
+    });
+    expect(packet).toMatchObject({
+      adapterVersion: 2,
+      adapterResultVersion: 2,
+      diagnosticSemanticProjectionVersion: QWEN_DIAGNOSTIC_V2_SEMANTIC_PROJECTION_VERSION,
+      diagnosticSemanticProjectionSha256: QWEN_DIAGNOSTIC_V2_SEMANTIC_PROJECTION_V1_SHA256,
+      productionAdmissionAuthority: false,
+      webRouteActivated: false,
+      executionAuthorized: true,
+      diagnosticCapture: {
+        productionAdmissionAuthority: false,
+        webRouteActivated: false,
+        diagnosticSemanticProjectionVersion: QWEN_DIAGNOSTIC_V2_SEMANTIC_PROJECTION_VERSION,
+        diagnosticSemanticProjectionSha256: QWEN_DIAGNOSTIC_V2_SEMANTIC_PROJECTION_V1_SHA256,
+      },
+    });
+
+    const mutations = [
+      ['providerProtocolWrapperSha256', '0'.repeat(64)],
+      ['requestShapeSha256', '0'.repeat(64)],
+      ['adapterVersion', 1],
+      ['adapterResultVersion', 1],
+      ['diagnosticSemanticProjectionVersion', 2],
+      ['diagnosticSemanticProjectionSha256', '0'.repeat(64)],
+      ['orderedModelInputDigestsSha256', '0'.repeat(64)],
+      ['providerAggregateVersion', 3],
+      ['activeProviderAggregateSha256', '0'.repeat(64)],
+      ['semanticOutputSchemaVersion', 2],
+      ['semanticOutputSchemaSha256', '0'.repeat(64)],
+      ['canonicalOutputSchemaVersion', 2],
+      ['canonicalOutputSchemaSha256', '0'.repeat(64)],
+      ['responseBoundaryVersion', 1],
+      ['responseBoundarySha256', '0'.repeat(64)],
+      ['semanticMaterializerVersion', 2],
+      ['semanticMaterializerSha256', '0'.repeat(64)],
+      ['modelAvailabilityEvidenceSha256', '0'.repeat(64)],
+      ['modelLifecycleEvidenceSha256', '0'.repeat(64)],
+      ['providerIdentitySha256', '0'.repeat(64)],
+      ['pricingEvidenceSha256', '0'.repeat(64)],
+      ['productionAdmissionAuthority', true],
+      ['webRouteActivated', true],
+      ['executionAuthorized', false],
+      ['diagnosticCapture.responseCaptureVersion', 1],
+      ['diagnosticCapture.semanticOutputSchemaVersion', 2],
+      ['diagnosticCapture.semanticOutputSchemaSha256', '0'.repeat(64)],
+      ['diagnosticCapture.canonicalOutputSchemaVersion', 2],
+      ['diagnosticCapture.canonicalOutputSchemaSha256', '0'.repeat(64)],
+      ['diagnosticCapture.responseBoundaryVersion', 1],
+      ['diagnosticCapture.responseBoundarySha256', '0'.repeat(64)],
+      ['diagnosticCapture.semanticMaterializerVersion', 2],
+      ['diagnosticCapture.semanticMaterializerSha256', '0'.repeat(64)],
+      ['diagnosticCapture.diagnosticSemanticProjectionVersion', 2],
+      ['diagnosticCapture.diagnosticSemanticProjectionSha256', '0'.repeat(64)],
+      ['diagnosticCapture.productionAdmissionAuthority', true],
+      ['diagnosticCapture.webRouteActivated', true],
+    ] as const;
+
+    for (const [path, value] of mutations) {
+      const mutated = structuredClone(packet) as Record<string, unknown>;
+      const segments = path.split('.');
+      const field = segments.pop()!;
+      let target = mutated;
+      for (const segment of segments) {
+        target = target[segment] as Record<string, unknown>;
+      }
+      target[field] = value;
+      expect(
+        () =>
+          preflightQwenLiveExecutionAuthorization({
+            packet: mutated,
+            secretPresent: true,
+            nowMs: liveNowMs,
+            currentGitSha,
+          }),
+        path,
+      ).toThrow();
+    }
   });
 
   it('rejects every non-Singapore endpoint before injected fetch', async () => {

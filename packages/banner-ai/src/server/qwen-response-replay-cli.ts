@@ -1,5 +1,5 @@
 import { canonicalizeJson } from '../scene/canonical-scene-json.js';
-import { replaySanitizedQwenResponseV1 } from './qwen3-vl-response-diagnostics.js';
+import { replaySanitizedQwenResponse } from './qwen3-vl-response-diagnostics.js';
 
 const responseFileFromArguments = (): string => {
   const markerIndex = process.argv.indexOf('--response-file');
@@ -11,7 +11,7 @@ const responseFileFromArguments = (): string => {
 };
 
 const main = async (): Promise<void> => {
-  const result = await replaySanitizedQwenResponseV1({
+  const result = await replaySanitizedQwenResponse({
     responseFile: responseFileFromArguments(),
   });
   process.stdout.write(`${canonicalizeJson(result)}\n`);

@@ -3,12 +3,12 @@ import { z } from 'zod';
 import {
   QWEN3_VL_CHAT_COMPLETIONS_ENDPOINT,
   QWEN3_VL_ENDPOINT_METHOD,
-  QWEN3_VL_PROVIDER_PROTOCOL_WRAPPER_V2,
+  QWEN3_VL_PROVIDER_PROTOCOL_WRAPPER_V3,
   QWEN3_VL_MAX_OUTPUT_TOKENS,
   QWEN3_VL_REQUESTED_MODEL_ID,
   type QwenProviderUsageV1,
 } from '../evaluation/qwen3-vl-candidate-evidence.js';
-import type { ProposedSceneAnalysisOcrOutputV1 } from '../evaluation/openai-scene-analysis-output.js';
+import type { QwenSemanticSceneAnalysisOutputV1 } from '../evaluation/qwen-semantic-scene-analysis-output.js';
 import type {
   QwenTransportPort,
   QwenTransportRequest,
@@ -19,7 +19,7 @@ import { consumeQwenTransportDispatchCapability } from './qwen3-vl-scene-analysi
 export type DeterministicQwenTransportStep =
   | {
       readonly kind: 'success';
-      readonly output: ProposedSceneAnalysisOcrOutputV1;
+      readonly output: QwenSemanticSceneAnalysisOutputV1;
       readonly usage?: QwenProviderUsageV1;
     }
   | { readonly kind: 'malformed-json' }
@@ -94,7 +94,7 @@ const assertFakeRequestBoundary = (request: QwenTransportRequest): void => {
     .parse(messages[1]?.content);
   const imageUrl = z.record(z.string(), z.unknown()).parse(userContent[0]?.image_url).url;
   if (
-    systemContent !== QWEN3_VL_PROVIDER_PROTOCOL_WRAPPER_V2.content ||
+    systemContent !== QWEN3_VL_PROVIDER_PROTOCOL_WRAPPER_V3.content ||
     typeof imageUrl !== 'string' ||
     !imageUrl.startsWith('data:image/png;base64,') ||
     /^https?:/u.test(imageUrl)

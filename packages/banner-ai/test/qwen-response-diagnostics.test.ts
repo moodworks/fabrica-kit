@@ -23,11 +23,30 @@ import {} from '../src/evaluation/ai-contracts.js';
 import {
   QWEN3_VL_CHAT_COMPLETIONS_ENDPOINT,
   QWEN3_VL_ENDPOINT_METHOD,
+  QWEN3_VL_PROVIDER_PROTOCOL_WRAPPER_V3_SHA256,
   QWEN3_VL_REQUESTED_MODEL_ID,
+  QWEN3_VL_REQUEST_SHAPE_V4_SHA256,
+  QWEN3_VL_OFFICIAL_EVIDENCE_FRESH_UNTIL_EXCLUSIVE,
   QWEN_FOUR_FIXTURE_BENCHMARK_CAPS_SHA256,
   QWEN_SINGLE_FIXTURE_DIAGNOSTIC_CAPS_V2_SHA256,
 } from '../src/evaluation/qwen3-vl-candidate-evidence.js';
-import { createDeterministicOracleMatchingQwenOutputV1 } from '../src/evaluation/qwen-four-fixture-quality.js';
+import { SCENE_ANALYSIS_OCR_OUTPUT_JSON_SCHEMA_SHA256 } from '../src/evaluation/openai-scene-analysis-output.js';
+import { canonicalizeJson } from '../src/scene/canonical-scene-json.js';
+import {
+  QWEN_DIAGNOSTIC_V2_SEMANTIC_PROJECTION_V1,
+  QWEN_DIAGNOSTIC_V2_SEMANTIC_PROJECTION_V1_SHA256,
+  QWEN_DIAGNOSTIC_V2_SEMANTIC_PROJECTION_VERSION,
+  QWEN_RESPONSE_BOUNDARY_V2_DEFINITION_SHA256,
+  QWEN_SEMANTIC_MATERIALIZER_V1_DEFINITION_SHA256,
+} from '../src/evaluation/qwen-response-contract-evidence.js';
+import {
+  QWEN_SEMANTIC_SCENE_ANALYSIS_JSON_SCHEMA_V1,
+  QWEN_SEMANTIC_SCENE_ANALYSIS_JSON_SCHEMA_V1_SHA256,
+} from '../src/evaluation/qwen-semantic-scene-analysis-output.js';
+import {
+  createDeterministicOracleMatchingQwenOutputV1,
+  createDeterministicOracleMatchingQwenSemanticOutputV1,
+} from '../src/evaluation/qwen-four-fixture-quality.js';
 import { createDeterministicQwenTransport } from '../src/server/qwen3-vl-deterministic-fake-transport.js';
 import { EpochMillisecondsSchema } from '../src/jobs/timing.js';
 import { createCanonicalQwenBenchmarkRequestV1 } from '../src/server/qwen-four-fixture-request-catalog.js';
@@ -36,7 +55,7 @@ import {
   QwenBenchmarkAuthorizationPacketV2Schema,
   createQwen3VlSceneAnalysisAdapter,
   createQwenDiagnosticAuthorizationPacketV3,
-  createQwenDiagnosticAuthorizationPacketV4,
+  createQwenDiagnosticAuthorizationPacketV5,
   createQwenDryRunExecutionAuthorization as createQwenDryRunExecutionAuthorizationImpl,
   createQwenManualReleaseBindingV1,
   finalizeQwenDiagnosticReportForAuthorizationV1,
@@ -58,10 +77,14 @@ import {
 } from '../src/server/qwen3-vl-response-boundary.js';
 import {
   QwenDiagnosticCaptureError,
+  QwenReplayResultV2Schema,
   abortQwenDiagnosticArtifactReservationsV1,
   captureSanitizedQwenResponseV1,
   createQwenDiagnosticParentChainGuardV1,
+  QwenSanitizedResponseCaptureArtifactV2Schema,
+  replaySanitizedQwenResponse,
   replaySanitizedQwenResponseV1,
+  replaySanitizedQwenResponseV2,
   reserveQwenDiagnosticArtifactFilesV1,
   verifyQwenDiagnosticParentChainGuardV1,
 } from '../src/server/qwen3-vl-response-diagnostics.js';
@@ -69,6 +92,7 @@ import {
   QwenFourFixtureBenchmarkReportV1Schema,
   QwenFourFixtureBenchmarkReportV2Schema,
   QwenFourFixtureBenchmarkReportV4Schema,
+  QwenFourFixtureBenchmarkReportV5Schema,
   replayQwenDiagnosticArtifactStatusV1,
   runQwenFourFixtureBenchmark,
   serializeQwenFourFixtureBenchmarkReport,
@@ -81,6 +105,11 @@ import {
 
 const fixedNowMs = Date.parse('2026-07-16T19:00:00.000Z');
 const currentGitSha = '45b3ceaf311008fb5c84cc8f8ea236d7846a20bf';
+const unitTestLiveDispatchGitGuard = Object.freeze({
+  assertCurrentGitState(expectedGitSha: string): void {
+    if (expectedGitSha !== currentGitSha) throw new Error('Unexpected test Git SHA.');
+  },
+});
 const createQwenDryRunExecutionAuthorization = (input: {
   readonly nowMs: number;
   readonly serverWorkspaceId?: string;
@@ -96,6 +125,7 @@ const mintQwenBenchmarkExecutionAuthorization = (input: unknown) => {
       secretPresent: true,
       nowMs: fixedNowMs,
       currentGitSha,
+      liveDispatchGitGuard: unitTestLiveDispatchGitGuard,
     });
   }
   return mintQwenBenchmarkExecutionAuthorizationImpl(input);
@@ -174,6 +204,14 @@ const historicalBenchmarkReportIsV1 = (() => {
 const historicalLocalEvidencePresent =
   historicalLocalEvidencePresentCount === historicalLocalEvidence.length &&
   historicalBenchmarkReportIsV1;
+const latestHistoricalV1ResponseRelativePath =
+  '.local-data/banner-ai/qwen-response-diagnostic-retry3-a74e95214084f342.json';
+const latestHistoricalV4ReportRelativePath =
+  '.local-data/banner-ai/qwen-response-diagnostic-report-retry3-a74e95214084f342.json';
+const latestHistoricalPairPresentCount = [
+  latestHistoricalV1ResponseRelativePath,
+  latestHistoricalV4ReportRelativePath,
+].filter((relativePath) => existsSync(join(repositoryRoot, relativePath))).length;
 
 afterEach(async () => {
   await Promise.all(
@@ -217,6 +255,17 @@ const validEnvelope = (): Record<string, unknown> => ({
   system_fingerprint: 'deterministic-diagnostic-no-provider',
   service_tier: null,
 });
+
+const validSemanticOutput = () =>
+  createDeterministicOracleMatchingQwenSemanticOutputV1('banner-person-v1');
+
+const validSemanticEnvelope = (): Record<string, unknown> => {
+  const envelope = validEnvelope();
+  const choices = envelope.choices as Record<string, unknown>[];
+  const message = choices[0]!.message as Record<string, unknown>;
+  message.content = JSON.stringify(validSemanticOutput());
+  return envelope;
+};
 
 const responseFor = (body: unknown, status = 200): QwenTransportResponse => ({
   status,
@@ -269,7 +318,7 @@ const diagnosticPaths = (token: string) => {
 };
 
 const livePacket = (token: string) => {
-  const packet = createQwenDiagnosticAuthorizationPacketV4({
+  const packet = createQwenDiagnosticAuthorizationPacketV5({
     authorizationId: `qwen.live.diagnostic.${token}`,
     issuedAtMs: fixedNowMs - 1_000,
     expiresAtMs: fixedNowMs + 599_000,
@@ -348,6 +397,7 @@ const fakeLikeTransport = (
 describe('Qwen response diagnostics and offline replay', () => {
   it('allows zero or all historical local files but rejects partial evidence presence', () => {
     expect([0, historicalLocalEvidence.length]).toContain(historicalLocalEvidencePresentCount);
+    expect([0, 2]).toContain(latestHistoricalPairPresentCount);
   });
 
   it.runIf(historicalLocalEvidencePresent)(
@@ -399,6 +449,342 @@ describe('Qwen response diagnostics and offline replay', () => {
       expect(fetchSpy).not.toHaveBeenCalled();
     },
   );
+
+  it.runIf(latestHistoricalPairPresentCount === 2)(
+    'pins the latest historical V1 response/V4 report pair and replays only the frozen V1 boundary',
+    async () => {
+      const responseAbsolutePath = join(repositoryRoot, latestHistoricalV1ResponseRelativePath);
+      const reportAbsolutePath = join(repositoryRoot, latestHistoricalV4ReportRelativePath);
+      const responseBytes = await readFile(responseAbsolutePath);
+      const reportBytes = await readFile(reportAbsolutePath);
+      const responseStat = await lstat(responseAbsolutePath);
+      const reportStat = await lstat(reportAbsolutePath);
+      const fetchSpy = vi.spyOn(globalThis, 'fetch');
+      const replay = await replaySanitizedQwenResponseV1({
+        responseFile: latestHistoricalV1ResponseRelativePath,
+      });
+      const historicalReport = QwenFourFixtureBenchmarkReportV4Schema.parse(
+        JSON.parse(reportBytes.toString('utf8')),
+      );
+
+      expect(responseBytes.byteLength).toBe(8_538);
+      expect(responseStat.mode & 0o777).toBe(0o600);
+      expect(createHash('sha256').update(responseBytes).digest('hex')).toBe(
+        '70cb3250339e25c6ba19a842bf82ec56135361f9b9620aeef9d38ae7683b4590',
+      );
+      expect(reportBytes.byteLength).toBe(4_894);
+      expect(reportStat.mode & 0o777).toBe(0o600);
+      expect(createHash('sha256').update(reportBytes).digest('hex')).toBe(
+        '217aa43cea0afebc82230d66558f73b1c469d6274a85a0928672a51ede28b35a',
+      );
+      expect(historicalReport).toMatchObject({
+        reportVersion: 4,
+        overallPass: false,
+        productionAdmissionAuthority: false,
+        webRouteActivated: false,
+        successfulRunCount: 0,
+        stoppedEarly: true,
+        terminalFailureReason: 'schema-invalid',
+      });
+      expect(historicalReport).not.toHaveProperty('providerSuccessAuthority');
+      expect(historicalReport).not.toHaveProperty('admissionAuthority');
+      expect(replay).toMatchObject({
+        replayVersion: 1,
+        sourceRawFileSha256: '70cb3250339e25c6ba19a842bf82ec56135361f9b9620aeef9d38ae7683b4590',
+        validationStatus: 'replay-rejected',
+        failureReason: 'schema-invalid',
+        diagnostic: {
+          stage: 'unknown-field-rejection',
+          issueDigestSha256: 'a2aac3f2192e550629a48799e29976fc03e30d614bad6090c2bd2fe41cebf6af',
+          totalIssueCount: 3,
+          retainedIssueCount: 3,
+          truncatedIssueCount: 0,
+        },
+        replayReproduced: true,
+        providerCallCount: 0,
+        networkUsed: false,
+        providerSuccessAuthority: false,
+        productionAdmissionAuthority: false,
+      });
+      expect(fetchSpy).not.toHaveBeenCalled();
+    },
+  );
+
+  it('keeps the V2 diagnostic projector exhaustive with the five-key semantic schema', () => {
+    type ProjectionShape = {
+      readonly kind: 'leaf' | 'object' | 'array';
+      readonly fields?: Readonly<Record<string, ProjectionShape>>;
+      readonly element?: ProjectionShape;
+      readonly maximumItems?: number;
+      readonly allowedStrings?: readonly string[];
+    };
+    type JsonSchemaShape = {
+      readonly type?: string;
+      readonly properties?: Readonly<Record<string, JsonSchemaShape>>;
+      readonly items?: JsonSchemaShape;
+      readonly maxItems?: number;
+      readonly oneOf?: readonly JsonSchemaShape[];
+      readonly const?: string;
+      readonly enum?: readonly string[];
+    };
+    type NormalizedShape =
+      | {
+          readonly kind: 'leaf';
+          readonly allowedStrings?: readonly string[];
+        }
+      | {
+          readonly kind: 'object';
+          readonly fields: Readonly<Record<string, NormalizedShape>>;
+        }
+      | {
+          readonly kind: 'array';
+          readonly element: NormalizedShape;
+          readonly maximumItems: number;
+        };
+    type BranchSnapshot = {
+      readonly objectFields: readonly {
+        readonly path: string;
+        readonly fields: readonly string[];
+      }[];
+      readonly arrayMaxima: readonly {
+        readonly path: string;
+        readonly maximumItems: number;
+      }[];
+      readonly leafPaths: readonly string[];
+      readonly stringConstants: readonly {
+        readonly path: string;
+        readonly value: string;
+      }[];
+    };
+
+    const mergeNormalizedShapes = (
+      left: NormalizedShape,
+      right: NormalizedShape,
+    ): NormalizedShape => {
+      expect(right.kind).toBe(left.kind);
+      if (left.kind === 'object' && right.kind === 'object') {
+        const fields: Record<string, NormalizedShape> = { ...left.fields };
+        for (const [fieldName, rightField] of Object.entries(right.fields)) {
+          const leftField = fields[fieldName];
+          fields[fieldName] =
+            leftField === undefined ? rightField : mergeNormalizedShapes(leftField, rightField);
+        }
+        return { kind: 'object', fields };
+      }
+      if (left.kind === 'array' && right.kind === 'array') {
+        expect(right.maximumItems).toBe(left.maximumItems);
+        return {
+          kind: 'array',
+          maximumItems: left.maximumItems,
+          element: mergeNormalizedShapes(left.element, right.element),
+        };
+      }
+      if (left.kind === 'leaf' && right.kind === 'leaf') {
+        const allowedStrings = [
+          ...(left.allowedStrings ?? []),
+          ...(right.allowedStrings ?? []),
+        ].filter((value, index, values) => values.indexOf(value) === index);
+        return allowedStrings.length === 0 ? { kind: 'leaf' } : { kind: 'leaf', allowedStrings };
+      }
+      throw new TypeError('Incompatible semantic schema branches.');
+    };
+    const normalizedSchemaShape = (schema: JsonSchemaShape): NormalizedShape => {
+      if (schema.oneOf !== undefined) {
+        const [firstBranch, ...remainingBranches] = schema.oneOf;
+        if (firstBranch === undefined) throw new TypeError('Empty semantic schema union.');
+        return remainingBranches.reduce(
+          (merged, branch) => mergeNormalizedShapes(merged, normalizedSchemaShape(branch)),
+          normalizedSchemaShape(firstBranch),
+        );
+      }
+      if (schema.type === 'object') {
+        return {
+          kind: 'object',
+          fields: Object.fromEntries(
+            Object.entries(schema.properties ?? {}).map(([key, value]) => [
+              key,
+              normalizedSchemaShape(value),
+            ]),
+          ),
+        };
+      }
+      if (schema.type === 'array') {
+        if (schema.items === undefined || schema.maxItems === undefined) {
+          throw new TypeError('Every projected semantic array must have an item and maximum.');
+        }
+        return {
+          kind: 'array',
+          element: normalizedSchemaShape(schema.items),
+          maximumItems: schema.maxItems,
+        };
+      }
+      const allowedStrings =
+        typeof schema.const === 'string'
+          ? [schema.const]
+          : schema.enum === undefined
+            ? undefined
+            : [...schema.enum];
+      return allowedStrings === undefined ? { kind: 'leaf' } : { kind: 'leaf', allowedStrings };
+    };
+    const normalizedProjectionShape = (node: ProjectionShape): NormalizedShape => {
+      if (node.kind === 'object') {
+        return {
+          kind: 'object',
+          fields: Object.fromEntries(
+            Object.entries(node.fields ?? {}).map(([key, value]) => [
+              key,
+              normalizedProjectionShape(value),
+            ]),
+          ),
+        };
+      }
+      if (node.kind === 'array') {
+        if (node.element === undefined || node.maximumItems === undefined) {
+          throw new TypeError('Invalid diagnostic projection array.');
+        }
+        return {
+          kind: 'array',
+          element: normalizedProjectionShape(node.element),
+          maximumItems: node.maximumItems,
+        };
+      }
+      return node.allowedStrings === undefined
+        ? { kind: 'leaf' }
+        : { kind: 'leaf', allowedStrings: [...node.allowedStrings] };
+    };
+    const branchSnapshot = (
+      schema: JsonSchemaShape,
+      path = '',
+      snapshot: {
+        objectFields: { path: string; fields: string[] }[];
+        arrayMaxima: { path: string; maximumItems: number }[];
+        leafPaths: string[];
+        stringConstants: { path: string; value: string }[];
+      } = {
+        objectFields: [],
+        arrayMaxima: [],
+        leafPaths: [],
+        stringConstants: [],
+      },
+    ): BranchSnapshot => {
+      if (schema.type === 'object') {
+        const fields = Object.keys(schema.properties ?? {});
+        snapshot.objectFields.push({ path, fields });
+        for (const [fieldName, field] of Object.entries(schema.properties ?? {})) {
+          branchSnapshot(field, `${path}/${fieldName}`, snapshot);
+        }
+      } else if (schema.type === 'array') {
+        if (schema.items === undefined || schema.maxItems === undefined) {
+          throw new TypeError('Every projected semantic array must have an item and maximum.');
+        }
+        snapshot.arrayMaxima.push({ path, maximumItems: schema.maxItems });
+        branchSnapshot(schema.items, `${path}/*`, snapshot);
+      } else {
+        snapshot.leafPaths.push(path);
+        if (typeof schema.const === 'string') {
+          snapshot.stringConstants.push({ path, value: schema.const });
+        }
+      }
+      return snapshot;
+    };
+    const unionSnapshots: {
+      path: string;
+      branches: readonly BranchSnapshot[];
+    }[] = [];
+    const collectUnionSnapshots = (schema: JsonSchemaShape, path = ''): void => {
+      if (schema.oneOf !== undefined) {
+        unionSnapshots.push({
+          path,
+          branches: schema.oneOf.map((branch) => branchSnapshot(branch)),
+        });
+        for (const branch of schema.oneOf) collectUnionSnapshots(branch, path);
+        return;
+      }
+      for (const [fieldName, field] of Object.entries(schema.properties ?? {})) {
+        collectUnionSnapshots(field, `${path}/${fieldName}`);
+      }
+      if (schema.items !== undefined) collectUnionSnapshots(schema.items, `${path}/*`);
+    };
+    const assertDeeplyFrozen = (value: unknown): void => {
+      if (typeof value !== 'object' || value === null) return;
+      expect(Object.isFrozen(value)).toBe(true);
+      for (const nested of Object.values(value)) assertDeeplyFrozen(nested);
+    };
+
+    const projection = QWEN_DIAGNOSTIC_V2_SEMANTIC_PROJECTION_V1 as unknown as ProjectionShape;
+    const jsonSchema = QWEN_SEMANTIC_SCENE_ANALYSIS_JSON_SCHEMA_V1 as JsonSchemaShape;
+
+    assertDeeplyFrozen(projection);
+    expect(normalizedProjectionShape(projection)).toEqual(normalizedSchemaShape(jsonSchema));
+    collectUnionSnapshots(jsonSchema);
+    expect(unionSnapshots).toEqual([
+      {
+        path: '/composition',
+        branches: [
+          {
+            objectFields: [
+              { path: '', fields: ['kind', 'parts'] },
+              {
+                path: '/parts/*',
+                fields: ['partKey', 'label', 'role', 'bounds'],
+              },
+              {
+                path: '/parts/*/bounds',
+                fields: ['xBps', 'yBps', 'widthBps', 'heightBps'],
+              },
+            ],
+            arrayMaxima: [{ path: '/parts', maximumItems: 5 }],
+            leafPaths: [
+              '/kind',
+              '/parts/*/partKey',
+              '/parts/*/label',
+              '/parts/*/role',
+              '/parts/*/bounds/xBps',
+              '/parts/*/bounds/yBps',
+              '/parts/*/bounds/widthBps',
+              '/parts/*/bounds/heightBps',
+            ],
+            stringConstants: [{ path: '/kind', value: 'composition_proposal' }],
+          },
+          {
+            objectFields: [{ path: '', fields: ['kind', 'reason'] }],
+            arrayMaxima: [],
+            leafPaths: ['/kind', '/reason'],
+            stringConstants: [{ path: '/kind', value: 'no_useful_layers' }],
+          },
+        ],
+      },
+      {
+        path: '/ocrCompletion',
+        branches: [
+          {
+            objectFields: [{ path: '', fields: ['kind'] }],
+            arrayMaxima: [],
+            leafPaths: ['/kind'],
+            stringConstants: [{ path: '/kind', value: 'visible-text-observations-complete' }],
+          },
+          {
+            objectFields: [{ path: '', fields: ['kind'] }],
+            arrayMaxima: [],
+            leafPaths: ['/kind'],
+            stringConstants: [{ path: '/kind', value: 'no-visible-text-observed' }],
+          },
+        ],
+      },
+    ]);
+    expect(
+      createHash('sha256')
+        .update(canonicalizeJson(QWEN_DIAGNOSTIC_V2_SEMANTIC_PROJECTION_V1))
+        .digest('hex'),
+    ).toBe('613c6d94a3b70a7ca9d494a667917ed185bb0c14fb53b6e7a87c4eea97f5a186');
+    expect(QWEN_DIAGNOSTIC_V2_SEMANTIC_PROJECTION_V1_SHA256).toBe(
+      '613c6d94a3b70a7ca9d494a667917ed185bb0c14fb53b6e7a87c4eea97f5a186',
+    );
+    expect(QWEN_DIAGNOSTIC_V2_SEMANTIC_PROJECTION_VERSION).toBe(1);
+    expect(canonicalizeJson(projection)).not.toMatch(
+      /outputVersion|visibleContentConstraint|proposalVersion|sourceAssetSha256|observationVersion|humanReview|provenance|decisionAuthority|instructionAuthority|normalization|contentTrust|unit/iu,
+    );
+  });
 
   it('accepts the corrected person response with five parts and exactly matching five-part evidence', () => {
     const result = validateQwenProviderResponseBoundaryV1({
@@ -1467,14 +1853,14 @@ describe('Qwen response diagnostics and offline replay', () => {
     expect(transport.dispatchMock).not.toHaveBeenCalled();
   });
 
-  it('rechecks live V4 freshness at dispatch time and rejects the issuance-age boundary before transport', async () => {
+  it('rechecks live V5 freshness at dispatch time and rejects the issuance-age boundary before transport', async () => {
     for (const [ageMs, shouldDispatch] of [
       [59_999, true],
       [60_000, false],
       [60_001, false],
     ] as const) {
       const token = `dispatch-freshness-${ageMs}`;
-      const packet = createQwenDiagnosticAuthorizationPacketV4({
+      const packet = createQwenDiagnosticAuthorizationPacketV5({
         authorizationId: `qwen.live.${token}`,
         issuedAtMs: fixedNowMs,
         expiresAtMs: fixedNowMs + 599_000,
@@ -1491,6 +1877,7 @@ describe('Qwen response diagnostics and offline replay', () => {
         secretPresent: true,
         nowMs: fixedNowMs,
         currentGitSha,
+        liveDispatchGitGuard: unitTestLiveDispatchGitGuard,
       });
       await reserveQwenDiagnosticArtifactsForAuthorizationV1(authorization);
       let epochCalls = 0;
@@ -1519,6 +1906,231 @@ describe('Qwen response diagnostics and offline replay', () => {
     }
   });
 
+  it.each([
+    {
+      name: 'authorization',
+      packetIssuedAtMs: fixedNowMs - 59_999,
+      releaseIssuedAtMs: fixedNowMs,
+    },
+    {
+      name: 'manual release',
+      packetIssuedAtMs: fixedNowMs,
+      releaseIssuedAtMs: fixedNowMs - 59_999,
+    },
+  ] as const)(
+    'rejects $name at the 60-second age boundary after the Git guard advances time',
+    async (testCase) => {
+      const token = `post-guard-${testCase.name.replaceAll(' ', '-')}-age`;
+      const packet = createQwenDiagnosticAuthorizationPacketV5({
+        authorizationId: `qwen.live.${token}`,
+        issuedAtMs: testCase.packetIssuedAtMs,
+        expiresAtMs: fixedNowMs + 500_000,
+        gitSha: currentGitSha,
+        manualRelease: createQwenManualReleaseBindingV1({
+          releaseId: `qwen.release.${token}`,
+          issuedAtMs: testCase.releaseIssuedAtMs,
+          expiresAtMs: fixedNowMs + 600_000,
+        }),
+        ...diagnosticPaths(token),
+      });
+      let currentEpochMs = fixedNowMs;
+      let guardCalls = 0;
+      const authorization = preflightQwenLiveExecutionAuthorization({
+        packet,
+        secretPresent: true,
+        nowMs: fixedNowMs,
+        currentGitSha,
+        liveDispatchGitGuard: {
+          assertCurrentGitState(expectedGitSha): void {
+            expect(expectedGitSha).toBe(currentGitSha);
+            guardCalls += 1;
+            currentEpochMs = fixedNowMs + 1;
+          },
+        },
+      });
+      await reserveQwenDiagnosticArtifactsForAuthorizationV1(authorization);
+      const clock: QwenAdapterClockPort = Object.freeze({
+        nowEpochMs: () => currentEpochMs,
+        nowMonotonicMs: () => 0,
+      });
+      const transport = liveLikeTransport(responseFor(validSemanticEnvelope()));
+      try {
+        const input = await firstFixtureInput();
+        await expect(
+          createQwen3VlSceneAnalysisAdapter({ transport, clock }).analyze({
+            ...input,
+            context: {
+              ...input.context,
+              deadlineAtMs: EpochMillisecondsSchema.parse(fixedNowMs + 200_000),
+            },
+            authorization,
+            secret: 'unit-test-secret-not-a-provider-key',
+          }),
+        ).rejects.toMatchObject({ reason: 'authorization-stale' });
+        expect(guardCalls).toBe(1);
+        expect(transport.dispatchMock).not.toHaveBeenCalled();
+      } finally {
+        await releaseQwenDiagnosticArtifactsForAuthorizationV1(authorization);
+      }
+    },
+  );
+
+  it('rejects official-evidence expiry after the Git guard advances time', async () => {
+    const evidenceExpiryMs = Date.parse(QWEN3_VL_OFFICIAL_EVIDENCE_FRESH_UNTIL_EXCLUSIVE);
+    const preGuardEpochMs = evidenceExpiryMs - 1;
+    const token = 'post-guard-evidence-expiry';
+    const packet = createQwenDiagnosticAuthorizationPacketV5({
+      authorizationId: `qwen.live.${token}`,
+      issuedAtMs: preGuardEpochMs,
+      expiresAtMs: preGuardEpochMs + 599_000,
+      gitSha: currentGitSha,
+      manualRelease: createQwenManualReleaseBindingV1({
+        releaseId: `qwen.release.${token}`,
+        issuedAtMs: preGuardEpochMs,
+        expiresAtMs: preGuardEpochMs + 600_000,
+      }),
+      ...diagnosticPaths(token),
+    });
+    let currentEpochMs = preGuardEpochMs;
+    let guardCalls = 0;
+    const authorization = preflightQwenLiveExecutionAuthorization({
+      packet,
+      secretPresent: true,
+      nowMs: preGuardEpochMs,
+      currentGitSha,
+      liveDispatchGitGuard: {
+        assertCurrentGitState(expectedGitSha): void {
+          expect(expectedGitSha).toBe(currentGitSha);
+          guardCalls += 1;
+          currentEpochMs = evidenceExpiryMs;
+        },
+      },
+    });
+    await reserveQwenDiagnosticArtifactsForAuthorizationV1(authorization);
+    const clock: QwenAdapterClockPort = Object.freeze({
+      nowEpochMs: () => currentEpochMs,
+      nowMonotonicMs: () => 0,
+    });
+    const transport = liveLikeTransport(responseFor(validSemanticEnvelope()));
+    try {
+      const input = await firstFixtureInput();
+      await expect(
+        createQwen3VlSceneAnalysisAdapter({ transport, clock }).analyze({
+          ...input,
+          context: {
+            ...input.context,
+            deadlineAtMs: EpochMillisecondsSchema.parse(evidenceExpiryMs + 200_000),
+          },
+          authorization,
+          secret: 'unit-test-secret-not-a-provider-key',
+        }),
+      ).rejects.toMatchObject({ reason: 'authorization-stale' });
+      expect(guardCalls).toBe(1);
+      expect(transport.dispatchMock).not.toHaveBeenCalled();
+    } finally {
+      await releaseQwenDiagnosticArtifactsForAuthorizationV1(authorization);
+    }
+  });
+
+  it('rejects an exhausted request deadline after the Git guard advances time', async () => {
+    const requestDeadlineMs = fixedNowMs + 1;
+    const token = 'post-guard-request-deadline';
+    const packet = createQwenDiagnosticAuthorizationPacketV5({
+      authorizationId: `qwen.live.${token}`,
+      issuedAtMs: fixedNowMs,
+      expiresAtMs: fixedNowMs + 599_000,
+      gitSha: currentGitSha,
+      manualRelease: createQwenManualReleaseBindingV1({
+        releaseId: `qwen.release.${token}`,
+        issuedAtMs: fixedNowMs,
+        expiresAtMs: fixedNowMs + 600_000,
+      }),
+      ...diagnosticPaths(token),
+    });
+    let currentEpochMs = fixedNowMs;
+    let guardCalls = 0;
+    const authorization = preflightQwenLiveExecutionAuthorization({
+      packet,
+      secretPresent: true,
+      nowMs: fixedNowMs,
+      currentGitSha,
+      liveDispatchGitGuard: {
+        assertCurrentGitState(expectedGitSha): void {
+          expect(expectedGitSha).toBe(currentGitSha);
+          guardCalls += 1;
+          currentEpochMs = requestDeadlineMs;
+        },
+      },
+    });
+    await reserveQwenDiagnosticArtifactsForAuthorizationV1(authorization);
+    const clock: QwenAdapterClockPort = Object.freeze({
+      nowEpochMs: () => currentEpochMs,
+      nowMonotonicMs: () => 0,
+    });
+    const transport = liveLikeTransport(responseFor(validSemanticEnvelope()));
+    try {
+      const input = await firstFixtureInput();
+      await expect(
+        createQwen3VlSceneAnalysisAdapter({ transport, clock }).analyze({
+          ...input,
+          context: {
+            ...input.context,
+            deadlineAtMs: EpochMillisecondsSchema.parse(requestDeadlineMs),
+          },
+          authorization,
+          secret: 'unit-test-secret-not-a-provider-key',
+        }),
+      ).rejects.toMatchObject({ reason: 'timeout' });
+      expect(guardCalls).toBe(1);
+      expect(transport.dispatchMock).not.toHaveBeenCalled();
+    } finally {
+      await releaseQwenDiagnosticArtifactsForAuthorizationV1(authorization);
+    }
+  });
+
+  it('rechecks the exact authorized Git SHA and clean-tree guard immediately before dispatch', async () => {
+    const packet = createQwenDiagnosticAuthorizationPacketV5({
+      authorizationId: 'qwen.live.dispatch-git-guard-0001',
+      issuedAtMs: fixedNowMs,
+      expiresAtMs: fixedNowMs + 599_000,
+      gitSha: currentGitSha,
+      manualRelease: createQwenManualReleaseBindingV1({
+        releaseId: 'qwen.release.dispatch-git-guard-0001',
+        issuedAtMs: fixedNowMs,
+        expiresAtMs: fixedNowMs + 600_000,
+      }),
+      ...diagnosticPaths('dispatch-git-guard-0001'),
+    });
+    const checkedGitShas: string[] = [];
+    const authorization = preflightQwenLiveExecutionAuthorization({
+      packet,
+      secretPresent: true,
+      nowMs: fixedNowMs,
+      currentGitSha,
+      liveDispatchGitGuard: {
+        assertCurrentGitState(expectedGitSha): void {
+          checkedGitShas.push(expectedGitSha);
+          throw new Error('Simulated dirty tree at the final dispatch boundary.');
+        },
+      },
+    });
+    await reserveQwenDiagnosticArtifactsForAuthorizationV1(authorization);
+    const transport = liveLikeTransport(responseFor(validSemanticEnvelope()));
+    try {
+      await expect(
+        createQwen3VlSceneAnalysisAdapter({ transport, clock: fixedClock() }).analyze({
+          ...(await firstFixtureInput()),
+          authorization,
+          secret: 'unit-test-secret-not-a-provider-key',
+        }),
+      ).rejects.toMatchObject({ reason: 'authorization-missing' });
+      expect(checkedGitShas).toEqual([currentGitSha]);
+      expect(transport.dispatchMock).not.toHaveBeenCalled();
+    } finally {
+      await releaseQwenDiagnosticArtifactsForAuthorizationV1(authorization);
+    }
+  });
+
   it('consumes a concrete deterministic capability once and rejects replay', async () => {
     const packet = livePacket('capability-replay-0001');
     const { diagnosticCapture: _diagnosticCapture, ...fakePacketBase } = packet;
@@ -1531,7 +2143,7 @@ describe('Qwen response diagnostics and offline replay', () => {
     const concreteTransport = createDeterministicQwenTransport([
       {
         kind: 'success',
-        output: createDeterministicOracleMatchingQwenOutputV1('banner-person-v1'),
+        output: createDeterministicOracleMatchingQwenSemanticOutputV1('banner-person-v1'),
       },
     ]);
     let capturedRequest: QwenTransportRequest | undefined;
@@ -1574,7 +2186,7 @@ describe('Qwen response diagnostics and offline replay', () => {
       },
     });
     expect(() =>
-      createQwenDiagnosticAuthorizationPacketV4({
+      createQwenDiagnosticAuthorizationPacketV5({
         authorizationId: 'qwen.diag.builder.0002',
         gitSha: currentGitSha,
         manualRelease: manualReleaseFor('builder-0002'),
@@ -1607,10 +2219,10 @@ describe('Qwen response diagnostics and offline replay', () => {
     const ordinaryAuthorization = mintQwenBenchmarkExecutionAuthorization({
       ...ordinaryBase,
       mode: 'deterministic-fake' as const,
-      authorizationVersion: 4 as const,
+      authorizationVersion: 5 as const,
       purpose: 'one-capped-four-fixture-sequential-zero-retry-benchmark' as const,
     });
-    const ordinaryTransport = fakeLikeTransport(responseFor(validEnvelope()));
+    const ordinaryTransport = fakeLikeTransport(responseFor(validSemanticEnvelope()));
     await createQwen3VlSceneAnalysisAdapter({
       transport: ordinaryTransport,
       clock: fixedClock(),
@@ -1623,7 +2235,7 @@ describe('Qwen response diagnostics and offline replay', () => {
   });
 
   it('preflights active V3 120000/150000 caps and rejects historical diagnostic authority', () => {
-    const active = createQwenDiagnosticAuthorizationPacketV4({
+    const active = createQwenDiagnosticAuthorizationPacketV5({
       authorizationId: 'qwen.diag.preflight.0001',
       gitSha: currentGitSha,
       manualRelease: manualReleaseFor('preflight-v3-0001'),
@@ -1636,6 +2248,7 @@ describe('Qwen response diagnostics and offline replay', () => {
       secretPresent: true,
       nowMs: fixedNowMs,
       currentGitSha: '45b3ceaf311008fb5c84cc8f8ea236d7846a20bf',
+      liveDispatchGitGuard: unitTestLiveDispatchGitGuard,
     });
     expect(authorization.diagnosticCapture).toMatchObject({
       perCallTimeoutMs: 120_000,
@@ -1669,7 +2282,7 @@ describe('Qwen response diagnostics and offline replay', () => {
   });
 
   it('rejects every non-active diagnostic cap mutation before authorization activation', () => {
-    const packet = createQwenDiagnosticAuthorizationPacketV4({
+    const packet = createQwenDiagnosticAuthorizationPacketV5({
       authorizationId: 'qwen.diag.cap-boundary.0001',
       gitSha: currentGitSha,
       manualRelease: manualReleaseFor('cap-boundary-0001'),
@@ -1688,7 +2301,7 @@ describe('Qwen response diagnostics and offline replay', () => {
       { totalCalculatedListCostMaximumMicroUsd: '50001' },
     ]) {
       expect(() =>
-        createQwenDiagnosticAuthorizationPacketV4({
+        createQwenDiagnosticAuthorizationPacketV5({
           authorizationId: 'qwen.diag.cap-boundary.0002',
           gitSha: currentGitSha,
           manualRelease: manualReleaseFor(`cap-boundary-${Object.keys(mutation)[0]}`),
@@ -1722,7 +2335,7 @@ describe('Qwen response diagnostics and offline replay', () => {
         transportKind: 'native-fetch' as const,
         dispatch: vi.fn(async (request) => {
           controllerSignals.push(request.signal);
-          return responseFor(validEnvelope());
+          return responseFor(validSemanticEnvelope());
         }),
       });
       const input = await firstFixtureInput();
@@ -1808,7 +2421,7 @@ describe('Qwen response diagnostics and offline replay', () => {
     const packet = livePacket('second-invocation-0001');
     const authorization = mintQwenBenchmarkExecutionAuthorization(packet);
     await reserveQwenDiagnosticArtifactsForAuthorizationV1(authorization);
-    const transport = liveLikeTransport(responseFor(validEnvelope()));
+    const transport = liveLikeTransport(responseFor(validSemanticEnvelope()));
     const adapter = createQwen3VlSceneAnalysisAdapter({ transport, clock: fixedClock() });
     const input = await firstFixtureInput();
     const requestInput = {
@@ -1838,7 +2451,7 @@ describe('Qwen response diagnostics and offline replay', () => {
       nowEpochMs: () => fixedNowMs,
       nowMonotonicMs: () => (monotonicCalls++ === 0 ? 0 : 150_000),
     });
-    const transport = liveLikeTransport(responseFor(validEnvelope()));
+    const transport = liveLikeTransport(responseFor(validSemanticEnvelope()));
     const report = await runQwenFourFixtureBenchmark({
       mode: 'live-provider',
       transport,
@@ -1890,7 +2503,7 @@ describe('Qwen response diagnostics and offline replay', () => {
       nowEpochMs: () => (epochCalls++ === 0 ? fixedNowMs : fixedNowMs + 250),
       nowMonotonicMs: () => 0,
     });
-    const transport = liveLikeTransport(responseFor(validEnvelope()));
+    const transport = liveLikeTransport(responseFor(validSemanticEnvelope()));
     const input = await firstFixtureInput();
     await createQwen3VlSceneAnalysisAdapter({ transport, clock }).analyze({
       ...input,
@@ -1935,7 +2548,10 @@ describe('Qwen response diagnostics and offline replay', () => {
 
   it('captures an exclusively written 0600 projection and exactly replays its rejection offline', async () => {
     const packet = livePacket('capture-replay-0001');
-    const envelope = { ...validEnvelope(), foreign_field: { private_value: 'must-disappear' } };
+    const envelope = {
+      ...validSemanticEnvelope(),
+      foreign_field: { private_value: 'must-disappear' },
+    };
     const response = responseFor(envelope);
     const transport = liveLikeTransport(response);
     const adapter = createQwen3VlSceneAnalysisAdapter({ transport, clock: fixedClock() });
@@ -1965,17 +2581,72 @@ describe('Qwen response diagnostics and offline replay', () => {
       packet.diagnosticCapture.responseArtifactRelativePath,
     );
     const artifactText = await readFile(artifactPath, 'utf8');
+    const artifact = QwenSanitizedResponseCaptureArtifactV2Schema.parse(JSON.parse(artifactText));
+    expect(artifact).toMatchObject({
+      artifactVersion: 2,
+      payload: {
+        captureVersion: 2,
+        providerProtocolWrapperSha256: QWEN3_VL_PROVIDER_PROTOCOL_WRAPPER_V3_SHA256,
+        requestShapeSha256: QWEN3_VL_REQUEST_SHAPE_V4_SHA256,
+        semanticOutputSchemaSha256: QWEN_SEMANTIC_SCENE_ANALYSIS_JSON_SCHEMA_V1_SHA256,
+        canonicalOutputSchemaSha256: SCENE_ANALYSIS_OCR_OUTPUT_JSON_SCHEMA_SHA256,
+        responseBoundaryVersion: 2,
+        responseBoundarySha256: QWEN_RESPONSE_BOUNDARY_V2_DEFINITION_SHA256,
+        semanticMaterializerVersion: 1,
+        semanticMaterializerSha256: QWEN_SEMANTIC_MATERIALIZER_V1_DEFINITION_SHA256,
+        diagnosticSemanticProjectionVersion: QWEN_DIAGNOSTIC_V2_SEMANTIC_PROJECTION_VERSION,
+        diagnosticSemanticProjectionSha256: QWEN_DIAGNOSTIC_V2_SEMANTIC_PROJECTION_V1_SHA256,
+        providerCallCount: 1,
+        retryCount: 0,
+        productionAdmissionAuthority: false,
+      },
+    });
+    for (const [field, value] of [
+      ['diagnosticSemanticProjectionVersion', 2],
+      ['diagnosticSemanticProjectionSha256', '0'.repeat(64)],
+    ] as const) {
+      const payload = { ...artifact.payload, [field]: value };
+      expect(() =>
+        QwenSanitizedResponseCaptureArtifactV2Schema.parse({
+          ...artifact,
+          payload,
+          canonicalPayloadSha256: createHash('sha256')
+            .update(canonicalizeJson(payload))
+            .digest('hex'),
+        }),
+      ).toThrow();
+    }
     expect(artifactText).not.toMatch(
       /must-disappear|unit-test-secret|data:image|Bearer|authorizationVersion|scene-analysis stage/iu,
     );
     expect((await lstat(artifactPath)).mode & 0o777).toBe(0o600);
 
     const fetchSpy = vi.spyOn(globalThis, 'fetch');
-    const replay = await replaySanitizedQwenResponseV1({
+    const replay = await replaySanitizedQwenResponseV2({
       responseFile: packet.diagnosticCapture.responseArtifactRelativePath,
     });
+    const genericReplay = await replaySanitizedQwenResponse({
+      responseFile: packet.diagnosticCapture.responseArtifactRelativePath,
+    });
+    await expect(
+      replaySanitizedQwenResponseV1({
+        responseFile: packet.diagnosticCapture.responseArtifactRelativePath,
+      }),
+    ).rejects.toThrow();
     expect(fetchSpy).not.toHaveBeenCalled();
     expect(replay).toMatchObject({
+      replayVersion: 2,
+      artifactVersion: 2,
+      providerProtocolWrapperSha256: QWEN3_VL_PROVIDER_PROTOCOL_WRAPPER_V3_SHA256,
+      requestShapeSha256: QWEN3_VL_REQUEST_SHAPE_V4_SHA256,
+      semanticOutputSchemaSha256: QWEN_SEMANTIC_SCENE_ANALYSIS_JSON_SCHEMA_V1_SHA256,
+      canonicalOutputSchemaSha256: SCENE_ANALYSIS_OCR_OUTPUT_JSON_SCHEMA_SHA256,
+      responseBoundaryVersion: 2,
+      responseBoundarySha256: QWEN_RESPONSE_BOUNDARY_V2_DEFINITION_SHA256,
+      semanticMaterializerVersion: 1,
+      semanticMaterializerSha256: QWEN_SEMANTIC_MATERIALIZER_V1_DEFINITION_SHA256,
+      diagnosticSemanticProjectionVersion: QWEN_DIAGNOSTIC_V2_SEMANTIC_PROJECTION_VERSION,
+      diagnosticSemanticProjectionSha256: QWEN_DIAGNOSTIC_V2_SEMANTIC_PROJECTION_V1_SHA256,
       providerCallCount: 0,
       networkUsed: false,
       validationStatus: 'replay-rejected',
@@ -1989,6 +2660,19 @@ describe('Qwen response diagnostics and offline replay', () => {
       providerSuccessAuthority: false,
       humanOracleModified: false,
     });
+    expect(() =>
+      QwenReplayResultV2Schema.parse({
+        ...replay,
+        diagnosticSemanticProjectionVersion: 2,
+      }),
+    ).toThrow();
+    expect(() =>
+      QwenReplayResultV2Schema.parse({
+        ...replay,
+        diagnosticSemanticProjectionSha256: '0'.repeat(64),
+      }),
+    ).toThrow();
+    expect(genericReplay).toEqual(replay);
 
     const originalBytes = await readFile(artifactPath);
     await expect(
@@ -2862,7 +3546,7 @@ describe('Qwen response diagnostics and offline replay', () => {
     const packet = livePacket('one-fixture-report-0001');
     const authorization = mintQwenBenchmarkExecutionAuthorization(packet);
     await reserveQwenDiagnosticArtifactsForAuthorizationV1(authorization);
-    const transport = liveLikeTransport(responseFor(validEnvelope()));
+    const transport = liveLikeTransport(responseFor(validSemanticEnvelope()));
     const fetchSpy = vi.spyOn(globalThis, 'fetch');
     const report = await runQwenFourFixtureBenchmark({
       mode: 'live-provider',
@@ -2898,12 +3582,12 @@ describe('Qwen response diagnostics and offline replay', () => {
       ],
     });
     expect(report.caps).toMatchObject({ providerCallsMaximum: 4, retryCount: 0 });
-    expect(QwenFourFixtureBenchmarkReportV4Schema.parse(report)).toBeDefined();
+    expect(QwenFourFixtureBenchmarkReportV5Schema.parse(report)).toBeDefined();
     expect(serializeQwenFourFixtureBenchmarkReport(report)).not.toMatch(
       /data:image|assistant.*content|Bearer|unit-test-secret/iu,
     );
 
-    expect(QwenFourFixtureBenchmarkReportV4Schema.parse(report)).toBeDefined();
+    expect(QwenFourFixtureBenchmarkReportV5Schema.parse(report)).toBeDefined();
     const historicalShape = structuredClone(report) as Record<string, unknown>;
     expect(() => QwenFourFixtureBenchmarkReportV1Schema.parse(historicalShape)).toThrow();
     expect(() => QwenFourFixtureBenchmarkReportV2Schema.parse(historicalShape)).toThrow();
@@ -3014,6 +3698,14 @@ describe('Qwen response diagnostics and offline replay', () => {
           relativeSpecifiers.push(node.moduleSpecifier.text);
         }
         if (
+          ts.isExportDeclaration(node) &&
+          node.moduleSpecifier !== undefined &&
+          ts.isStringLiteral(node.moduleSpecifier) &&
+          node.moduleSpecifier.text.startsWith('.')
+        ) {
+          relativeSpecifiers.push(node.moduleSpecifier.text);
+        }
+        if (
           ts.isCallExpression(node) &&
           node.expression.kind === ts.SyntaxKind.ImportKeyword &&
           node.arguments.length === 1 &&
@@ -3039,6 +3731,18 @@ describe('Qwen response diagnostics and offline replay', () => {
     };
     await visitModule(join(packageRoot, 'src/server/qwen-response-replay-cli.ts'));
     expect(publicBannerAi).not.toHaveProperty('replaySanitizedQwenResponseV1');
+    expect(publicBannerAi).not.toHaveProperty('materializeQwenSemanticSceneAnalysisOutputV1');
+
+    visited.clear();
+    await visitModule(join(packageRoot, 'src/index.ts'));
+    expect(
+      [...visited].some(
+        (path) =>
+          path.endsWith('/qwen3-vl-response-boundary.ts') ||
+          path.endsWith('/qwen-response-contract-evidence.ts') ||
+          path.endsWith('/qwen-semantic-scene-analysis-output.ts'),
+      ),
+    ).toBe(false);
 
     const webRoot = join(repositoryRoot, 'apps/web/src');
     const webSources = async (directory: string): Promise<readonly string[]> => {
@@ -3057,10 +3761,77 @@ describe('Qwen response diagnostics and offline replay', () => {
       );
       return nested.flat();
     };
-    for (const path of await webSources(webRoot)) {
-      expect(await readFile(path, 'utf8'), path).not.toMatch(
-        /qwen-response-diagnostic|qwen-response-replay|benchmark:qwen:replay/iu,
+    const allWebSources = await webSources(webRoot);
+    const forbiddenBrowserModuleSuffixes = [
+      '/qwen-semantic-scene-analysis-output.ts',
+      '/qwen-response-contract-evidence.ts',
+      '/qwen3-vl-response-boundary.ts',
+      '/qwen3-vl-scene-analysis-adapter.ts',
+      '/qwen3-vl-native-fetch-transport.ts',
+      '/qwen-four-fixture-benchmark.ts',
+      '/qwen-response-diagnostics.ts',
+    ] as const;
+    const resolveSourceModule = (fromPath: string, specifier: string): string | null => {
+      if (specifier === '@fabrica/banner-ai') return join(packageRoot, 'src/index.ts');
+      if (!specifier.startsWith('.')) return null;
+      const unresolved = join(dirname(fromPath), specifier);
+      const candidates = specifier.endsWith('.js')
+        ? [unresolved.replace(/\.js$/u, '.ts'), unresolved.replace(/\.js$/u, '.tsx')]
+        : [
+            unresolved,
+            `${unresolved}.ts`,
+            `${unresolved}.tsx`,
+            join(unresolved, 'index.ts'),
+            join(unresolved, 'index.tsx'),
+          ];
+      return candidates.find((candidate) => existsSync(candidate)) ?? null;
+    };
+    const browserVisited = new Set<string>();
+    const visitBrowserModule = async (absolutePath: string): Promise<void> => {
+      if (browserVisited.has(absolutePath)) return;
+      browserVisited.add(absolutePath);
+      expect(
+        forbiddenBrowserModuleSuffixes.some((suffix) => absolutePath.endsWith(suffix)),
+        absolutePath,
+      ).toBe(false);
+      const sourceText = await readFile(absolutePath, 'utf8');
+      const sourceFile = ts.createSourceFile(
+        absolutePath,
+        sourceText,
+        ts.ScriptTarget.ESNext,
+        true,
+        absolutePath.endsWith('.tsx') ? ts.ScriptKind.TSX : ts.ScriptKind.TS,
       );
+      const moduleSpecifiers: string[] = [];
+      const visitNode = (node: ts.Node): void => {
+        if (
+          (ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) &&
+          node.moduleSpecifier !== undefined &&
+          ts.isStringLiteral(node.moduleSpecifier)
+        ) {
+          moduleSpecifiers.push(node.moduleSpecifier.text);
+        }
+        if (
+          ts.isCallExpression(node) &&
+          node.expression.kind === ts.SyntaxKind.ImportKeyword &&
+          node.arguments.length === 1 &&
+          ts.isStringLiteral(node.arguments[0]!)
+        ) {
+          moduleSpecifiers.push(node.arguments[0]!.text);
+        }
+        ts.forEachChild(node, visitNode);
+      };
+      visitNode(sourceFile);
+      for (const specifier of moduleSpecifiers) {
+        const resolved = resolveSourceModule(absolutePath, specifier);
+        if (resolved !== null) await visitBrowserModule(resolved);
+      }
+    };
+    for (const path of allWebSources) {
+      expect(await readFile(path, 'utf8'), path).not.toMatch(
+        /qwen-response-diagnostic|qwen-response-replay|benchmark:qwen:replay|qwen3-vl-response-boundary|qwen-response-contract-evidence|materializeQwenSemanticSceneAnalysisOutputV1/iu,
+      );
+      await visitBrowserModule(path);
     }
   });
 });

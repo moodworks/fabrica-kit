@@ -22,11 +22,14 @@ import {
   QWEN3_VL_PROVIDER_PROTOCOL_WRAPPER_V2,
   QWEN3_VL_PROVIDER_PROTOCOL_WRAPPER_V2_REQUIRED_CONSTRAINTS,
   QWEN3_VL_PROVIDER_PROTOCOL_WRAPPER_V2_SHA256,
+  QWEN3_VL_PROVIDER_PROTOCOL_WRAPPER_V3,
+  QWEN3_VL_PROVIDER_PROTOCOL_WRAPPER_V3_REQUIRED_CONSTRAINTS,
+  QWEN3_VL_PROVIDER_PROTOCOL_WRAPPER_V3_SHA256,
   QWEN3_VL_REQUESTED_MODEL_ID,
   QWEN3_VL_REQUEST_SHAPE_V1,
   QWEN3_VL_REQUEST_SHAPE_SHA256,
   QWEN3_VL_REQUEST_SHAPE_V1_SHA256,
-  QWEN3_VL_REQUEST_SHAPE_V2_SHA256,
+  QWEN3_VL_REQUEST_SHAPE_V4_SHA256,
   QWEN3_VL_SERVER_WORKSPACE_ID,
   QWEN_FOUR_FIXTURE_BENCHMARK_CAPS_SHA256,
   QWEN_FOUR_FIXTURE_HUMAN_ORACLE_CORPUS_SHA256,
@@ -40,7 +43,7 @@ import {
 import { SCENE_ANALYSIS_OCR_OUTPUT_JSON_SCHEMA_SHA256 } from '../src/evaluation/openai-scene-analysis-output.js';
 import { SCENE_ANALYSIS_PROMPT_V1 } from '../src/evaluation/prompt-catalog.js';
 import {
-  createDeterministicOracleMatchingQwenOutputV1,
+  createDeterministicOracleMatchingQwenSemanticOutputV1,
   getQwenFourFixtureEvaluationBindingsV1,
 } from '../src/evaluation/qwen-four-fixture-quality.js';
 import { EpochMillisecondsSchema } from '../src/jobs/timing.js';
@@ -187,18 +190,16 @@ describe('Qwen3-VL production adapter boundary', () => {
     expect(QWEN3_VL_PROVIDER_PROTOCOL_WRAPPER_SHA256).toMatch(/^[0-9a-f]{64}$/u);
     expect(QWEN3_VL_REQUEST_SHAPE_SHA256).toMatch(/^[0-9a-f]{64}$/u);
     expect(QWEN3_VL_PROVIDER_PROTOCOL_WRAPPER_SHA256).toBe(
-      QWEN3_VL_PROVIDER_PROTOCOL_WRAPPER_V2_SHA256,
+      QWEN3_VL_PROVIDER_PROTOCOL_WRAPPER_V3_SHA256,
     );
     expect(QWEN3_VL_PROVIDER_PROTOCOL_WRAPPER_V2_SHA256).toBe(
       '87497d39a04ca12210500179b8e6705f03788d06a20bec8bf7cd6de29f6c6025',
     );
-    expect(QWEN3_VL_REQUEST_SHAPE_SHA256).not.toBe(QWEN3_VL_REQUEST_SHAPE_V2_SHA256);
+    expect(QWEN3_VL_REQUEST_SHAPE_SHA256).toBe(QWEN3_VL_REQUEST_SHAPE_V4_SHA256);
     expect(SCENE_ANALYSIS_PROMPT_V1.contentSha256).toBe(
       '5cc311b7b353e06c61bcdf840b40dff9d35de0aea12851ffa18a654177917227',
     );
-    expect(QWEN_FOUR_FIXTURE_ACTIVE_MODEL_INPUT_DIGESTS_SHA256).toBe(
-      '3f054e4b8ed25273bb71fed3416583b49619334aea67c1b9c34897fd3632e8f7',
-    );
+    expect(QWEN_FOUR_FIXTURE_ACTIVE_MODEL_INPUT_DIGESTS_SHA256).toMatch(/^[0-9a-f]{64}$/u);
     expect(SCENE_ANALYSIS_OCR_OUTPUT_JSON_SCHEMA_SHA256).toBe(
       '2bdfd91875bc097b6bac93eadad924cdfb89b9fe9dc4f8293f494c721179dc9d',
     );
@@ -216,6 +217,9 @@ describe('Qwen3-VL production adapter boundary', () => {
     );
     for (const requiredText of QWEN3_VL_PROVIDER_PROTOCOL_WRAPPER_V2_REQUIRED_CONSTRAINTS) {
       expect(QWEN3_VL_PROVIDER_PROTOCOL_WRAPPER_V2.content).toContain(requiredText);
+    }
+    for (const requiredText of QWEN3_VL_PROVIDER_PROTOCOL_WRAPPER_V3_REQUIRED_CONSTRAINTS) {
+      expect(QWEN3_VL_PROVIDER_PROTOCOL_WRAPPER_V3.content).toContain(requiredText);
     }
     expect(QWEN3_VL_PRICING_EVIDENCE_SHA256).toMatch(/^[0-9a-f]{64}$/u);
     expect(
@@ -352,7 +356,7 @@ describe('Qwen3-VL production adapter boundary', () => {
   });
 
   it('accepts one trusted local PNG and returns strict proposal, usage, latency, and list cost', async () => {
-    const output = createDeterministicOracleMatchingQwenOutputV1('banner-person-v1');
+    const output = createDeterministicOracleMatchingQwenSemanticOutputV1('banner-person-v1');
     const transport = createDeterministicQwenTransport([{ kind: 'success', output }]);
     const authorization = createQwenDryRunExecutionAuthorization({ nowMs: fixedNowMs });
     const adapter = createQwen3VlSceneAnalysisAdapter({
@@ -383,7 +387,7 @@ describe('Qwen3-VL production adapter boundary', () => {
   });
 
   it('preserves every documented nullable usage-detail field without accepting extensions', async () => {
-    const output = createDeterministicOracleMatchingQwenOutputV1('banner-person-v1');
+    const output = createDeterministicOracleMatchingQwenSemanticOutputV1('banner-person-v1');
     const usage = {
       prompt_tokens: 1_000,
       completion_tokens: 200,
@@ -472,7 +476,7 @@ describe('Qwen3-VL production adapter boundary', () => {
   });
 
   it('rejects duplicate invocation without a second transport call', async () => {
-    const output = createDeterministicOracleMatchingQwenOutputV1('banner-person-v1');
+    const output = createDeterministicOracleMatchingQwenSemanticOutputV1('banner-person-v1');
     const transport = createDeterministicQwenTransport([
       { kind: 'success', output },
       { kind: 'success', output },
@@ -640,8 +644,8 @@ describe('Qwen3-VL production adapter boundary', () => {
     }
   });
 
-  it('rejects a source-identity-mismatched output after strict JSON validation', async () => {
-    const validOutput = createDeterministicOracleMatchingQwenOutputV1('banner-person-v1');
+  it('rejects provider attempts to override the server-owned source identity', async () => {
+    const validOutput = createDeterministicOracleMatchingQwenSemanticOutputV1('banner-person-v1');
     if (validOutput.composition.kind !== 'composition_proposal') {
       throw new Error('Invalid test output.');
     }
@@ -649,18 +653,18 @@ describe('Qwen3-VL production adapter boundary', () => {
       ...validOutput,
       composition: {
         ...validOutput.composition,
-        sourceAssetSha256: 'f'.repeat(64) as typeof validOutput.composition.sourceAssetSha256,
+        sourceAssetSha256: 'f'.repeat(64),
       },
     };
     const transport = createDeterministicQwenTransport([{ kind: 'success', output }]);
     const authorization = createQwenDryRunExecutionAuthorization({ nowMs: fixedNowMs });
     const adapter = createQwen3VlSceneAnalysisAdapter({ transport, clock: clockWithLatency() });
-    await expectReason(adapter.analyze(await analyzeInput({ authorization })), 'identity-mismatch');
+    await expectReason(adapter.analyze(await analyzeInput({ authorization })), 'schema-invalid');
   });
 
   it('rejects request ID, fixture path, and export-name drift before transport dispatch', async () => {
     const fixture = await firstFixture();
-    const output = createDeterministicOracleMatchingQwenOutputV1('banner-person-v1');
+    const output = createDeterministicOracleMatchingQwenSemanticOutputV1('banner-person-v1');
     const driftedRequests = [
       createSceneAnalysisModelRequestV1({
         requestId: 'qwen.banner-person-v1.run.2',
@@ -714,7 +718,7 @@ describe('Qwen3-VL production adapter boundary', () => {
   });
 
   it('rejects absent, cloned, and stale authorization before transport dispatch', async () => {
-    const output = createDeterministicOracleMatchingQwenOutputV1('banner-person-v1');
+    const output = createDeterministicOracleMatchingQwenSemanticOutputV1('banner-person-v1');
 
     for (const authorization of [
       undefined,
@@ -807,8 +811,8 @@ describe('Qwen3-VL production adapter boundary', () => {
       oracle: 'aa499d5560a97a2bf7df84fd0240f39941a82f485f804a42a608d96cb9acba51',
       policy: BANNER_AI_MODEL_DISPATCH_CONTENT_POLICY_V1_DEFINITION_SHA256,
       workflow: INITIAL_BANNER_ANALYZE_WORKFLOW_REF_V1.definitionSha256,
-      orderedInputs: '3f054e4b8ed25273bb71fed3416583b49619334aea67c1b9c34897fd3632e8f7',
-      request: '6db92da8ad630244d1e45ee63d9fb64de97f57c03ebdd5b851952436549a3252',
+      orderedInputs: 'b1f515a9e29bce8a6acbb6a5c371f235402023428989b682a6af0b27a85666cc',
+      request: '1f864a8efccdaaa59539bc745963c98284913979703fb1e38966b59e4d56d580',
       pricing: '09badc6f060ba9f30943c2f54f480f58ef9a884da50767cf6ba8072ab0fba56c',
       caps: QWEN_FOUR_FIXTURE_BENCHMARK_CAPS_SHA256,
     });

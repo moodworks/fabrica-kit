@@ -7,6 +7,10 @@ import {
   type ProposedSceneAnalysisOcrOutputV1,
 } from './openai-scene-analysis-output.js';
 import {
+  QwenSemanticSceneAnalysisOutputV1Schema,
+  type QwenSemanticSceneAnalysisOutputV1,
+} from './qwen-semantic-scene-analysis-output.js';
+import {
   HUMAN_ORACLE_APPROVED_BY_FIXTURE_V2,
   HumanOracleApprovedV2Schema,
   REAL_MODEL_BENCHMARK_HUMAN_ORACLE_CORPUS_V2,
@@ -203,5 +207,42 @@ export const createDeterministicOracleMatchingQwenOutputV1 = (
       proposalOnly: true,
       automaticCutoutExportOrOtherDecisionAuthority: 'none',
     },
+  });
+};
+
+export const createDeterministicOracleMatchingQwenSemanticOutputV1 = (
+  fixtureIdInput: unknown,
+): QwenSemanticSceneAnalysisOutputV1 => {
+  const canonical = createDeterministicOracleMatchingQwenOutputV1(fixtureIdInput);
+  return QwenSemanticSceneAnalysisOutputV1Schema.parse({
+    composition:
+      canonical.composition.kind === 'composition_proposal'
+        ? {
+            kind: canonical.composition.kind,
+            parts: canonical.composition.parts,
+          }
+        : {
+            kind: canonical.composition.kind,
+            reason: canonical.composition.reason,
+          },
+    layerEvidence: canonical.layerEvidence.map((evidence) => ({
+      partKey: evidence.partKey,
+      observationBasis: evidence.observationBasis,
+      confidence: { valueBps: evidence.confidence.valueBps },
+      reviewFlags: evidence.reviewFlags,
+    })),
+    ocrCompletion: { kind: canonical.ocrCompletion.kind },
+    textObservations: canonical.textObservations.map((observation) => ({
+      observationId: observation.observationId,
+      text: { value: observation.text.value },
+      boundingBox: {
+        xBps: observation.boundingBox.xBps,
+        yBps: observation.boundingBox.yBps,
+        widthBps: observation.boundingBox.widthBps,
+        heightBps: observation.boundingBox.heightBps,
+      },
+      confidence: { valueBps: observation.confidence.valueBps },
+    })),
+    reviewFlags: canonical.reviewFlags,
   });
 };

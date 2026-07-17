@@ -7,16 +7,21 @@ import {
 } from '../evaluation/ai-contracts.js';
 import {
   QWEN3_VL_FLASH_MODEL_CONTRACT_V1,
+  QWEN3_VL_MODEL_AVAILABILITY_EVIDENCE_V2_SHA256,
+  QWEN3_VL_MODEL_LIFECYCLE_EVIDENCE_V2_SHA256,
   QWEN3_VL_PRICING_EVIDENCE_V2_SHA256,
   QWEN3_VL_PROVIDER_IDENTITY_V2_SHA256,
   QWEN3_VL_PROVIDER_PROTOCOL_WRAPPER_V1_SHA256,
   QWEN_FOUR_FIXTURE_HUMAN_ORACLE_CORPUS_SHA256,
   QWEN_FOUR_FIXTURE_PENDING_CORPUS_CORE_SHA256,
   QWEN3_VL_PROVIDER_PROTOCOL_WRAPPER_V2_SHA256,
+  QWEN3_VL_PROVIDER_PROTOCOL_WRAPPER_V3_SHA256,
   QWEN3_VL_REQUEST_SHAPE_V1_SHA256,
   QWEN3_VL_REQUEST_SHAPE_V2_SHA256,
   QWEN3_VL_REQUEST_SHAPE_V3_SHA256,
+  QWEN3_VL_REQUEST_SHAPE_V4_SHA256,
 } from '../evaluation/qwen3-vl-candidate-evidence.js';
+import { SCENE_ANALYSIS_OCR_OUTPUT_JSON_SCHEMA_SHA256 } from '../evaluation/openai-scene-analysis-output.js';
 import {
   QwenBenchmarkFixtureIdSchema,
   getQwenFourFixtureEvaluationBindingsV1,
@@ -26,6 +31,13 @@ import {
   SCENE_ANALYSIS_PROMPT_V1,
   canonicalBannerAiPromptRef,
 } from '../evaluation/prompt-catalog.js';
+import {
+  QWEN_DIAGNOSTIC_V2_SEMANTIC_PROJECTION_V1_SHA256,
+  QWEN_DIAGNOSTIC_V2_SEMANTIC_PROJECTION_VERSION,
+  QWEN_RESPONSE_BOUNDARY_V2_DEFINITION_SHA256,
+  QWEN_SEMANTIC_MATERIALIZER_V1_DEFINITION_SHA256,
+} from '../evaluation/qwen-response-contract-evidence.js';
+import { QWEN_SEMANTIC_SCENE_ANALYSIS_JSON_SCHEMA_V1_SHA256 } from '../evaluation/qwen-semantic-scene-analysis-output.js';
 import { canonicalizeJson, sha256Hex } from '../scene/canonical-scene-json.js';
 
 const filenameByFixture = Object.freeze({
@@ -157,8 +169,37 @@ export const QWEN_FOUR_FIXTURE_PROVIDER_SPECIFIC_AGGREGATE_V3_SHA256 = sha256Hex
   ),
 );
 
+export const QWEN_FOUR_FIXTURE_PROVIDER_SPECIFIC_AGGREGATE_V4_SHA256 = sha256Hex(
+  Buffer.from(
+    canonicalizeJson({
+      aggregateVersion: 4,
+      adapterVersion: 2,
+      adapterResultVersion: 2,
+      fixtureOrder: catalogEntries.map((entry) => entry.fixtureId),
+      fullCanonicalModelInputDigests: QWEN_FOUR_FIXTURE_ORDERED_MODEL_INPUT_DIGESTS_V1,
+      pendingCorpusCoreSha256: QWEN_FOUR_FIXTURE_PENDING_CORPUS_CORE_SHA256,
+      humanOracleCorpusSha256: QWEN_FOUR_FIXTURE_HUMAN_ORACLE_CORPUS_SHA256,
+      requestShapeSha256: QWEN3_VL_REQUEST_SHAPE_V4_SHA256,
+      providerIdentitySha256: QWEN3_VL_PROVIDER_IDENTITY_V2_SHA256,
+      modelAvailabilityEvidenceSha256: QWEN3_VL_MODEL_AVAILABILITY_EVIDENCE_V2_SHA256,
+      modelLifecycleEvidenceSha256: QWEN3_VL_MODEL_LIFECYCLE_EVIDENCE_V2_SHA256,
+      pricingEvidenceSha256: QWEN3_VL_PRICING_EVIDENCE_V2_SHA256,
+      providerProtocolWrapperSha256: QWEN3_VL_PROVIDER_PROTOCOL_WRAPPER_V3_SHA256,
+      semanticOutputSchemaVersion: 1,
+      semanticOutputSchemaSha256: QWEN_SEMANTIC_SCENE_ANALYSIS_JSON_SCHEMA_V1_SHA256,
+      canonicalOutputSchemaVersion: 1,
+      canonicalOutputSchemaSha256: SCENE_ANALYSIS_OCR_OUTPUT_JSON_SCHEMA_SHA256,
+      responseBoundarySha256: QWEN_RESPONSE_BOUNDARY_V2_DEFINITION_SHA256,
+      semanticMaterializerSha256: QWEN_SEMANTIC_MATERIALIZER_V1_DEFINITION_SHA256,
+      diagnosticSemanticProjectionVersion: QWEN_DIAGNOSTIC_V2_SEMANTIC_PROJECTION_VERSION,
+      diagnosticSemanticProjectionSha256: QWEN_DIAGNOSTIC_V2_SEMANTIC_PROJECTION_V1_SHA256,
+    }),
+    'utf8',
+  ),
+);
+
 export const QWEN_FOUR_FIXTURE_ACTIVE_MODEL_INPUT_DIGESTS_SHA256 =
-  QWEN_FOUR_FIXTURE_PROVIDER_SPECIFIC_AGGREGATE_V3_SHA256;
+  QWEN_FOUR_FIXTURE_PROVIDER_SPECIFIC_AGGREGATE_V4_SHA256;
 
 export const createCanonicalQwenBenchmarkRequestV1 = (
   fixtureIdInput: unknown,
