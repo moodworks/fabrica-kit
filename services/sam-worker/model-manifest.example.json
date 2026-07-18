@@ -1,0 +1,10 @@
+{
+  "manifestVersion": 1,
+  "repositoryUrl": "https://github.com/facebookresearch/sam2",
+  "repositoryCommit": "05d9e57fb3945b10c861046c1e6749e2bfc258e3",
+  "modelId": "sam2.1_hiera_base_plus",
+  "configIdentity": "configs/sam2.1/sam2.1_hiera_b+.yaml",
+  "configSha256": "REVIEWED_CONFIG_SHA256_REQUIRED",
+  "checkpointUrl": "https://dl.fbaipublicfiles.com/segment_anything_2/092824/sam2.1_hiera_base_plus.pt",
+  "checkpointSha256": "REVIEWED_CHECKPOINT_SHA256_REQUIRED"
+}

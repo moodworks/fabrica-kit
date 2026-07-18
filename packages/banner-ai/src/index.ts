@@ -33,6 +33,7 @@ export * from './ports/scene-reference-resolver.js';
 export * from './security/preview-policy.js';
 export * from './security/raster-container.js';
 export * from './security/raster-upload.js';
+export * from './sam/sam-mask-contracts.js';
 export * from './scene/banner-scene-v1.schema.js';
 export * from './scene/canonical-scene-json.js';
 export * from './scene/export-reproduction-manifest-v1.schema.js';

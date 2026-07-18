@@ -1,0 +1,14 @@
+{
+  "manifestVersion": 1,
+  "repositoryUrl": "https://github.com/facebookresearch/sam2",
+  "repositoryCommit": "05d9e57fb3945b10c861046c1e6749e2bfc258e3",
+  "repositoryArchiveUrl": "https://github.com/facebookresearch/sam2/archive/05d9e57fb3945b10c861046c1e6749e2bfc258e3.tar.gz",
+  "repositoryArchiveTopLevel": "sam2-05d9e57fb3945b10c861046c1e6749e2bfc258e3",
+  "repositoryArchiveSha256": "REVIEWED_DEPLOYMENT_VALUE_REQUIRED",
+  "configIdentity": "configs/sam2.1/sam2.1_hiera_b+.yaml",
+  "configSha256": "REVIEWED_DEPLOYMENT_VALUE_REQUIRED",
+  "checkpointUrl": "https://dl.fbaipublicfiles.com/segment_anything_2/092824/sam2.1_hiera_base_plus.pt",
+  "checkpointSha256": "AUTHORITATIVE_OR_MANUALLY_REVIEWED_DEPLOYMENT_VALUE_REQUIRED",
+  "requirementsLockSha256": "REVIEWED_DEPLOYMENT_VALUE_REQUIRED",
+  "wheelhouseManifestSha256": "REVIEWED_DEPLOYMENT_VALUE_REQUIRED"
+}

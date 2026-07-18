@@ -1,0 +1,10 @@
+**
+!services/
+!services/sam-worker/
+!services/sam-worker/Dockerfile
+!services/sam-worker/sam_worker/
+!services/sam-worker/sam_worker/**
+!.local-data/
+!.local-data/banner-ai/
+!.local-data/banner-ai/sam-worker-build/
+!.local-data/banner-ai/sam-worker-build/**

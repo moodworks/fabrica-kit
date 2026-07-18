@@ -1,0 +1,51 @@
+{
+  "vectorVersion": 1,
+  "limits": {
+    "rawMaskWorkingBytes": 268435456
+  },
+  "mask": {
+    "width": 4,
+    "height": 3,
+    "rowMajorBits": "011011000001",
+    "rleBase64": "RkJSTAEAAAAEAAAAAwAAAAAGAQIBAgUB",
+    "rleHex": "4642524c0100000004000000030000000006010201020501",
+    "maskSha256": "a092a8684ea913521764c7bfec383a6bcad7b0c31fbfc5747385c65e0689e86f",
+    "sourceSha256": "0000000000000000000000000000000000000000000000000000000000000000",
+    "candidateId": "samc_v1_294195931f0dea47eaeceafb0ee1fe0ff14505782be393d2c108dfb57b5de1ad"
+  },
+  "coordinates": {
+    "dimension": 4,
+    "basisPoints": 10000,
+    "pixel": 3,
+    "box": {
+      "input": {
+        "xBps": 2500,
+        "yBps": 0,
+        "widthBps": 5000,
+        "heightBps": 10000
+      },
+      "sourceWidth": 4,
+      "sourceHeight": 3,
+      "output": {
+        "left": 1,
+        "top": 0,
+        "rightInclusive": 2,
+        "bottomInclusive": 2
+      }
+    }
+  },
+  "canonicalJson": {
+    "input": {
+      "z": 1,
+      "a": [
+        "x",
+        {
+          "b": true,
+          "a": null
+        }
+      ]
+    },
+    "encoded": "{\"a\":[\"x\",{\"a\":null,\"b\":true}],\"z\":1}",
+    "sha256": "b5c1019d84d8b88e5d73387efa5e8b3331c60a18cb848817531c9e017c451bcd"
+  }
+}
