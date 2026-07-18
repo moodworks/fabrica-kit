@@ -11,11 +11,11 @@ import {
   type SamMaskRequest,
 } from '../sam/sam-mask-contracts.js';
 import { materializeSamMaskCutout } from '../sam/sam-cutout-materializer.js';
-import { createSamRunPodAdapter } from './sam-runpod-adapter.js';
+import { createSamRunPodDirectV2Adapter } from './sam-runpod-direct-v2-adapter.js';
 import {
-  SAM_DETERMINISTIC_FAKE_IDENTITY,
-  createDeterministicSamRunPodTransport,
-} from './sam-runpod-deterministic-fake-transport.js';
+  SAM_DETERMINISTIC_DIRECT_FAKE_IDENTITY,
+  createDeterministicSamRunPodDirectV2Transport,
+} from './sam-runpod-direct-v2-deterministic-fake-transport.js';
 
 const label = 'DETERMINISTIC FAKE MASKS — NOT SAM OUTPUT';
 const sha256 = (bytes: Uint8Array): string => createHash('sha256').update(bytes).digest('hex');
@@ -61,13 +61,13 @@ const main = async (): Promise<void> => {
     limits: { minMaskAreaPixels: 64, maxCandidates: 8 },
     output: { maskEncoding: SAM_MASK_ENCODING },
   };
-  const transport = createDeterministicSamRunPodTransport();
-  const adapter = createSamRunPodAdapter({
+  const transport = createDeterministicSamRunPodDirectV2Transport();
+  const adapter = createSamRunPodDirectV2Adapter({
     endpointId: 'deterministic-fake-only',
-    expectedExecutionIdentity: SAM_DETERMINISTIC_FAKE_IDENTITY,
+    expectedExecutionIdentity: SAM_DETERMINISTIC_DIRECT_FAKE_IDENTITY,
     transport,
   });
-  const response = await adapter.generate(request, null);
+  const response = await adapter.generate(request);
   await mkdir(outputDirectory, { recursive: true });
   const rows: string[] = [];
   for (const candidate of response.candidates) {
@@ -131,7 +131,7 @@ const main = async (): Promise<void> => {
           height: 255,
           sha256: sourceSha256,
         },
-        executionIdentity: SAM_DETERMINISTIC_FAKE_IDENTITY,
+        executionIdentity: SAM_DETERMINISTIC_DIRECT_FAKE_IDENTITY,
         networkCalls: transport.networkCalls,
         candidateIds: response.candidates.map((candidate) => candidate.candidateId),
         reproduction: 'materialized-twice-byte-identical',

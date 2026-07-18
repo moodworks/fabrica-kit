@@ -2,8 +2,8 @@
 
 Status: provider-free foundation; production execution inactive
 Contract: `sam-mask-v1`
-Evidence retrieved: 2026-07-18
-Evidence expires: 2026-08-18T00:00:00Z (fail closed)
+RunPod evidence retrieved: 2026-07-18T13:15:50Z
+RunPod evidence expires: 2026-08-18T13:15:50Z (fail closed)
 
 ## Decision and scope
 
@@ -42,25 +42,44 @@ The selected implementation is Meta's official
 | Checkpoint SHA-256                 | **Unknown: deployment-time blocking value**                                          |
 | Primary license                    | Apache-2.0                                                                           |
 | Optional bundled `cc_torch` notice | BSD-3-Clause, if included in the staged source                                       |
+| Meta evidence retrieved            | `2026-07-18`                                                                         |
+| Meta evidence expires              | `2026-08-18T00:00:00Z`, or earlier official-source change/conflict                   |
 
 The commit is a pinned official repository commit, not a tagged release. No
 authoritative checkpoint digest was published in the reviewed official evidence. This
 document does not invent one. Retrieval, independent digest review, and a second
 authorization are prerequisites for any build.
 
-Evidence must be rechecked against official Meta sources after the expiry above. Stale,
-missing, or conflicting evidence blocks build and execution.
+Meta evidence must be rechecked against official Meta sources before controlled
+artifact retrieval and at or before its expiry above. Stale, missing, or conflicting
+evidence blocks build and execution.
 
-The RunPod protocol evidence is the official
-[handler-functions documentation](https://docs.runpod.io/serverless/workers/handler-functions),
-[endpoint operation reference](https://docs.runpod.io/serverless/endpoints/operation-reference),
-[request-policy documentation](https://docs.runpod.io/serverless/endpoints/send-requests),
-and
-[endpoint-configuration documentation](https://docs.runpod.io/serverless/endpoints/endpoint-configurations).
-They support the standard `{id,input}` handler, `/runsync`, bounded payload/wait behavior,
-execution policy, and provider status envelope used here. The endpoint documentation
-also states that queue-based endpoints provide automatic retries. These sources were
-retrieved on 2026-07-18 and share the 2026-08-18T00:00:00Z fail-closed expiry above.
+The direct-hosting decision is based only on the official RunPod
+[load-balancing overview](https://docs.runpod.io/serverless/load-balancing/overview),
+[load-balancing worker guide](https://docs.runpod.io/serverless/load-balancing/build-a-worker),
+[endpoint overview](https://docs.runpod.io/serverless/endpoints/overview), and
+[GitHub integration guide](https://docs.runpod.io/serverless/workers/github-integration).
+They were retrieved at exactly `2026-07-18T13:15:50Z`. The reviewed facts are:
+
+- a Load Balancer endpoint routes HTTP directly to an available worker, bypasses the
+  queue, permits a custom FastAPI contract, drops excess work rather than buffering a
+  backlog, and has no built-in automatic retry;
+- its URL shape is `https://ENDPOINT_ID.api.runpod.ai/YOUR_CUSTOM_PATH`, and official
+  authenticated examples send `Authorization: Bearer RUNPOD_API_KEY`;
+- the application port defaults to `PORT=80`; `PORT_HEALTH` defaults to the same port
+  and the default health path is `/ping`;
+- RunPod interprets `/ping` status `200` as healthy, `204` as initializing, and every
+  other status as unhealthy;
+- the provider documents a two-minute no-worker request timeout, a 5.5-minute
+  per-request processing timeout, and a 30 MB request and response payload limit; the
+  Fabrica boundary below is deliberately stricter;
+- GitHub integration builds, stores, and deploys the image. It is excluded from this
+  controlled flow because those coupled external changes are not authorized here.
+
+Native construction and execution fail closed at or after
+`2026-08-18T13:15:50Z`. An earlier material change, removal, or conflict in any reviewed
+official page also requires evidence renewal before native use. The deterministic fake
+does not depend on live provider evidence and remains available after expiry.
 
 The production automatic generator profile is frozen explicitly:
 
@@ -142,14 +161,15 @@ runtime, or undocumented third-party kernel scratch space.
 server-owned normalized RGBA PNG
         |
         v
-TypeScript closed request + execution authorization
+TypeScript closed request + direct-v2 execution authorization
         |
         +--> deterministic fake transport (zero network; fake identity only)
         |
-        `--> server-only RunPod /runsync transport (inactive)
+        `--> server-only RunPod Load Balancer transport (inactive)
+                 POST https://{endpointId}.api.runpod.ai/v1/masks
                  |
                  v
-        Python strict PNG/request boundary
+        Python strict FastAPI/PNG/request boundary
                  |
                  v
         injectable segmentation engine
@@ -170,11 +190,27 @@ transport, API-key reference, deterministic provider fake, demo runner, and shar
 materializer remain direct server/test imports and are absent from the package's public
 browser graph.
 
+The active topology has no queue runtime, queue authorization builder, queue fallback,
+provider-selection flag, browser/package export, `/run` or `/runsync` request, polling,
+retry loop, or cancellation route. The retired queue foundation exists only in Git
+commit `9f28c11ff5e17c84aef3a36d75117547ccc0b34b` and in explicit rejection coverage and
+this architectural record. It is not an alternate execution path.
+
 ### Python worker
 
-The standard RunPod handler accepts exactly `{id,input}`. The provider `id` is transport
-metadata and never substitutes for Fabrica request/job/attempt identity. The handler
-decodes no URLs and returns only strict JSON data.
+The worker is a one-process FastAPI application launched by
+`python -m sam_worker.server`. Uvicorn binds `0.0.0.0`, uses `PORT` with exact default
+`80`, and is fixed to one worker process with reload and access logging disabled.
+`PORT_HEALTH`, when supplied, must equal `PORT`; `HEALTH_CHECK_PATH`, when supplied,
+must be `/ping`.
+
+The only routes are exact `GET /ping` and `POST /v1/masks`. Query strings, trailing-path
+variants, redirects, framework documentation, OpenAPI, Redoc, CORS, and administrative
+or debug routes are absent. Inference accepts one unencoded `application/json` header
+and a bare closed `sam-mask-v1` request. It rejects queue `{id,input}` envelopes, URLs,
+duplicate JSON keys, invalid UTF-8 or BOMs, non-finite JSON numbers, unknown fields, and
+an over-limit body before contract parsing. It returns one bare closed `sam-mask-v1`
+response, never a provider job envelope.
 
 Before inference, the worker validates:
 
@@ -189,11 +225,33 @@ Before inference, the worker validates:
 
 Production startup verifies the staged repository/config/checkpoint manifest and hashes
 before importing torch or SAM. The exact model loads once per warm worker. Requests are
-serialized through one process lock and execute under inference mode, with CUDA selected
-when available and CPU as the supported fallback. Only request-specific predictor and
-CPU/GPU cache objects are cleared in `finally`; the warm model remains. No code or model
-download occurs at container startup or request time, and inference source has no
-network client.
+serialized through one process admission permit and execute under inference mode, with
+CUDA selected when available and CPU as the supported fallback. Only request-specific
+predictor and CPU/GPU cache objects are cleared in `finally`; the warm model remains. No
+code or model download occurs at container startup or request time, and inference source
+has no network client.
+
+Readiness is a cached four-state process contract:
+
+| Cached state              | `/ping` | Body                 | Inference |
+| ------------------------- | ------: | -------------------- | --------- |
+| `model-not-staged`        |     503 | strict redacted JSON | refused   |
+| `model-staged-not-loaded` |     204 | empty                | refused   |
+| `model-loaded-ready`      |     200 | strict redacted JSON | eligible  |
+| `startup-blocked`         |     503 | strict redacted JSON | refused   |
+
+All health responses use `Cache-Control: no-store` and omit `Retry-After`. If all three
+required runtime artifacts are present, the FastAPI lifespan starts exactly one
+background model-load attempt and reports `204` until it reaches the terminal ready or
+blocked state. No artifacts means not staged; a partial artifact set is startup blocked.
+One process owns one warm model. `/ping` remains responsive while blocking inference
+runs in a thread.
+
+After readiness, `/v1/masks` acquires its one nonblocking admission permit before
+buffering the body. A second request receives `429` immediately; there is no application
+backlog. The permit is released only after blocking inference and response construction
+finish. If the client disconnects after inference begins, the engine may finish while
+the permit remains held; neither worker nor adapter claims GPU cancellation.
 
 The controlled build uses a canonical pinned repository archive and its independently
 reviewed archive SHA-256, not a mutable source directory or incomplete path list.
@@ -205,29 +263,29 @@ extra keys, placeholders, zero digests, and artifact digest drift.
 
 ### TypeScript server adapter
 
-The server configuration contains one endpoint ID. The adapter derives
-`https://api.runpod.ai/v2/<endpoint-id>/runsync?wait=300000`; request/browser data never
-contains an endpoint. The adapter sends normalized PNG bytes inline, not a remote URL.
+The server configuration contains one lowercase DNS-label endpoint ID. The adapter
+derives exactly `https://<endpoint-id>.api.runpod.ai/v1/masks`; request/browser data
+cannot supply an endpoint. It sends one canonical bare `sam-mask-v1` JSON body containing
+normalized PNG bytes, never a wrapper or remote image URL.
 
-`RUNPOD_API_KEY` is a server-only reference. Its value is supplied only to the private
-native transport and is never inspected by milestone tests. The native transport uses a
-bounded streaming response reader, no redirects, no credentials, an abort signal, and
-strict envelopes. A completed envelope requires `delayTime`, `executionTime`, `id`,
-`output`, and `COMPLETED`, plus an optional bounded safe `workerId`. Non-completed
-envelopes accept only `IN_QUEUE`, `IN_PROGRESS`, `RUNNING`, `FAILED`, `CANCELLED`, or
-`TIMED_OUT` and their explicitly bounded optional timing, worker, and error fields. IDs
-are 1–256 characters; provider timings are nonnegative integers no greater than
-604,800,000. Unknown keys, fractional/oversized timings, and unsafe worker IDs fail
-closed. Worker ID is never copied to telemetry.
+`RUNPOD_API_KEY` is a server-only reference. Its value is captured only inside the
+private native transport and is sent only as the `Authorization: Bearer ...` header.
+The returned transport exposes neither the value nor an arbitrary dispatch method:
+single-use capabilities bind calls to the adapter. The native fetch boundary requires
+the exact derived HTTPS host/path, no userinfo, port, query, fragment, redirect,
+credentials, referrer, or cache, and one exact `application/json` response. Its fatal
+UTF-8 streaming reader is bounded at the 12,000,000-byte application response ceiling.
 
-Timeout or cancellation after dispatch, and provider states `TIMED_OUT`, `IN_QUEUE`,
-`IN_PROGRESS`, or `RUNNING`, become terminal non-retryable
-`INDETERMINATE`; this does not claim remote cancellation. Confirmed `FAILED` or
-`CANCELLED` is a provider failure.
-
-Once the native transport is invoked, any transport rejection—including fetch or
-bounded response-stream failure—is also terminal non-retryable `INDETERMINATE`.
-Malformed data returned by a completed transport remains `RESPONSE_INVALID`.
+Before dispatch, cancellation returns `PRE_DISPATCH_CANCELLED`. After the process-local
+claim, timeout, caller cancellation, connection loss, response truncation, fetch/stream
+failure, and every HTTP status at least 500 are terminal non-retryable
+`INDETERMINATE`; remote completion is unknown and no cancellation is claimed. A strict
+4xx response, including worker overload `429`, is `PROVIDER_FAILURE`. Unsupported
+2xx/3xx status, content type, body, schema, digest, identity, or any queue envelope is
+`RESPONSE_INVALID`. There is deliberately one client dispatch, zero client retry, zero
+poll, and no cancel route. Although the official cold-start guidance suggests client
+retry, this evidence slice refuses automatic retry: a cold-start/no-worker error is
+reported under these same failure semantics and requires an explicit later decision.
 
 The process claims a job/attempt immediately before dispatch and rejects duplicate
 dispatch. That guarantee is deliberately process-local. Production activation also
@@ -239,24 +297,27 @@ Live construction and dispatch require all of:
 - one configured endpoint ID;
 - the server-owned `RUNPOD_API_KEY` reference and nonempty server-supplied value;
 - exact reviewed model/config/checkpoint identity with a non-placeholder digest;
-- a single-use, unexpired explicit execution authorization matching source byte count,
-  dimensions, digest, endpoint, limits, authorization ID, and automatic mode;
+- a single-use, unexpired `single-fixture-sam-runpod-direct-v2` authorization matching
+  source byte count, dimensions, digest, endpoint, limits, authorization ID, and
+  automatic mode;
 - an independently supplied, nonzero `sha256:<64-lowercase-hex>` image digest that must
   equal the authorization image digest before a dispatch claim;
-- independently configured `clientWallTimeoutMs`,
-  `providerExecutionTimeoutMs` (5 seconds through 7 days), and `providerTtlMs`
-  (10 seconds through 7 days), all exactly bound by the authorization. The client wall
-  timeout controls only this process's abort timer. The provider values are sent outside
-  worker input as `{input,policy:{executionTimeout,ttl}}`. The authorization also binds
-  the exact `minMaskAreaPixels`, `maxCandidates`, and `fabrica-binary-rle-v1` output
-  identity; mutations fail before a dispatch claim.
+- a `clientWallTimeoutMs` no greater than the provider-documented 330,000 ms processing
+  ceiling, plus an exact positive micro-USD cost cap;
+- exact minimum mask area, maximum candidate count, and
+  `fabrica-binary-rle-v1` output identity;
+- the exact documentation retrieval/expiry tuple and all three reviewed profiles:
+  - direct hosting SHA-256
+    `2e5d64b6741802f7963fa678d174fca92a367a32672764fae5831c3131702f3a`;
+  - direct adapter V2 SHA-256
+    `c114b8b0bc3030ef2d7df524c88bd1710c9e6bc264d186c6b9e8ee7845718747`;
+  - direct authorization V2 SHA-256
+    `c1ab605534b23b8aa6be2433b333696eeed9f13e1f87be76a49e60a26bc7509e`.
 
-This adapter makes one HTTP submission and has `clientRetryCount=0`. That is not a
-strict one-inference or one-charge guarantee: RunPod documents automatic retries for its
-queue-based endpoints, and `executionTimeout`/`ttl` do not disable them. A reviewed
-official provider setting or guarantee that disables automatic job retries is therefore
-a deployment blocker for the requested one-fixture/one-inference cost boundary. Until
-that condition exists, `providerCallsMaximum=1` means one client dispatch only.
+The authorization says `clientDispatchMaximum=1`,
+`applicationInferenceMaximum=1`, `clientRetryCount=0`, and `pollCount=0`. It explicitly
+says `providerBillingGuarantee=false`: direct/no-retry behavior does not prove a billing
+outcome. It grants neither production admission nor a web route.
 
 Telemetry is a closed allowlist: request ID, attempt ID, endpoint ID, status, candidate
 count, and redacted failure class. It cannot contain image bytes/Base64, API keys,
@@ -281,14 +342,14 @@ The boundary rejects URL/SVG/JPEG inputs, unknown fields, unknown authority, for
 digests, invalid PNGs, dimension drift, empty/out-of-range/non-finite prompts, arbitrary
 models/configs/checkpoints, endpoint input, or checkpoint paths.
 
-Hard limits are:
+RunPod's reviewed Load Balancer documentation allows 30 MB for each request and response.
+The application never relies on that outer maximum. Its stricter hard limits are:
 
 | Limit                           |                              Value |
 | ------------------------------- | ---------------------------------: |
 | Source PNG                      |                   12,000,000 bytes |
 | Source Base64                   |              16,000,000 characters |
-| Canonical request JSON          |                   16,100,000 bytes |
-| Wrapped native body             |                   16,100,128 bytes |
+| Bare canonical request JSON     |                   16,100,000 bytes |
 | Side / pixels / RGBA allocation |    4,096 / 16,777,216 / 67,108,864 |
 | Raw engine candidates           |        512 (513 fails the request) |
 | Automatic batch accounted peak  |                  268,435,456 bytes |
@@ -298,8 +359,7 @@ Hard limits are:
 | Returned candidates             |          request bound, maximum 64 |
 | One binary RLE                  |                    1,000,000 bytes |
 | Total returned binary RLE       |                    8,000,000 bytes |
-| Worker response JSON            |                   12,000,000 bytes |
-| Native provider envelope        |                   12,500,000 bytes |
+| Bare worker response JSON       |                   12,000,000 bytes |
 
 The strict response repeats request/workspace/job/attempt/source identity, exact execution
 identity, integer timings, exact filter accounting, count, ordered candidates, and a
@@ -411,43 +471,67 @@ network calls. These masks are not represented as SAM output.
 
 Deployment remains blocked until every item below is reviewed:
 
-1. Recheck official evidence before expiry. Retrieve the canonical official repository
-   archive for the exact commit and the selected checkpoint in a separately authorized
-   controlled environment.
-2. Independently compute and record the complete repository archive, config, checkpoint, dependency
-   lock, and wheel hashes. Resolve the checkpoint SHA-256 blocker; preserve Apache-2.0
-   and applicable BSD-3-Clause notices. Stage only the verified canonical archive; the
-   offline Docker build verifies its digest and exact single top-level commit directory
-   before installation, so an unlisted source path cannot enter through a partial
-   manifest.
-3. Produce a `pip --require-hashes` lock and local wheelhouse for the exact pins in
-   `requirements.in`. Stage all controlled inputs under the ignored build directory
-   described by the worker README.
-4. Independently review the digest for
-   `pytorch/pytorch:2.5.1-cuda12.4-cudnn9-runtime`, then build with its full
-   `tag@sha256:digest`. Run unit, contract-vector, import/network, source, and container
-   scans. Do not use a floating base.
-5. Publish once to the approved registry; record and review the resulting image digest.
-   Deploy RunPod from that image digest, never `latest`. Create one endpoint with no
-   credentials in the image and configure the server-side API-key reference. Before
-   execution authorization, obtain reviewed official evidence and endpoint configuration
-   that disables provider-managed automatic job retries. If RunPod cannot provide that
-   guarantee for this queue-based endpoint, stop: exact one-inference/cost authorization
-   remains blocked.
-6. Bind a new, single-use authorization to endpoint ID, immutable image digest, exact
+1. Before evidence expiry, or sooner if an official source changes, recheck the exact
+   Meta and RunPod sources. In a separately authorized controlled environment, retrieve
+   the canonical official repository archive for commit
+   `05d9e57fb3945b10c861046c1e6749e2bfc258e3`, its selected config, the exact
+   `sam2.1_hiera_base_plus` checkpoint, and the applicable license/notices. Resolve and
+   independently review the authoritative checkpoint SHA-256. The unresolved digest is
+   a hard blocker; do not invent it.
+2. Independently compute and record complete repository archive, config, checkpoint,
+   dependency-lock, and wheel hashes. Preserve Apache-2.0 and applicable BSD-3-Clause
+   notices. Stage only the verified canonical archive; the offline Docker build verifies
+   its digest and exact single top-level commit directory before installation.
+3. Produce and review a `pip --require-hashes` lock and local wheelhouse for the exact
+   runtime pins in `requirements.in`. Stage all controlled inputs under the ignored
+   build directory described by the worker README.
+4. Resolve and independently review the digest for the Python 3.11/PyTorch CUDA base
+   `pytorch/pytorch:2.5.1-cuda12.4-cudnn9-runtime`, then perform the separately
+   authorized network-disabled Docker build with the full `tag@sha256:digest`. This
+   build is not authorized now. Run unit, contract-vector, import/network, source, and
+   container scans; start the container locally and validate exact `/ping` transitions
+   and `/v1/masks` refusal/readiness behavior. Never use a floating base or `latest`.
+5. Push the reviewed image once to the approved registry and record its immutable
+   registry digest. This publication is not authorized now. RunPod's GitHub integration
+   is not used because it builds and deploys from the connected repository
+   automatically; this flow requires a separately reviewed controlled build and an
+   immutable image digest.
+6. As a separate external change, create exactly one endpoint of type **Load Balancer**,
+   not Queue. This endpoint creation is not authorized now. Its reviewed settings must
+   record:
+   - the immutable image digest and the exact repository/model/config/checkpoint
+     identities and digests;
+   - the chosen GPU type(s) and price, exactly one GPU per worker, minimum/active
+     workers `0`, and maximum workers `1`;
+   - application and health port `80`, health path `/ping`, and inference path
+     `/v1/masks`;
+   - the provider's fixed direct-request limits, a client wall timeout at most
+     330,000 ms, an idle/cold-start policy, and an exact cost cap;
+   - no provider queue or automatic retry, no client retry, no credentials in the image,
+     and only the server-side `RUNPOD_API_KEY` reference.
+7. Validate the deployed immutable image's authenticated `/ping` without inference:
+   `204` means staged and loading, `200` means ready, and every other status is unhealthy.
+   Confirm the exact derived inference URL and re-review redacted logs and secret
+   isolation. Do not submit the fixture until a new execution authorization exists.
+8. Create a new, unexpired, single-use
+   `single-fixture-sam-runpod-direct-v2` authorization bound to endpoint ID, immutable
+   image digest, all three profile digests, the exact evidence timestamps, and exact
    repository/model/config/checkpoint identity and digest, and only this fixture:
    738×255, 125,894 bytes,
    `40f8a1c4312ec86cb4e38e16b9a423e85c2a9e3cf5f98a4bc510c23f3d4cf073`.
    Authorize `automatic-candidates` only, the exact minimum mask area, maximum candidate
-   count and Fabrica binary RLE output, one client provider call, zero client retries,
-   an independent nonzero image digest, reviewed client wall timeout, provider execution
-   timeout, provider TTL and cost cap, no production admission, no web route, and no
-   Qwen geometry. Review the packet and secret isolation separately.
-7. Only after that explicit authorization, dispatch one fixture once. Capture redacted
-   telemetry and strict response evidence, inspect candidate masks, and stop. Any
-   timeout/cancellation is indeterminate and receives no adapter retry. The reviewed
-   provider no-automatic-retry condition in step 5 is what must make this a true
-   one-inference evidence run.
+   count and Fabrica binary RLE output, one client dispatch, one application inference
+   maximum, zero retry, zero poll, reviewed wall timeout and cost cap, and
+   `providerBillingGuarantee=false`. Grant no production admission, web route, or Qwen
+   geometry authority.
+9. Only after that explicit authorization, submit the bare request to `/v1/masks`
+   exactly once. Capture redacted telemetry and strict response evidence, inspect
+   candidate masks, and stop. Any timeout, cancellation, connection loss, response
+   truncation, or server/gateway 5xx is indeterminate and receives no adapter retry.
 
 That one-fixture run is evidence gathering only. It cannot activate production, change
 the canonical scene schema, or grant Qwen geometric authority.
+
+No checkpoint retrieval, dependency resolution, Docker build, registry push, endpoint
+creation, secret inspection, health probe, or provider inference is authorized or
+performed by this milestone.

@@ -54,5 +54,5 @@ RUN python -m sam_worker.health \
 
 USER 10001:10001
 WORKDIR /opt/fabrica/worker
-HEALTHCHECK --interval=30s --timeout=10s --start-period=120s --retries=3 CMD ["python", "-m", "sam_worker.health", "--light"]
-CMD ["python", "-m", "sam_worker.handler"]
+HEALTHCHECK NONE
+CMD ["python", "-m", "sam_worker.server"]

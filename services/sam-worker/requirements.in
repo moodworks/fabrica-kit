@@ -1,6 +1,7 @@
 # Exact runtime package intentions. This is not the build lock.
 # A reviewed --require-hashes lock and local wheelhouse are mandatory controlled build inputs.
-runpod==1.8.1
+fastapi==0.115.12
+uvicorn==0.34.2
 torch==2.5.1
 torchvision==0.20.1
 numpy==1.26.4

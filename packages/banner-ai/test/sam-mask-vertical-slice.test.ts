@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { readFileSync, readdirSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 
 import sharp from 'sharp';
@@ -34,15 +34,33 @@ import {
 } from '../src/sam/sam-mask-validation.js';
 import { parsePngChunks } from '../src/security/raster-container.js';
 import {
-  consumeSamRunPodDispatchCapability,
-  createSamRunPodAdapter,
-  type SamLiveAuthorization,
-  type SamRunPodTransportPort,
-} from '../src/server/sam-runpod-adapter.js';
+  consumeSamRunPodDirectV2DispatchCapability,
+  createSamRunPodDirectV2Adapter,
+  deriveSamRunPodDirectV2Endpoint,
+  type SamRunPodDirectV2TransportPort,
+} from '../src/server/sam-runpod-direct-v2-adapter.js';
 import {
-  SAM_DETERMINISTIC_FAKE_IDENTITY,
-  createDeterministicSamRunPodTransport,
-} from '../src/server/sam-runpod-deterministic-fake-transport.js';
+  SAM_DETERMINISTIC_DIRECT_FAKE_IDENTITY,
+  createDeterministicSamRunPodDirectV2Transport,
+} from '../src/server/sam-runpod-direct-v2-deterministic-fake-transport.js';
+import {
+  assertSamRunPodDirectV2EndpointUrl,
+  createSamRunPodDirectV2NativeFetchTransport,
+} from '../src/server/sam-runpod-direct-v2-native-fetch-transport.js';
+import {
+  RUNPOD_DIRECT_DOCUMENTATION_EXPIRES_AT_MS,
+  RUNPOD_DIRECT_DOCUMENTATION_RETRIEVED_AT,
+  RUNPOD_DIRECT_DOCUMENTATION_RETRIEVED_AT_MS,
+  RUNPOD_DIRECT_DOCUMENTATION_EXPIRES_AT,
+  SAM_RUNPOD_DIRECT_ADAPTER_PROFILE_V2,
+  SAM_RUNPOD_DIRECT_ADAPTER_PROFILE_V2_SHA256,
+  SAM_RUNPOD_DIRECT_AUTHORIZATION_PROFILE_V2,
+  SAM_RUNPOD_DIRECT_AUTHORIZATION_PROFILE_V2_SHA256,
+  SAM_RUNPOD_DIRECT_HOSTING_PROFILE,
+  SAM_RUNPOD_DIRECT_HOSTING_PROFILE_SHA256,
+  SamRunPodDirectV2AuthorizationSchema,
+  type SamRunPodDirectV2Authorization,
+} from '../src/server/sam-runpod-direct-v2-profiles.js';
 
 const packageRoot = resolve(import.meta.dirname, '..');
 const fixture = readFileSync(
@@ -97,11 +115,75 @@ const rectangle = (
   return mask;
 };
 
+const liveIdentity = {
+  kind: 'meta-sam2.1',
+  repositoryUrl: 'https://github.com/facebookresearch/sam2',
+  repositoryCommit: '05d9e57fb3945b10c861046c1e6749e2bfc258e3',
+  modelId: 'sam2.1_hiera_base_plus',
+  configIdentity: 'configs/sam2.1/sam2.1_hiera_b+.yaml',
+  checkpointUrl:
+    'https://dl.fbaipublicfiles.com/segment_anything_2/092824/sam2.1_hiera_base_plus.pt',
+  checkpointSha256: '1'.repeat(64),
+} as const;
+const nativeImageDigest = `sha256:${'2'.repeat(64)}` as const;
+let authorizationCounter = 1;
+
+const createDirectAuthorization = (
+  request: SamMaskRequest,
+  overrides?: Partial<SamRunPodDirectV2Authorization>,
+): SamRunPodDirectV2Authorization => {
+  const counter = authorizationCounter;
+  authorizationCounter += 1;
+  return SamRunPodDirectV2AuthorizationSchema.parse({
+    kind: 'single-fixture-sam-runpod-direct-v2',
+    authorizationId: `08dbe0ed-f7c0-4b55-b615-${counter.toString(16).padStart(12, '0')}`,
+    endpointId: 'future-direct-endpoint',
+    imageDigest: nativeImageDigest,
+    secretReferenceName: 'RUNPOD_API_KEY',
+    executionIdentity: liveIdentity,
+    hostingProfileSha256: SAM_RUNPOD_DIRECT_HOSTING_PROFILE_SHA256,
+    adapterProfileSha256: SAM_RUNPOD_DIRECT_ADAPTER_PROFILE_V2_SHA256,
+    authorizationProfileSha256: SAM_RUNPOD_DIRECT_AUTHORIZATION_PROFILE_V2_SHA256,
+    documentationEvidence: {
+      retrievedAt: RUNPOD_DIRECT_DOCUMENTATION_RETRIEVED_AT,
+      expiresAt: RUNPOD_DIRECT_DOCUMENTATION_EXPIRES_AT,
+      hostingProfileSha256: SAM_RUNPOD_DIRECT_HOSTING_PROFILE_SHA256,
+    },
+    fixture: {
+      sha256: request.source.sha256,
+      byteSize: request.source.byteSize,
+      width: request.source.width,
+      height: request.source.height,
+    },
+    requestLimits: request.limits,
+    output: request.output,
+    automaticCandidatesOnly: true,
+    clientDispatchMaximum: 1,
+    applicationInferenceMaximum: 1,
+    providerBillingGuarantee: false,
+    clientRetryCount: 0,
+    pollCount: 0,
+    clientWallTimeoutMs: 1_000,
+    costMaximumMicroUsd: 1,
+    issuedAtMs: RUNPOD_DIRECT_DOCUMENTATION_RETRIEVED_AT_MS,
+    expiresAtMs: RUNPOD_DIRECT_DOCUMENTATION_EXPIRES_AT_MS,
+    executionAuthorized: true,
+    productionAdmissionAuthority: false,
+    webRouteActivated: false,
+    ...overrides,
+  });
+};
+
 describe('SAM mask protocol', () => {
   it('consumes the same machine vectors as the Python worker', () => {
     const vectors = JSON.parse(
       readFileSync(resolve(packageRoot, '../../services/sam-worker/protocol-vectors.json'), 'utf8'),
     ) as {
+      readonly vectorVersion: number;
+      readonly directHosting: {
+        readonly profile: unknown;
+        readonly sha256: string;
+      };
       readonly limits: {
         readonly rawMaskWorkingBytes: number;
       };
@@ -137,6 +219,23 @@ describe('SAM mask protocol', () => {
         };
       };
     };
+    expect(vectors.vectorVersion).toBe(2);
+    expect(vectors.directHosting.profile).toEqual(SAM_RUNPOD_DIRECT_HOSTING_PROFILE);
+    expect(vectors.directHosting.sha256).toBe(SAM_RUNPOD_DIRECT_HOSTING_PROFILE_SHA256);
+    expect(sha256Hex(Buffer.from(canonicalizeJson(vectors.directHosting.profile), 'utf8'))).toBe(
+      SAM_RUNPOD_DIRECT_HOSTING_PROFILE_SHA256,
+    );
+    expect(
+      sha256Hex(Buffer.from(canonicalizeJson(SAM_RUNPOD_DIRECT_ADAPTER_PROFILE_V2), 'utf8')),
+    ).toBe(SAM_RUNPOD_DIRECT_ADAPTER_PROFILE_V2_SHA256);
+    expect(
+      sha256Hex(Buffer.from(canonicalizeJson(SAM_RUNPOD_DIRECT_AUTHORIZATION_PROFILE_V2), 'utf8')),
+    ).toBe(SAM_RUNPOD_DIRECT_AUTHORIZATION_PROFILE_V2_SHA256);
+    expect(SAM_RUNPOD_DIRECT_AUTHORIZATION_PROFILE_V2.activation).toMatchObject({
+      clientDispatchMaximum: 1,
+      applicationInferenceMaximum: 1,
+      providerBillingGuarantee: false,
+    });
     expect(SAM_LIMITS.rawMaskWorkingBytes).toBe(vectors.limits.rawMaskWorkingBytes);
     const mask = Uint8Array.from([...vectors.mask.rowMajorBits].map(Number));
     const encoded = encodeBinaryMaskRle(mask, vectors.mask.width, vectors.mask.height);
@@ -273,12 +372,12 @@ describe('SAM mask protocol', () => {
 
   it('validates all response identities, mask digests, flags, accounting and ordering', async () => {
     const request = createRequest();
-    const transport = createDeterministicSamRunPodTransport();
-    const response = await createSamRunPodAdapter({
+    const transport = createDeterministicSamRunPodDirectV2Transport();
+    const response = await createSamRunPodDirectV2Adapter({
       endpointId: 'fake-sam-test-one',
-      expectedExecutionIdentity: SAM_DETERMINISTIC_FAKE_IDENTITY,
+      expectedExecutionIdentity: SAM_DETERMINISTIC_DIRECT_FAKE_IDENTITY,
       transport,
-    }).generate(request, null);
+    }).generate(request);
     expect(
       parseAndVerifySamMaskResponse({
         response,
@@ -436,389 +535,516 @@ describe('SAM cutout and server boundary', () => {
 
   it('rejects duplicate dispatch and treats timeout/cancellation as indeterminate', async () => {
     const request = createRequest();
-    const adapter = createSamRunPodAdapter({
+    const duplicateTransport = createDeterministicSamRunPodDirectV2Transport();
+    const adapter = createSamRunPodDirectV2Adapter({
       endpointId: 'fake-sam-duplicate',
-      expectedExecutionIdentity: SAM_DETERMINISTIC_FAKE_IDENTITY,
-      transport: createDeterministicSamRunPodTransport(),
+      expectedExecutionIdentity: SAM_DETERMINISTIC_DIRECT_FAKE_IDENTITY,
+      transport: duplicateTransport,
     });
-    await adapter.generate(request, null);
-    await expect(adapter.generate(request, null)).rejects.toMatchObject({
+    await adapter.generate(request);
+    await expect(adapter.generate(request)).rejects.toMatchObject({
       reason: 'DUPLICATE_DISPATCH',
       retryable: false,
     });
+    expect(duplicateTransport.getCallCount()).toBe(1);
 
     const timeoutRequest = createRequest();
-    const timeoutAdapter = createSamRunPodAdapter({
+    const timeoutAdapter = createSamRunPodDirectV2Adapter({
       endpointId: 'fake-sam-timeout',
-      expectedExecutionIdentity: SAM_DETERMINISTIC_FAKE_IDENTITY,
-      transport: createDeterministicSamRunPodTransport({ waitForAbort: true }),
+      expectedExecutionIdentity: SAM_DETERMINISTIC_DIRECT_FAKE_IDENTITY,
+      transport: createDeterministicSamRunPodDirectV2Transport({ waitForAbort: true }),
       fakeTimeoutMs: 5,
     });
-    await expect(timeoutAdapter.generate(timeoutRequest, null)).rejects.toMatchObject({
+    await expect(timeoutAdapter.generate(timeoutRequest)).rejects.toMatchObject({
       reason: 'INDETERMINATE',
       retryable: false,
     });
 
     const cancellationRequest = createRequest();
-    const cancellationAdapter = createSamRunPodAdapter({
+    const cancellationAdapter = createSamRunPodDirectV2Adapter({
       endpointId: 'fake-sam-cancel',
-      expectedExecutionIdentity: SAM_DETERMINISTIC_FAKE_IDENTITY,
-      transport: createDeterministicSamRunPodTransport({ waitForAbort: true }),
+      expectedExecutionIdentity: SAM_DETERMINISTIC_DIRECT_FAKE_IDENTITY,
+      transport: createDeterministicSamRunPodDirectV2Transport({ waitForAbort: true }),
       fakeTimeoutMs: 1_000,
     });
     const controller = new AbortController();
-    const pending = cancellationAdapter.generate(cancellationRequest, null, {
+    const pending = cancellationAdapter.generate(cancellationRequest, {
       signal: controller.signal,
     });
     controller.abort();
     await expect(pending).rejects.toMatchObject({ reason: 'INDETERMINATE', retryable: false });
 
     const preCancelledRequest = createRequest();
-    const preCancelledTransport = createDeterministicSamRunPodTransport();
-    const preCancelledAdapter = createSamRunPodAdapter({
+    const preCancelledTransport = createDeterministicSamRunPodDirectV2Transport();
+    const preCancelledAdapter = createSamRunPodDirectV2Adapter({
       endpointId: 'fake-sam-pre-cancel',
-      expectedExecutionIdentity: SAM_DETERMINISTIC_FAKE_IDENTITY,
+      expectedExecutionIdentity: SAM_DETERMINISTIC_DIRECT_FAKE_IDENTITY,
       transport: preCancelledTransport,
     });
     const preCancelledController = new AbortController();
     preCancelledController.abort();
     await expect(
-      preCancelledAdapter.generate(preCancelledRequest, null, {
+      preCancelledAdapter.generate(preCancelledRequest, {
         signal: preCancelledController.signal,
       }),
     ).rejects.toMatchObject({ reason: 'PRE_DISPATCH_CANCELLED', retryable: false });
     expect(preCancelledTransport.getCallCount()).toBe(0);
   });
 
-  it('strictly parses every supported RunPod envelope without exposing worker identity', async () => {
+  it('accepts only a direct response and maps strict status outcomes without retry', async () => {
     const telemetry: unknown[] = [];
-    const completedRequest = createRequest();
-    const completed = await createSamRunPodAdapter({
-      endpointId: 'fake-sam-envelope-worker',
-      expectedExecutionIdentity: SAM_DETERMINISTIC_FAKE_IDENTITY,
-      transport: createDeterministicSamRunPodTransport({
-        responseVariant: {
-          kind: 'completed',
-          delayTime: 604_800_000,
-          executionTime: 604_800_000,
-          workerId: `w${'a'.repeat(255)}`,
-        },
-      }),
+    const request = createRequest();
+    const transport = createDeterministicSamRunPodDirectV2Transport();
+    const completed = await createSamRunPodDirectV2Adapter({
+      endpointId: 'fake-sam-direct-response',
+      expectedExecutionIdentity: SAM_DETERMINISTIC_DIRECT_FAKE_IDENTITY,
+      transport,
       telemetry: (event) => telemetry.push(event),
-    }).generate(completedRequest, null);
-    expect(completed.requestId).toBe(completedRequest.requestId);
+    }).generate(request);
+    expect(completed.requestId).toBe(request.requestId);
+    expect(transport.getCallCount()).toBe(1);
+    expect(JSON.parse(transport.getLastRequestBodyText()!)).toEqual(request);
+    expect(JSON.parse(transport.getLastRequestBodyText()!)).not.toHaveProperty('input');
+    expect(JSON.parse(transport.getLastRequestBodyText()!)).not.toHaveProperty('policy');
     expect(telemetry).toHaveLength(1);
-    expect(telemetry[0]).not.toHaveProperty('workerId');
+    expect(telemetry[0]).toEqual({
+      event: 'sam-runpod-direct-succeeded',
+      requestId: request.requestId,
+      attemptId: request.attemptId,
+      endpointId: 'fake-sam-direct-response',
+      status: 200,
+      candidateCount: completed.candidateCount,
+      failureReason: null,
+    });
 
-    for (const responseVariant of [
-      { kind: 'completed', delayTime: 0.5 },
-      { kind: 'completed', executionTime: 604_800_001 },
-      { kind: 'completed', workerId: `w${'a'.repeat(256)}` },
-      { kind: 'completed', includeUnknownField: true },
-      { kind: 'completed', omitOutput: true },
-      {
-        kind: 'non-completed',
-        status: 'FAILED',
-        delayTime: 0.5,
-        error: 'fractional timing must fail schema validation',
-      },
-      {
-        kind: 'non-completed',
-        status: 'FAILED',
-        includeUnknownField: true,
-        error: 'unknown field must fail schema validation',
-      },
-    ] as const) {
+    for (const status of [400, 404, 409, 413, 415, 422, 429] as const) {
       await expect(
-        createSamRunPodAdapter({
-          endpointId: `fake-sam-envelope-invalid-${identityCounter}`,
-          expectedExecutionIdentity: SAM_DETERMINISTIC_FAKE_IDENTITY,
-          transport: createDeterministicSamRunPodTransport({ responseVariant }),
-        }).generate(createRequest(), null),
-      ).rejects.toMatchObject({ reason: 'RESPONSE_INVALID', retryable: false });
-    }
-
-    for (const status of ['IN_QUEUE', 'IN_PROGRESS', 'RUNNING', 'TIMED_OUT'] as const) {
-      await expect(
-        createSamRunPodAdapter({
-          endpointId: `fake-sam-envelope-${status.toLowerCase().replace('_', '-')}`,
-          expectedExecutionIdentity: SAM_DETERMINISTIC_FAKE_IDENTITY,
-          transport: createDeterministicSamRunPodTransport({
-            responseVariant: {
-              kind: 'non-completed',
-              status,
-              delayTime: 0,
-              executionTime: 1,
-              workerId: 'worker.safe:1',
-            },
-          }),
-        }).generate(createRequest(), null),
-      ).rejects.toMatchObject({ reason: 'INDETERMINATE', retryable: false });
-    }
-
-    for (const status of ['FAILED', 'CANCELLED'] as const) {
-      await expect(
-        createSamRunPodAdapter({
-          endpointId: `fake-sam-envelope-${status.toLowerCase()}`,
-          expectedExecutionIdentity: SAM_DETERMINISTIC_FAKE_IDENTITY,
-          transport: createDeterministicSamRunPodTransport({
-            responseVariant: {
-              kind: 'non-completed',
-              status,
-              delayTime: 0,
-              executionTime: 1,
-              workerId: 'worker.safe:1',
-              error: 'bounded deterministic provider error',
-            },
-          }),
-        }).generate(createRequest(), null),
+        createSamRunPodDirectV2Adapter({
+          endpointId: `fake-sam-direct-http-${status}`,
+          expectedExecutionIdentity: SAM_DETERMINISTIC_DIRECT_FAKE_IDENTITY,
+          transport: createDeterministicSamRunPodDirectV2Transport({ status }),
+        }).generate(createRequest()),
       ).rejects.toMatchObject({ reason: 'PROVIDER_FAILURE', retryable: false });
     }
+    for (const status of [500, 502, 503, 504] as const) {
+      const oneCall = createDeterministicSamRunPodDirectV2Transport({
+        status,
+        contentType: 'text/plain',
+        bodyText: 'malformed gateway body',
+      });
+      await expect(
+        createSamRunPodDirectV2Adapter({
+          endpointId: `fake-sam-direct-http-${status}`,
+          expectedExecutionIdentity: SAM_DETERMINISTIC_DIRECT_FAKE_IDENTITY,
+          transport: oneCall,
+        }).generate(createRequest()),
+      ).rejects.toMatchObject({ reason: 'INDETERMINATE', retryable: false });
+      expect(oneCall.getCallCount()).toBe(1);
+    }
+
+    const resign = (
+      response: SamMaskResponse,
+      changed: Partial<Omit<SamMaskResponse, 'responseSha256'>>,
+    ): SamMaskResponse => {
+      const unsigned = Object.fromEntries(
+        Object.entries(response).filter(([key]) => key !== 'responseSha256'),
+      ) as Omit<SamMaskResponse, 'responseSha256'>;
+      const merged = { ...unsigned, ...changed };
+      return { ...merged, responseSha256: canonicalResponseSha256(merged) };
+    };
+    for (const invalidTransport of [
+      createDeterministicSamRunPodDirectV2Transport({ status: 201 }),
+      createDeterministicSamRunPodDirectV2Transport({ contentType: 'text/json' }),
+      createDeterministicSamRunPodDirectV2Transport({
+        bodyText: JSON.stringify({
+          id: 'legacy-queue-job',
+          status: 'COMPLETED',
+          output: completed,
+        }),
+      }),
+      createDeterministicSamRunPodDirectV2Transport({
+        responseBody: (response) => ({ ...response, unknown: true }),
+      }),
+      createDeterministicSamRunPodDirectV2Transport({
+        responseBody: (response) =>
+          resign(response, {
+            requestId: '00000000-0000-0000-0000-000000000001',
+          }),
+      }),
+      createDeterministicSamRunPodDirectV2Transport({
+        responseBody: (response) =>
+          resign(response, {
+            sourceSha256: '0'.repeat(64),
+          }),
+      }),
+      createDeterministicSamRunPodDirectV2Transport({
+        responseBody: (response) =>
+          resign(response, {
+            executionIdentity: {
+              ...SAM_DETERMINISTIC_DIRECT_FAKE_IDENTITY,
+              engineId: 'different-code-mask-engine-v1',
+            },
+          }),
+      }),
+      createDeterministicSamRunPodDirectV2Transport({
+        bodyText: 'x'.repeat(SAM_LIMITS.responseJsonBytes + 1),
+      }),
+    ]) {
+      await expect(
+        createSamRunPodDirectV2Adapter({
+          endpointId: `fake-sam-invalid-response-${identityCounter}`,
+          expectedExecutionIdentity: SAM_DETERMINISTIC_DIRECT_FAKE_IDENTITY,
+          transport: invalidTransport,
+        }).generate(createRequest()),
+      ).rejects.toMatchObject({ reason: 'RESPONSE_INVALID', retryable: false });
+      expect(invalidTransport.getCallCount()).toBe(1);
+    }
+
+    await expect(
+      createSamRunPodDirectV2Adapter({
+        endpointId: 'fake-sam-connection-loss',
+        expectedExecutionIdentity: SAM_DETERMINISTIC_DIRECT_FAKE_IDENTITY,
+        transport: createDeterministicSamRunPodDirectV2Transport({
+          throwAfterDispatch: true,
+        }),
+      }).generate(createRequest()),
+    ).rejects.toMatchObject({ reason: 'INDETERMINATE', retryable: false });
   });
 
-  it('rejects placeholder checkpoint identity and cloned live authorization IDs', async () => {
-    const liveIdentity = {
-      kind: 'meta-sam2.1',
-      repositoryUrl: 'https://github.com/facebookresearch/sam2',
-      repositoryCommit: '05d9e57fb3945b10c861046c1e6749e2bfc258e3',
-      modelId: 'sam2.1_hiera_base_plus',
-      configIdentity: 'configs/sam2.1/sam2.1_hiera_b+.yaml',
-      checkpointUrl:
-        'https://dl.fbaipublicfiles.com/segment_anything_2/092824/sam2.1_hiera_base_plus.pt',
-      checkpointSha256: '1'.repeat(64),
-    } as const;
+  it('requires exact unexpired direct authorization and consumes it once', async () => {
     expect(() =>
       SamLiveExecutionIdentitySchema.parse({
         ...liveIdentity,
         checkpointSha256: '0'.repeat(64),
       }),
     ).toThrow();
+    expect(() =>
+      SamRunPodDirectV2AuthorizationSchema.parse({
+        kind: 'single-fixture-sam-runpod-v1',
+      }),
+    ).toThrow();
 
     let transportCalls = 0;
-    const localFailureTransport: SamRunPodTransportPort = {
-      transportKind: 'native-fetch',
+    const localFailureTransport: SamRunPodDirectV2TransportPort = {
+      transportKind: 'native-fetch-direct-v2',
+      secretReferenceName: 'RUNPOD_API_KEY',
       async dispatch(transportRequest) {
-        consumeSamRunPodDispatchCapability(transportRequest, 'native-fetch');
-        const wrapper = JSON.parse(transportRequest.requestBodyText) as {
-          readonly input: Record<string, unknown>;
-          readonly policy: Record<string, unknown>;
-        };
-        expect(Object.keys(wrapper).sort()).toEqual(['input', 'policy']);
-        expect(wrapper.policy).toEqual({ executionTimeout: 5_000, ttl: 10_000 });
-        expect(wrapper.input).not.toHaveProperty('policy');
+        consumeSamRunPodDirectV2DispatchCapability(transportRequest, 'native-fetch-direct-v2');
+        expect(transportRequest.endpoint).toBe(
+          'https://future-direct-endpoint.api.runpod.ai/v1/masks',
+        );
+        expect(transportRequest.method).toBe('POST');
         expect(transportRequest.timeoutMs).toBe(1_000);
+        const body = JSON.parse(transportRequest.requestBodyText) as Record<string, unknown>;
+        expect(body).not.toHaveProperty('input');
+        expect(body).not.toHaveProperty('policy');
+        expect(body).not.toHaveProperty('endpoint');
         transportCalls += 1;
         return {
-          status: 200,
-          bodyText: JSON.stringify({
-            id: `local-no-network-${transportCalls}`,
-            status: 'FAILED',
-            error: 'deterministic local provider failure',
-          }),
+          status: 400,
+          contentType: 'application/json',
+          bodyText: '{"error":{"code":"REQUEST_INVALID","message":"Request rejected."}}',
         };
       },
     };
-    const firstRequest = createRequest();
-    const authorization: SamLiveAuthorization = {
-      kind: 'single-fixture-sam-runpod-v1',
-      authorizationId: '08dbe0ed-f7c0-4b55-b615-cd15f8da31f7',
-      endpointId: 'future-test-endpoint',
-      imageDigest: `sha256:${'2'.repeat(64)}`,
-      secretReferenceName: 'RUNPOD_API_KEY',
-      executionIdentity: liveIdentity,
-      fixture: {
-        sha256: firstRequest.source.sha256,
-        byteSize: firstRequest.source.byteSize,
-        width: firstRequest.source.width,
-        height: firstRequest.source.height,
-      },
-      requestLimits: firstRequest.limits,
-      output: firstRequest.output,
-      automaticCandidatesOnly: true,
-      providerCallsMaximum: 1,
-      clientRetryCount: 0,
-      clientWallTimeoutMs: 1_000,
-      providerExecutionTimeoutMs: 5_000,
-      providerTtlMs: 10_000,
-      costMaximumMicroUsd: 1,
-      issuedAtMs: 100,
-      expiresAtMs: 200,
-      executionAuthorized: true,
-      productionAdmissionAuthority: false,
-      webRouteActivated: false,
-    };
+    const request = createRequest();
+    const authorization = createDirectAuthorization(request);
+    expect(() =>
+      createSamRunPodDirectV2Adapter({
+        endpointId: authorization.endpointId,
+        expectedExecutionIdentity: liveIdentity,
+        transport: localFailureTransport,
+        authorization: {
+          ...authorization,
+          kind: 'single-fixture-sam-runpod-v1',
+        },
+        configuredImageDigest: authorization.imageDigest,
+        nowMs: () => RUNPOD_DIRECT_DOCUMENTATION_RETRIEVED_AT_MS + 1,
+      }),
+    ).toThrow();
     const nativeAdapter = (
-      liveAuthorization: SamLiveAuthorization,
-      transport: SamRunPodTransportPort = localFailureTransport,
+      liveAuthorization: SamRunPodDirectV2Authorization,
+      transport: SamRunPodDirectV2TransportPort = localFailureTransport,
+      nowMs: () => number = () => RUNPOD_DIRECT_DOCUMENTATION_RETRIEVED_AT_MS + 1,
     ) =>
-      createSamRunPodAdapter({
+      createSamRunPodDirectV2Adapter({
         endpointId: liveAuthorization.endpointId,
         expectedExecutionIdentity: liveIdentity,
         transport,
         authorization: liveAuthorization,
         configuredImageDigest: liveAuthorization.imageDigest,
-        configuredClientWallTimeoutMs: liveAuthorization.clientWallTimeoutMs,
-        configuredProviderExecutionTimeoutMs: liveAuthorization.providerExecutionTimeoutMs,
-        configuredProviderTtlMs: liveAuthorization.providerTtlMs,
-        nowMs: () => 150,
+        nowMs,
       });
+
     expect(() =>
-      createSamRunPodAdapter({
-        endpointId: authorization.endpointId,
-        expectedExecutionIdentity: liveIdentity,
-        transport: localFailureTransport,
-        authorization,
-        configuredImageDigest: `sha256:${'0'.repeat(64)}`,
-        configuredClientWallTimeoutMs: authorization.clientWallTimeoutMs,
-        configuredProviderExecutionTimeoutMs: authorization.providerExecutionTimeoutMs,
-        configuredProviderTtlMs: authorization.providerTtlMs,
-      }),
-    ).toThrow();
-    for (const [providerExecutionTimeoutMs, providerTtlMs] of [
-      [4_999, 10_000],
-      [604_800_001, 10_000],
-      [5_000, 9_999],
-      [5_000, 604_800_001],
-    ] as const) {
-      expect(() =>
-        createSamRunPodAdapter({
-          endpointId: authorization.endpointId,
-          expectedExecutionIdentity: liveIdentity,
-          transport: localFailureTransport,
-          authorization,
-          configuredImageDigest: authorization.imageDigest,
-          configuredClientWallTimeoutMs: authorization.clientWallTimeoutMs,
-          configuredProviderExecutionTimeoutMs: providerExecutionTimeoutMs,
-          configuredProviderTtlMs: providerTtlMs,
-        }),
-      ).toThrow();
-    }
-    expect(() =>
-      createSamRunPodAdapter({
-        endpointId: authorization.endpointId,
-        expectedExecutionIdentity: liveIdentity,
-        transport: localFailureTransport,
-        authorization,
-        configuredImageDigest: authorization.imageDigest,
-        configuredClientWallTimeoutMs: authorization.clientWallTimeoutMs + 1,
-        configuredProviderExecutionTimeoutMs: authorization.providerExecutionTimeoutMs,
-        configuredProviderTtlMs: authorization.providerTtlMs,
-      }),
-    ).toThrow();
-    expect(() =>
-      createSamRunPodAdapter({
-        endpointId: authorization.endpointId,
-        expectedExecutionIdentity: liveIdentity,
-        transport: localFailureTransport,
-        authorization,
-        configuredImageDigest: authorization.imageDigest,
-        configuredClientWallTimeoutMs: authorization.clientWallTimeoutMs,
-        configuredProviderExecutionTimeoutMs: authorization.providerExecutionTimeoutMs,
-        configuredProviderTtlMs: authorization.providerTtlMs + 1,
-      }),
-    ).toThrow();
-    expect(() =>
-      createSamRunPodAdapter({
+      createSamRunPodDirectV2Adapter({
         endpointId: authorization.endpointId,
         expectedExecutionIdentity: liveIdentity,
         transport: localFailureTransport,
         authorization,
         configuredImageDigest: `sha256:${'3'.repeat(64)}`,
-        configuredClientWallTimeoutMs: authorization.clientWallTimeoutMs,
-        configuredProviderExecutionTimeoutMs: authorization.providerExecutionTimeoutMs,
-        configuredProviderTtlMs: authorization.providerTtlMs,
+        nowMs: () => RUNPOD_DIRECT_DOCUMENTATION_RETRIEVED_AT_MS + 1,
       }),
     ).toThrow();
     expect(() =>
-      createSamRunPodAdapter({
+      createSamRunPodDirectV2Adapter({
         endpointId: authorization.endpointId,
         expectedExecutionIdentity: liveIdentity,
         transport: localFailureTransport,
-        authorization,
+        authorization: {
+          ...authorization,
+          adapterProfileSha256: '0'.repeat(64),
+        },
         configuredImageDigest: authorization.imageDigest,
-        configuredClientWallTimeoutMs: authorization.clientWallTimeoutMs,
-        configuredProviderExecutionTimeoutMs: 5_001,
-        configuredProviderTtlMs: authorization.providerTtlMs,
+        nowMs: () => RUNPOD_DIRECT_DOCUMENTATION_RETRIEVED_AT_MS + 1,
       }),
     ).toThrow();
-    const changedMinimumAuthorization = {
-      ...structuredClone(authorization),
-      authorizationId: '08dbe0ed-f7c0-4b55-b615-cd15f8da31f8',
-    };
-    const changedMinimumAdapter = nativeAdapter(changedMinimumAuthorization);
-    await expect(
-      changedMinimumAdapter.generate(
-        SamMaskRequestSchema.parse({
-          ...firstRequest,
-          limits: { ...firstRequest.limits, minMaskAreaPixels: 3 },
-        }),
-        'local-test-secret',
+    expect(() =>
+      nativeAdapter(
+        authorization,
+        localFailureTransport,
+        () => RUNPOD_DIRECT_DOCUMENTATION_EXPIRES_AT_MS,
       ),
-    ).rejects.toMatchObject({ reason: 'UNAUTHORIZED' });
+    ).toThrow();
+    const fakeAfterEvidenceExpiryRequest = createRequest();
+    await expect(
+      createSamRunPodDirectV2Adapter({
+        endpointId: 'fake-remains-provider-free',
+        expectedExecutionIdentity: SAM_DETERMINISTIC_DIRECT_FAKE_IDENTITY,
+        transport: createDeterministicSamRunPodDirectV2Transport(),
+        nowMs: () => RUNPOD_DIRECT_DOCUMENTATION_EXPIRES_AT_MS + 1,
+      }).generate(fakeAfterEvidenceExpiryRequest),
+    ).resolves.toMatchObject({
+      requestId: fakeAfterEvidenceExpiryRequest.requestId,
+      executionIdentity: SAM_DETERMINISTIC_DIRECT_FAKE_IDENTITY,
+    });
 
-    const changedMaximumAuthorization = {
-      ...structuredClone(authorization),
-      authorizationId: '08dbe0ed-f7c0-4b55-b615-cd15f8da31f9',
-    };
-    const changedMaximumAdapter = nativeAdapter(changedMaximumAuthorization);
+    const changedLimitsAuthorization = createDirectAuthorization(request);
     await expect(
-      changedMaximumAdapter.generate(
+      nativeAdapter(changedLimitsAuthorization).generate(
         SamMaskRequestSchema.parse({
-          ...firstRequest,
-          limits: { ...firstRequest.limits, maxCandidates: 63 },
+          ...request,
+          limits: { ...request.limits, maxCandidates: 63 },
         }),
-        'local-test-secret',
       ),
-    ).rejects.toMatchObject({ reason: 'UNAUTHORIZED' });
+    ).rejects.toMatchObject({ reason: 'UNAUTHORIZED', retryable: false });
     expect(transportCalls).toBe(0);
 
     const firstAdapter = nativeAdapter(authorization);
-    await expect(firstAdapter.generate(firstRequest, 'local-test-secret')).rejects.toMatchObject({
+    await expect(firstAdapter.generate(request)).rejects.toMatchObject({
       reason: 'PROVIDER_FAILURE',
+      retryable: false,
     });
     expect(transportCalls).toBe(1);
 
-    const rejectedRequest = createRequest();
-    const rejectedAuthorization: SamLiveAuthorization = {
-      ...structuredClone(authorization),
-      authorizationId: '08dbe0ed-f7c0-4b55-b615-cd15f8da31fa',
-      fixture: {
-        sha256: rejectedRequest.source.sha256,
-        byteSize: rejectedRequest.source.byteSize,
-        width: rejectedRequest.source.width,
-        height: rejectedRequest.source.height,
-      },
-      requestLimits: rejectedRequest.limits,
-      output: rejectedRequest.output,
-    };
-    const rejectingTransport: SamRunPodTransportPort = {
-      transportKind: 'native-fetch',
-      async dispatch(transportRequest) {
-        consumeSamRunPodDispatchCapability(transportRequest, 'native-fetch');
-        throw new TypeError('deterministic post-dispatch transport rejection');
-      },
-    };
-    const rejectingAdapter = nativeAdapter(rejectedAuthorization, rejectingTransport);
+    const secondRequest = createRequest();
+    const reusedIdAuthorization = createDirectAuthorization(secondRequest, {
+      authorizationId: authorization.authorizationId,
+    });
     await expect(
-      rejectingAdapter.generate(rejectedRequest, 'local-test-secret'),
-    ).rejects.toMatchObject({ reason: 'INDETERMINATE', retryable: false });
+      nativeAdapter(reusedIdAuthorization).generate(secondRequest),
+    ).rejects.toMatchObject({ reason: 'UNAUTHORIZED', retryable: false });
+    expect(transportCalls).toBe(1);
 
-    const clonedAuthorization = structuredClone(authorization);
-    const secondAdapter = nativeAdapter(clonedAuthorization);
-    await expect(
-      secondAdapter.generate(createRequest(), 'local-test-secret'),
-    ).rejects.toMatchObject({
+    const expiringRequest = createRequest();
+    const expiringAuthorization = createDirectAuthorization(expiringRequest);
+    let currentTime = RUNPOD_DIRECT_DOCUMENTATION_RETRIEVED_AT_MS + 1;
+    const expiringAdapter = nativeAdapter(
+      expiringAuthorization,
+      localFailureTransport,
+      () => currentTime,
+    );
+    currentTime = RUNPOD_DIRECT_DOCUMENTATION_EXPIRES_AT_MS;
+    await expect(expiringAdapter.generate(expiringRequest)).rejects.toMatchObject({
       reason: 'UNAUTHORIZED',
       retryable: false,
     });
     expect(transportCalls).toBe(1);
   });
 
+  it('derives one exact native URL and keeps Bearer authorization inside fetch transport', async () => {
+    for (const endpointId of [
+      'Uppercase',
+      'under_score',
+      '.dot',
+      '-leading',
+      'trailing-',
+      `a${'b'.repeat(63)}`,
+      'two.labels',
+    ]) {
+      expect(() => deriveSamRunPodDirectV2Endpoint(endpointId)).toThrow();
+    }
+    expect(deriveSamRunPodDirectV2Endpoint('a')).toBe('https://a.api.runpod.ai/v1/masks');
+    for (const url of [
+      'http://valid.api.runpod.ai/v1/masks',
+      'https://user@valid.api.runpod.ai/v1/masks',
+      'https://valid.api.runpod.ai:443/v1/masks',
+      'https://valid.api.runpod.ai/v1/masks?query=1',
+      'https://valid.api.runpod.ai/v1/masks#fragment',
+      'https://valid.api.runpod.ai/v1/masks/',
+      'https://valid.example.com/v1/masks',
+    ]) {
+      expect(() => assertSamRunPodDirectV2EndpointUrl(url)).toThrow();
+    }
+
+    const request = createRequest();
+    const processed = postprocessSamMasks(request, [
+      {
+        mask: rectangle(request.source.width, request.source.height, 10, 10, 100, 100),
+        predictedIou: 0.9,
+        stabilityScore: 0.95,
+      },
+    ]);
+    const unsigned: Omit<SamMaskResponse, 'responseSha256'> = {
+      contractVersion: SAM_MASK_CONTRACT_VERSION,
+      requestId: request.requestId,
+      workspaceId: request.workspaceId,
+      jobId: request.jobId,
+      attemptId: request.attemptId,
+      sourceSha256: request.source.sha256,
+      executionIdentity: liveIdentity,
+      timing: { inferenceMs: 1, totalMs: 1 },
+      filterSummary: processed.filterSummary,
+      candidateCount: processed.candidates.length,
+      candidates: processed.candidates,
+    };
+    const liveResponse: SamMaskResponse = {
+      ...unsigned,
+      responseSha256: canonicalResponseSha256(unsigned),
+    };
+    let fetchCalls = 0;
+    const fetchImplementation: typeof fetch = async (url, init) => {
+      fetchCalls += 1;
+      expect(String(url)).toBe('https://future-direct-endpoint.api.runpod.ai/v1/masks');
+      expect(init?.method).toBe('POST');
+      expect(init?.redirect).toBe('error');
+      expect(init?.signal).toBeInstanceOf(AbortSignal);
+      const headers = new Headers(init?.headers);
+      expect(headers.get('authorization')).toBe('Bearer server-only-test-key');
+      expect(headers.get('content-type')).toBe('application/json');
+      expect(JSON.parse(String(init?.body))).toEqual(request);
+      expect(JSON.parse(String(init?.body))).not.toHaveProperty('input');
+      return new Response(JSON.stringify(liveResponse), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      });
+    };
+    const transport = createSamRunPodDirectV2NativeFetchTransport({
+      apiKey: 'server-only-test-key',
+      secretReferenceName: 'RUNPOD_API_KEY',
+      fetchImplementation,
+    });
+    const authorization = createDirectAuthorization(request);
+    const response = await createSamRunPodDirectV2Adapter({
+      endpointId: authorization.endpointId,
+      expectedExecutionIdentity: liveIdentity,
+      transport,
+      authorization,
+      configuredImageDigest: authorization.imageDigest,
+      nowMs: () => RUNPOD_DIRECT_DOCUMENTATION_RETRIEVED_AT_MS + 1,
+    }).generate(request);
+    expect(response).toEqual(liveResponse);
+    expect(fetchCalls).toBe(1);
+
+    await expect(
+      transport.dispatch({
+        endpoint: deriveSamRunPodDirectV2Endpoint('foreign-capability'),
+        method: 'POST',
+        requestBodyText: canonicalizeJson(createRequest()),
+        signal: new AbortController().signal,
+        timeoutMs: 1,
+        dispatchCapability: {},
+      }),
+    ).rejects.toThrow(/capability/u);
+    expect(fetchCalls).toBe(1);
+    expect(transport).not.toHaveProperty('apiKey');
+
+    const lostRequest = createRequest();
+    const lostAuthorization = createDirectAuthorization(lostRequest);
+    let lostCalls = 0;
+    const lostTransport = createSamRunPodDirectV2NativeFetchTransport({
+      apiKey: 'server-only-test-key',
+      secretReferenceName: 'RUNPOD_API_KEY',
+      fetchImplementation: async () => {
+        lostCalls += 1;
+        throw new TypeError('deterministic socket reset after POST');
+      },
+    });
+    await expect(
+      createSamRunPodDirectV2Adapter({
+        endpointId: lostAuthorization.endpointId,
+        expectedExecutionIdentity: liveIdentity,
+        transport: lostTransport,
+        authorization: lostAuthorization,
+        configuredImageDigest: lostAuthorization.imageDigest,
+        nowMs: () => RUNPOD_DIRECT_DOCUMENTATION_RETRIEVED_AT_MS + 1,
+      }).generate(lostRequest),
+    ).rejects.toMatchObject({ reason: 'INDETERMINATE', retryable: false });
+    expect(lostCalls).toBe(1);
+
+    const truncatedRequest = createRequest();
+    const truncatedAuthorization = createDirectAuthorization(truncatedRequest);
+    const truncatedTransport = createSamRunPodDirectV2NativeFetchTransport({
+      apiKey: 'server-only-test-key',
+      secretReferenceName: 'RUNPOD_API_KEY',
+      fetchImplementation: async () =>
+        new Response(
+          new ReadableStream<Uint8Array>({
+            start(controller) {
+              controller.enqueue(Buffer.from('{"contractVersion":'));
+              controller.error(new TypeError('deterministic response truncation'));
+            },
+          }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        ),
+    });
+    await expect(
+      createSamRunPodDirectV2Adapter({
+        endpointId: truncatedAuthorization.endpointId,
+        expectedExecutionIdentity: liveIdentity,
+        transport: truncatedTransport,
+        authorization: truncatedAuthorization,
+        configuredImageDigest: truncatedAuthorization.imageDigest,
+        nowMs: () => RUNPOD_DIRECT_DOCUMENTATION_RETRIEVED_AT_MS + 1,
+      }).generate(truncatedRequest),
+    ).rejects.toMatchObject({ reason: 'INDETERMINATE', retryable: false });
+
+    const timeoutRequest = createRequest();
+    const timeoutAuthorization = createDirectAuthorization(timeoutRequest, {
+      clientWallTimeoutMs: 5,
+    });
+    let timeoutCalls = 0;
+    const timeoutTransport = createSamRunPodDirectV2NativeFetchTransport({
+      apiKey: 'server-only-test-key',
+      secretReferenceName: 'RUNPOD_API_KEY',
+      fetchImplementation: async (_url, init) => {
+        timeoutCalls += 1;
+        return new Promise<Response>((_resolve, reject) => {
+          const abort = () =>
+            reject(new DOMException('deterministic native timeout', 'AbortError'));
+          if (init?.signal?.aborted === true) abort();
+          else init?.signal?.addEventListener('abort', abort, { once: true });
+        });
+      },
+    });
+    await expect(
+      createSamRunPodDirectV2Adapter({
+        endpointId: timeoutAuthorization.endpointId,
+        expectedExecutionIdentity: liveIdentity,
+        transport: timeoutTransport,
+        authorization: timeoutAuthorization,
+        configuredImageDigest: timeoutAuthorization.imageDigest,
+        nowMs: () => RUNPOD_DIRECT_DOCUMENTATION_RETRIEVED_AT_MS + 1,
+      }).generate(timeoutRequest),
+    ).rejects.toMatchObject({ reason: 'INDETERMINATE', retryable: false });
+    expect(timeoutCalls).toBe(1);
+  });
+
   it('keeps native endpoint, secret reference, image bytes and adapter out of the public graph', () => {
     expect(publicBannerAi).toHaveProperty('SamMaskRequestSchema');
     expect(publicBannerAi).not.toHaveProperty('RUNPOD_API_KEY_REFERENCE');
-    expect(publicBannerAi).not.toHaveProperty('createSamRunPodAdapter');
-    expect(publicBannerAi).not.toHaveProperty('createSamRunPodNativeFetchTransport');
+    expect(publicBannerAi).not.toHaveProperty('createSamRunPodDirectV2Adapter');
+    expect(publicBannerAi).not.toHaveProperty('createSamRunPodDirectV2NativeFetchTransport');
     expect(publicBannerAi).not.toHaveProperty('materializeSamMaskCutout');
 
     const collect = (directory: string): readonly string[] =>
@@ -833,17 +1059,39 @@ describe('SAM cutout and server boundary', () => {
       .filter((path) => path.includes('sam-'))
       .map((path) => readFileSync(path, 'utf8'))
       .join('\n');
+    const adapterSource = readFileSync(
+      join(packageRoot, 'src/server/sam-runpod-direct-v2-adapter.ts'),
+      'utf8',
+    );
     expect(serverSources).not.toMatch(/qwen.*(?:xBps|yBps|widthBps|heightBps)/iu);
-    expect(SAM_LIMITS.providerEnvelopeBytes).toBe(12_500_000);
+    expect(serverSources).not.toMatch(
+      /(?:\/runsync|api\.runpod\.ai\/v2|IN_QUEUE|IN_PROGRESS|providerTtl|executionTimeout)/u,
+    );
+    expect(serverSources).not.toMatch(/["']\/run["'?]/u);
+    expect(serverSources).not.toMatch(/runpod\.serverless/u);
+    expect(adapterSource).toMatch(
+      /async generate\(\s*requestInput: unknown,\s*options\?: \{ readonly signal\?: AbortSignal \}/u,
+    );
+    expect(adapterSource).not.toMatch(/async generate\([^)]*(?:secret|endpoint)/su);
+    for (const removed of [
+      'sam-runpod-adapter.ts',
+      'sam-runpod-native-fetch-transport.ts',
+      'sam-runpod-deterministic-fake-transport.ts',
+    ]) {
+      expect(existsSync(join(packageRoot, 'src/server', removed))).toBe(false);
+    }
+    expect(SAM_RUNPOD_DIRECT_ADAPTER_PROFILE_V2.response.maximumBytes).toBe(
+      SAM_LIMITS.responseJsonBytes,
+    );
   });
 
   it('allows selection by immutable candidate ID without semantic labels or geometry mutation', async () => {
     const request = createRequest();
-    const response = await createSamRunPodAdapter({
+    const response = await createSamRunPodDirectV2Adapter({
       endpointId: 'fake-sam-selection',
-      expectedExecutionIdentity: SAM_DETERMINISTIC_FAKE_IDENTITY,
-      transport: createDeterministicSamRunPodTransport(),
-    }).generate(request, null);
+      expectedExecutionIdentity: SAM_DETERMINISTIC_DIRECT_FAKE_IDENTITY,
+      transport: createDeterministicSamRunPodDirectV2Transport(),
+    }).generate(request);
     const before = JSON.stringify(response.candidates);
     const proposalOnlySelection = { candidateIds: [response.candidates[0]!.candidateId] };
     expect(proposalOnlySelection.candidateIds[0]).toBe(response.candidates[0]!.candidateId);
