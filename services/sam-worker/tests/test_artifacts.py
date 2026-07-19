@@ -2237,6 +2237,39 @@ class DependencyReadyTests(unittest.TestCase):
 
 
 class RuntimeAdapterArtifactTests(unittest.TestCase):
+    def test_tracked_profile_binds_normalized_config_and_loader(self) -> None:
+        worker = ROOT / "services/sam-worker"
+        loader_data = (worker / "sam_worker/model_loader.py").read_bytes()
+        profile_data = (worker / "adapter-profile.json").read_bytes()
+        profile = json.loads(profile_data)
+        reviewed = json.loads(
+            (worker / "artifact-manifest.json").read_text("utf-8")
+        )
+        self.assertEqual(
+            profile["config"]["parsedCanonicalSha256"],
+            "268e8972d9b8a502a1eec2a9ca6f42c65ffd2819c1108b6b8ed3da682fe5ac17",
+        )
+        self.assertEqual(profile["loader"]["byteSize"], len(loader_data))
+        self.assertEqual(profile["loader"]["sha256"], sha256(loader_data))
+        self.assertEqual(
+            profile["profileSha256"],
+            "f03c378caa5b9ba7979d67ffe958dfd9ca65cc823a10d728faed8c612937b7bf",
+        )
+        profile_core = dict(profile)
+        del profile_core["profileSha256"]
+        self.assertEqual(
+            profile["profileSha256"],
+            sha256(canonical_json(profile_core).encode("utf-8")),
+        )
+        self.assertEqual(
+            reviewed["dependencies"]["adapterProfile"],
+            {
+                "byteSize": len(profile_data),
+                "sha256": sha256(profile_data),
+                "status": "reviewed",
+            },
+        )
+
     def test_reviewed_overlay_passes_and_mutation_or_path_drift_fails(
         self,
     ) -> None:

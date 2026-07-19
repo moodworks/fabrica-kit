@@ -21,7 +21,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any, Dict, Iterable, List, Mapping, Sequence, Tuple
 
 REVIEWED_ARTIFACT_MANIFEST_SHA256 = (
-    "baab7246927ea22ac9f769cab60af2fc3c03fe3ef81aa9a660ab56441365647d"
+    "06c8701c61cb7ccdeb1f67d4c06f095368bd0d410a2905b1733583a2df51fca4"
 )
 MANIFEST_MAXIMUM_BYTES = 64_000
 TREE_DIGEST_DOMAIN = b"fabrica-path-content-tree-v1\x00"
@@ -2569,7 +2569,7 @@ def verify_runtime_adapter(
         or config["byteSize"] != manifest["config"]["byteSize"]
         or config["sha256"] != manifest["config"]["sha256"]
         or config["parsedCanonicalSha256"]
-        != "4c9b2a847cc3672fdc80cddf09bb5b4128e3b35d5ebbc732e3b1142d5de5f080"
+        != "268e8972d9b8a502a1eec2a9ca6f42c65ffd2819c1108b6b8ed3da682fe5ac17"
         or config["targetOccurrenceCount"] != 14
         or config["uniqueTargetCount"] != 12
         or target_inventory != REVIEWED_ADAPTER_TARGET_INVENTORY

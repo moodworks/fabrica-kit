@@ -138,7 +138,7 @@
     "acquisitionOccurred": true,
     "adapterProfile": {
       "byteSize": 4307,
-      "sha256": "b9be5669490a37fe9912ef97aa12f21ea8db9ee6f9fc08b779b62c50f6f16dd9",
+      "sha256": "93dfa19521a20d31ebd548de95e18c5f549e63350dd0d8aeb4e7c5075d49557e",
       "status": "reviewed"
     },
     "baseOwned": [
@@ -208,5 +208,5 @@
     "osConfigObservation": "Ubuntu 22.04",
     "runtimeAssertionStatus": "deferred-no-image-layer-pull-or-execution"
   },
-  "manifestSha256": "baab7246927ea22ac9f769cab60af2fc3c03fe3ef81aa9a660ab56441365647d"
+  "manifestSha256": "06c8701c61cb7ccdeb1f67d4c06f095368bd0d410a2905b1733583a2df51fca4"
 }

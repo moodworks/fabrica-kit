@@ -68,10 +68,10 @@ LABEL org.opencontainers.image.source="https://github.com/moodworks/fabrica-kit"
       io.fabrica.sam.config="configs/sam2.1/sam2.1_hiera_b+.yaml" \
       io.fabrica.sam.config-sha256="e73f9e9547b305040552ee943ebd3a34cee5727a76fc2ab88b87f7b28b430754" \
       io.fabrica.sam.checkpoint-sha256="a2345aede8715ab1d5d31b4a509fb160c5a4af1970f199d9054ccfb746c004c5" \
-      io.fabrica.sam.artifact-manifest-sha256="baab7246927ea22ac9f769cab60af2fc3c03fe3ef81aa9a660ab56441365647d" \
+      io.fabrica.sam.artifact-manifest-sha256="06c8701c61cb7ccdeb1f67d4c06f095368bd0d410a2905b1733583a2df51fca4" \
       io.fabrica.sam.hosting-profile-sha256="2e5d64b6741802f7963fa678d174fca92a367a32672764fae5831c3131702f3a" \
       io.fabrica.sam.direct-adapter-profile-sha256="c114b8b0bc3030ef2d7df524c88bd1710c9e6bc264d186c6b9e8ee7845718747" \
-      io.fabrica.sam.runtime-adapter-profile-sha256="82a110c9739c2990d663a86f848bc9a0218391c6f21565b16dcda24baf8f1826"
+      io.fabrica.sam.runtime-adapter-profile-sha256="f03c378caa5b9ba7979d67ffe958dfd9ca65cc823a10d728faed8c612937b7bf"
 
 COPY --from=acquisition /opt/fabrica/closed/worker /opt/fabrica/worker
 COPY --from=acquisition /opt/fabrica/closed/sam2-overlay /opt/fabrica/sam2-overlay
@@ -119,6 +119,8 @@ RUN --network=none python -m sam_worker.artifacts verify-runtime \
         --runtime-deps /opt/fabrica/runtime-deps \
     && chown -R root:root /opt/fabrica \
     && chmod -R a-w /opt/fabrica
+
+RUN --network=none python -c "exec(\"try:\\n    import importlib.metadata as metadata\\n    import yaml\\n    from sam_worker.artifacts import IMAGE_CONFIG_PATH\\n    from sam_worker.model_loader import parse_reviewed_config\\n    if metadata.version('pyyaml') != '6.0.2':\\n        raise RuntimeError('pinned YAML identity drifted')\\n    parse_reviewed_config(IMAGE_CONFIG_PATH.read_bytes(), yaml)\\nexcept Exception:\\n    raise SystemExit('fabrica-build-gate: selected-config-parse') from None\")"
 
 EXPOSE 80/tcp
 USER 10001:10001

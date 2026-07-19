@@ -1,8 +1,9 @@
 # SAM direct Load Balancer worker
 
 This service is the provider-neutral FastAPI worker for the reviewed
-`sam2.1_hiera_base_plus` deployment. Its active hosting contract is a direct
-RunPod Load Balancer server on port 80:
+`sam2.1_hiera_base_plus` deployment. The image defaults to a direct RunPod Load
+Balancer server on port 80. The MCP-authoritative existing staging endpoint overrides
+the container port, `PORT`, and `PORT_HEALTH` to `8000`:
 
 - readiness: `GET /ping`
 - inference: `POST /v1/masks`
@@ -10,37 +11,45 @@ RunPod Load Balancer server on port 80:
 - one process, one model instance, and one admitted inference request
 - no startup-time or request-time download
 
-This milestone prepares a reproducible GitHub build source. A later, separately
+This milestone established a reproducible GitHub build source. A later, separately
 authorized first GitHub build attempt reached the immutable-base package-metadata gate
 and stopped there. A subsequent authorized RunPod build
 `ddad2cf2-5b79-490a-8646-669ae6649d05` on `runpod-sam-build-002` passed the repaired
 base checks, but both its initial acquisition attempt and automatic retry failed
 identically at the first archive's pre-stream length-header gate. Neither failed build
 produced a final image or worker, and no endpoint, GPU, model-health, fixture, or
-inference operation followed from those attempts. This repair performs no provider
-operation and does not authorize another build.
+inference operation followed from those attempts. The current authorized health-only
+release updates the existing Load Balancer endpoint from linked branch
+`runpod-sam-build-002`, using container port `8000`, `PORT=8000`, and
+`PORT_HEALTH=8000`; it creates no new endpoint and authorizes no inference request.
 
 ## Fixed GitHub build source
 
-The eventual RunPod build source is:
+The MCP-authoritative configured RunPod build source is:
 
-| Setting       | Value                            |
-| ------------- | -------------------------------- |
-| Repository    | `moodworks/fabrica-kit`          |
-| Branch        | `main`                           |
-| Dockerfile    | `services/sam-worker/Dockerfile` |
-| Build context | repository root                  |
-| Platform      | `linux/amd64`                    |
+| Setting        | Value                            |
+| -------------- | -------------------------------- |
+| Repository     | `moodworks/fabrica-kit`          |
+| Linked branch  | `runpod-sam-build-002`           |
+| Dockerfile     | `services/sam-worker/Dockerfile` |
+| Build context  | repository root                  |
+| Platform       | `linux/amd64`                    |
+| Container port | `8000`                           |
+| `PORT`         | `8000`                           |
+| `PORT_HEALTH`  | `8000`                           |
 
 Provider assumptions are limited to RunPod's official
 [GitHub integration](https://docs.runpod.io/serverless/workers/github-integration)
 and [Load Balancing](https://docs.runpod.io/serverless/load-balancing/overview)
 documentation.
 
-The Dockerfile and its inputs are currently accepted local changes that remain
-uncommitted and unpushed. Consequently, RunPod cannot consume this revision yet. A
-later, separately authorized reviewed commit and push to `main` are required before
-selecting GitHub build. The build does not depend on `.local-data`, Git LFS, untracked
+RunPod consumes these build inputs only from a reviewed commit pushed to configured
+branch `runpod-sam-build-002`. Publishing an authorized GitHub release for that commit
+triggers an update of the linked existing endpoint on container port `8000` with
+`PORT=8000` and `PORT_HEALTH=8000`; local worktree and untracked state are never build
+inputs. Branch `main` remains the canonical future promotion source, not the branch
+linked to this health-only release. This authorized release creates no endpoint or
+inference authority. The build does not depend on `.local-data`, Git LFS, untracked
 wheel files, absolute developer paths, local caches, Docker secrets, or files outside
 the repository-root context.
 
@@ -62,14 +71,18 @@ and TLS negotiation worked.
 No `POST /v1/masks` or inference request occurred. The supplied lifecycle excerpt
 contained no application stderr, process exit reason, or immutable image digest, so it
 does not establish successful model load or an exact container termination cause. The
-registry tag is not represented as an immutable digest. The readiness repair in this
-working tree remains uncommitted and unpushed and was not exercised against RunPod.
+registry tag is not represented as an immutable digest. The authorized health-only
+release does not change that historical conclusion and claims neither successful model
+load nor a final image digest in advance. It reuses the existing endpoint and grants no
+`POST /v1/masks` or other inference authority. That endpoint remains linked to
+`runpod-sam-build-002` and overrides the image default with container port `8000`,
+`PORT=8000`, and `PORT_HEALTH=8000`.
 
 ## Reviewed artifact identities
 
 `artifact-manifest.json` is the executable source of truth. Its self-digest is:
 
-`baab7246927ea22ac9f769cab60af2fc3c03fe3ef81aa9a660ab56441365647d`
+`06c8701c61cb7ccdeb1f67d4c06f095368bd0d410a2905b1733583a2df51fca4`
 
 | Artifact                | Exact identity                                                                                                          |
 | ----------------------- | ----------------------------------------------------------------------------------------------------------------------- |
@@ -175,9 +188,15 @@ acquisition program are not copied into the image. `PYTHONDONTWRITEBYTECODE=1`,
 pip-created console-script directory is removed; Uvicorn starts as a Python module.
 The reviewed NumPy wheel contains one wheel-shipped `__pycache__` bytecode member, so
 the same offline `RUN` deterministically removes every `.pyc` and empty
-`__pycache__`, then asserts no such path remains. Runtime files are root-owned and
-read-only; the server runs as UID/GID 10001, exposes `80/tcp`, and starts directly with
-`python -m sam_worker.server`.
+`__pycache__`, then asserts no such path remains. After complete runtime-artifact
+verification, a separate offline build gate imports the pinned PyYAML parser and
+`parse_reviewed_config`, reads only `IMAGE_CONFIG_PATH`, and parses the exact staged
+config. It neither imports torch/SAM nor constructs a model, and any failure emits only
+`fabrica-build-gate: selected-config-parse`. Runtime files are root-owned and read-only;
+the server runs as UID/GID 10001, declares `EXPOSE 80/tcp`, and starts directly with
+`python -m sam_worker.server`. That declaration and the server's default `PORT=80` are
+image defaults; the existing endpoint's container port, `PORT`, and `PORT_HEALTH`
+settings all override them to `8000`.
 
 The provider-free preparation proves no acquisition tools, wheelhouse, downloaded
 caches, Git metadata, or credentials are introduced by this Dockerfile into the final
@@ -206,12 +225,19 @@ error.
 `model_loader.py` accepts only the exact reviewed 3,650-byte YAML and its exact 14
 target occurrences (12 unique targets). It rejects aliases, anchors, directives,
 tags, merges, duplicate keys, interpolation, `weights_path`, Hydra control keys,
-unknown targets, and constructor-origin drift. It directly constructs the reviewed
-graph and applies the three upstream `build_sam2` postprocessing defaults.
+unknown targets, and constructor-origin drift. PyYAML 6.0.2 reads the reviewed plain
+`model.memory_encoder.fuser.layer.layer_scale_init_value: 1e-6` scalar as a string.
+Before canonical hashing, the loader converts only that exact path and literal to the
+float `1e-6`. The type must be the built-in `str`, not a subclass; a
+missing path or any other type or value fails closed.
+The normalized semantic graph SHA-256 is
+`268e8972d9b8a502a1eec2a9ca6f42c65ffd2819c1108b6b8ed3da682fe5ac17`.
+The loader directly constructs the reviewed graph and applies the three upstream
+`build_sam2` postprocessing defaults.
 
 The runtime adapter profile self-digest is:
 
-`82a110c9739c2990d663a86f848bc9a0218391c6f21565b16dcda24baf8f1826`
+`f03c378caa5b9ba7979d67ffe958dfd9ca65cc823a10d728faed8c612937b7bf`
 
 This is a selected-config adapter only. It makes no general Hydra or iopath
 compatibility claim. Semantic torch/SAM compatibility is deliberately
@@ -254,7 +280,7 @@ The active profile digests are:
 - direct authorization:
   `c1ab605534b23b8aa6be2433b333696eeed9f13e1f87be76a49e60a26bc7509e`
 - runtime selected-config adapter:
-  `82a110c9739c2990d663a86f848bc9a0218391c6f21565b16dcda24baf8f1826`
+  `f03c378caa5b9ba7979d67ffe958dfd9ca65cc823a10d728faed8c612937b7bf`
 
 ## OCI metadata and source revision
 
@@ -303,18 +329,22 @@ readiness, redaction, overload, checkpoint-loading policy, deterministic fake ma
 artifact and archive safety, lock/wheel/license closure, acquisition ordering, build
 context, offline final installation, and forbidden provider/secret operations.
 
-## Exact next RunPod configuration
+## Authorized health-only RunPod configuration
 
-Do not create this endpoint or trigger another build as part of this repair. After a
-separately authorized reviewed commit and push, enter exactly:
+RunPod consumes the reviewed source only after its commit is pushed to linked staging
+branch `runpod-sam-build-002`; publishing this authorized GitHub release triggers the
+existing endpoint update on container port `8000` with `PORT=8000` and
+`PORT_HEALTH=8000`. Retain that endpoint rather than creating another one, with exactly:
 
 | RunPod setting                   | Value                            |
 | -------------------------------- | -------------------------------- |
 | Endpoint type                    | Load Balancer                    |
 | Repository                       | `moodworks/fabrica-kit`          |
-| Branch                           | `main`                           |
+| Linked branch                    | `runpod-sam-build-002`           |
 | Dockerfile                       | `services/sam-worker/Dockerfile` |
-| Container port                   | `80`                             |
+| Container port                   | `8000`                           |
+| `PORT`                           | `8000`                           |
+| `PORT_HEALTH`                    | `8000`                           |
 | Health path                      | `/ping`                          |
 | Inference path                   | `/v1/masks`                      |
 | Active/minimum workers           | `0`                              |
@@ -325,5 +355,4 @@ separately authorized reviewed commit and push, enter exactly:
 | Total health-only deployment cap | `$2.00`                          |
 
 Use no queue endpoint and no automatic or client retry. Upload no fixture and do not
-send `POST /v1/masks`. Any next separately authorized exercise after this repair is
-health-only.
+send `POST /v1/masks`. This release and its bounded observation remain health-only.

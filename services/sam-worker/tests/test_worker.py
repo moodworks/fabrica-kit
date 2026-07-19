@@ -62,8 +62,10 @@ from sam_worker.protocol import (
 )
 from sam_worker.hosting import DIRECT_HOSTING_PROFILE, DIRECT_HOSTING_PROFILE_SHA256
 from sam_worker.model_loader import (
+    PARSED_CONFIG_SHA256,
     TARGET_INVENTORY,
     ModelConfigError,
+    _normalize_reviewed_scalars,
     _verify_constructor_origins,
     build_reviewed_model,
     instantiate_reviewed_config,
@@ -1058,7 +1060,8 @@ class SelectedConfigAdapterTests(unittest.TestCase):
                         "layer": {
                             "_target_": (
                                 "sam2.modeling.memory_encoder.CXBlock"
-                            )
+                            ),
+                            "layer_scale_init_value": 1e-6,
                         },
                     },
                 },
@@ -1099,6 +1102,13 @@ class SelectedConfigAdapterTests(unittest.TestCase):
         )
         self.assertEqual(len(calls), 14)
         self.assertEqual(calls[-1][0], "model")
+        layer_call = next(
+            kwargs
+            for path, kwargs in calls
+            if path == "model.memory_encoder.fuser.layer"
+        )
+        self.assertIs(type(layer_call["layer_scale_init_value"]), float)
+        self.assertEqual(layer_call["layer_scale_init_value"], 1e-6)
 
         missing = dict(constructors)
         del missing[TARGET_INVENTORY[-1]]
@@ -1120,6 +1130,31 @@ class SelectedConfigAdapterTests(unittest.TestCase):
             ModelConfigError, "postprocessing overrides"
         ):
             instantiate_reviewed_config(preconfigured, constructors)
+
+    def test_layer_scale_normalization_rejects_string_subclasses(
+        self,
+    ) -> None:
+        class StringSubclass(str):
+            pass
+
+        value = {
+            "model": {
+                "memory_encoder": {
+                    "fuser": {
+                        "layer": {
+                            "layer_scale_init_value": StringSubclass(
+                                "1e-6"
+                            ),
+                        },
+                    },
+                },
+            },
+        }
+        with self.assertRaisesRegex(
+            ModelConfigError,
+            "^Reviewed model configuration is invalid\\.$",
+        ):
+            _normalize_reviewed_scalars(value)
 
     def test_reviewed_builder_moves_one_fake_model_and_enters_eval(
         self,
@@ -1313,6 +1348,10 @@ class SelectedConfigAdapterTests(unittest.TestCase):
             b"  child:\n"
             b"    _target_: reviewed.Child\n"
             b"    value: 1\n"
+            b"  memory_encoder:\n"
+            b"    fuser:\n"
+            b"      layer:\n"
+            b"        layer_scale_init_value: 1e-6\n"
         )
         expected = {
             "model": {
@@ -1320,6 +1359,13 @@ class SelectedConfigAdapterTests(unittest.TestCase):
                 "child": {
                     "_target_": "reviewed.Child",
                     "value": 1,
+                },
+                "memory_encoder": {
+                    "fuser": {
+                        "layer": {
+                            "layer_scale_init_value": 1e-6,
+                        },
+                    },
                 },
             }
         }
@@ -1350,7 +1396,43 @@ class SelectedConfigAdapterTests(unittest.TestCase):
                 frozenset(target for _path, target in inventory),
             ),
         ):
+            raw_value = yaml.safe_load(payload)
+            raw_scalar = raw_value["model"]["memory_encoder"]["fuser"][
+                "layer"
+            ]["layer_scale_init_value"]
+            self.assertIs(type(raw_scalar), str)
+            self.assertEqual(raw_scalar, "1e-6")
             self.assertEqual(parse_reviewed_config(payload, yaml), expected)
+        self.assertEqual(
+            PARSED_CONFIG_SHA256,
+            "268e8972d9b8a502a1eec2a9ca6f42c65ffd2819c1108b6b8ed3da682fe5ac17",
+        )
+
+        invalid_scalar_prefix = (
+            b"model:\n"
+            b"  memory_encoder:\n"
+            b"    fuser:\n"
+            b"      layer:\n"
+        )
+        for scalar in (
+            None,
+            b"1e-5",
+            b"1.0e-6",
+            b"0.000001",
+            b"true",
+            b"null",
+        ):
+            invalid_scalar = invalid_scalar_prefix
+            if scalar is not None:
+                invalid_scalar += (
+                    b"        layer_scale_init_value: " + scalar + b"\n"
+                )
+            with self.subTest(layer_scale_init_value=scalar):
+                with self.assertRaisesRegex(
+                    ModelConfigError,
+                    "^Reviewed model configuration is invalid\\.$",
+                ):
+                    parse_reviewed_config(invalid_scalar, yaml)
 
         for invalid in (
             b"model:\n  key: one\n  key: two\n",
@@ -1860,6 +1942,9 @@ class StaticSourceTests(unittest.TestCase):
         health_source = (
             ROOT / "services/sam-worker/sam_worker/health.py"
         ).read_text("utf-8")
+        artifacts_source = (
+            ROOT / "services/sam-worker/sam_worker/artifacts.py"
+        ).read_text("utf-8")
         immutable_base = (
             "pytorch/pytorch:2.5.1-cuda12.4-cudnn9-runtime@sha256:"
             "c8268a92a69bd500f8be0e665b2630ee006dadaf7bfbc24249141b15ff622755"
@@ -1966,6 +2051,7 @@ class StaticSourceTests(unittest.TestCase):
             "fabrica-build-gate: torchvision-metadata-",
             "groupadd --gid 10001 fabrica",
             "fabrica-build-gate: runtime-user-",
+            "fabrica-build-gate: selected-config-parse",
         )
         invariant_positions = []
         for marker in invariant_markers:
@@ -2022,6 +2108,46 @@ class StaticSourceTests(unittest.TestCase):
             "!= (10001, 10001, 10001)",
             invariant_runs[6],
         )
+        config_gate = invariant_runs[7]
+        self.assertIn("metadata.version('pyyaml')", config_gate)
+        self.assertIn("'6.0.2'", config_gate)
+        self.assertIn(
+            "from sam_worker.artifacts import IMAGE_CONFIG_PATH",
+            config_gate,
+        )
+        self.assertIn(
+            "from sam_worker.model_loader import parse_reviewed_config",
+            config_gate,
+        )
+        self.assertIn(
+            "parse_reviewed_config(IMAGE_CONFIG_PATH.read_bytes(), yaml)",
+            config_gate,
+        )
+        self.assertIn("--network=none", config_gate)
+        self.assertIn(
+            'IMAGE_SOURCE_ROOT / "sam2/configs/sam2.1/'
+            'sam2.1_hiera_b+.yaml"',
+            artifacts_source,
+        )
+        for forbidden in (
+            "build_reviewed_model(",
+            "instantiate_reviewed_config(",
+            "import torch",
+            "from torch",
+            "import sam2",
+            "from sam2",
+        ):
+            self.assertNotIn(forbidden, config_gate)
+        verify_runtime_position = next(
+            index
+            for index, instruction in enumerate(run_instructions)
+            if "python -m sam_worker.artifacts verify-runtime"
+            in instruction
+        )
+        self.assertLess(
+            verify_runtime_position,
+            invariant_positions[7],
+        )
         self.assertEqual(
             set(
                 re.findall(
@@ -2040,6 +2166,7 @@ class StaticSourceTests(unittest.TestCase):
                 "fabrica-build-gate: torchvision-metadata-mismatch",
                 "fabrica-build-gate: runtime-user-missing",
                 "fabrica-build-gate: runtime-user-identity",
+                "fabrica-build-gate: selected-config-parse",
             },
         )
         self.assertEqual(
@@ -2450,8 +2577,66 @@ class StaticSourceTests(unittest.TestCase):
                         "^fabrica-build-gate: "
                         + distribution
                         + "-metadata-mismatch$",
-                    ):
-                        exec(code, {})
+                        ):
+                            exec(code, {})
+
+        config_code = python_code(
+            "fabrica-build-gate: selected-config-parse"
+        )
+        with tempfile.TemporaryDirectory() as temporary:
+            config_path = Path(temporary) / "config.yaml"
+            config_path.write_bytes(b"exact reviewed config")
+            yaml_module = types.ModuleType("yaml")
+            with (
+                patch.dict(sys.modules, {"yaml": yaml_module}),
+                patch(
+                    "importlib.metadata.version",
+                    return_value="6.0.2",
+                ),
+                patch(
+                    "sam_worker.artifacts.IMAGE_CONFIG_PATH",
+                    config_path,
+                ),
+                patch(
+                    "sam_worker.model_loader.parse_reviewed_config",
+                    return_value={},
+                ) as parse_config,
+            ):
+                exec(config_code, {})
+            parse_config.assert_called_once_with(
+                b"exact reviewed config",
+                yaml_module,
+            )
+
+            exception_rendered = False
+
+            class HostileConfigError(Exception):
+                def __str__(self) -> str:
+                    nonlocal exception_rendered
+                    exception_rendered = True
+                    return "/private/config raw parser failure"
+
+            with (
+                patch.dict(sys.modules, {"yaml": yaml_module}),
+                patch(
+                    "importlib.metadata.version",
+                    return_value="6.0.2",
+                ),
+                patch(
+                    "sam_worker.artifacts.IMAGE_CONFIG_PATH",
+                    config_path,
+                ),
+                patch(
+                    "sam_worker.model_loader.parse_reviewed_config",
+                    side_effect=HostileConfigError(),
+                ),
+            ):
+                with self.assertRaisesRegex(
+                    SystemExit,
+                    "^fabrica-build-gate: selected-config-parse$",
+                ):
+                    exec(config_code, {})
+            self.assertFalse(exception_rendered)
 
         identity_code = python_code(
             "fabrica-build-gate: runtime-user-"

@@ -12,7 +12,14 @@ from .artifacts import IMAGE_CONFIG_PATH, IMAGE_SOURCE_ROOT
 
 OVERLAY_ROOT = Path("/opt/fabrica/sam2-overlay")
 PARSED_CONFIG_SHA256 = (
-    "4c9b2a847cc3672fdc80cddf09bb5b4128e3b35d5ebbc732e3b1142d5de5f080"
+    "268e8972d9b8a502a1eec2a9ca6f42c65ffd2819c1108b6b8ed3da682fe5ac17"
+)
+_LAYER_SCALE_PATH = (
+    "model",
+    "memory_encoder",
+    "fuser",
+    "layer",
+    "layer_scale_init_value",
 )
 TARGET_INVENTORY: Tuple[Tuple[str, str], ...] = (
     ("model", "sam2.modeling.sam2_base.SAM2Base"),
@@ -123,6 +130,23 @@ def _walk_config(
         raise ModelConfigError("Reviewed model configuration is invalid.")
 
 
+def _normalize_reviewed_scalars(value: Any) -> None:
+    node = value
+    for key in _LAYER_SCALE_PATH[:-1]:
+        if not isinstance(node, dict) or key not in node:
+            raise ModelConfigError("Reviewed model configuration is invalid.")
+        node = node[key]
+    scalar = _LAYER_SCALE_PATH[-1]
+    if (
+        not isinstance(node, dict)
+        or scalar not in node
+        or type(node[scalar]) is not str
+        or node[scalar] != "1e-6"
+    ):
+        raise ModelConfigError("Reviewed model configuration is invalid.")
+    node[scalar] = 1e-6
+
+
 def parse_reviewed_config(data: bytes, yaml_module: Any) -> Mapping[str, Any]:
     """Parse only the exact reviewed YAML while rejecting YAML graph features."""
 
@@ -173,6 +197,7 @@ def parse_reviewed_config(data: bytes, yaml_module: Any) -> Mapping[str, Any]:
         if isinstance(error, ModelConfigError):
             raise
         raise ModelConfigError("Reviewed model configuration is invalid.") from error
+    _normalize_reviewed_scalars(value)
     try:
         parsed_digest = hashlib.sha256(
             _canonical_json(value).encode("utf-8")
