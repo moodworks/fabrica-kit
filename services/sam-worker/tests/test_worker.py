@@ -1967,7 +1967,63 @@ class StaticSourceTests(unittest.TestCase):
             'WHEEL_HOST = "files.pythonhosted.org"',
             acquisition_source,
         )
-        self.assertIn("response.geturl() != url", acquisition_source)
+        self.assertIn("effective_url != url", acquisition_source)
+        self.assertIn(
+            '"Accept-Encoding": "identity"',
+            acquisition_source,
+        )
+        self.assertIn(
+            "expected_byte_size - observed_size + 1",
+            acquisition_source,
+        )
+        self.assertIn("os.O_EXCL", acquisition_source)
+        self.assertIn(
+            'getattr(os, "O_NOFOLLOW", 0)',
+            acquisition_source,
+        )
+        self.assertIn("0o444", acquisition_source)
+        download_body = acquisition_source[
+            acquisition_source.index("def _download(") :
+            acquisition_source.index("def _copy_regular(")
+        ]
+        self.assertNotIn(
+            'headers.get("Content-Length")',
+            download_body,
+        )
+        self.assertNotIn(
+            'headers.get("Transfer-Encoding")',
+            download_body,
+        )
+        self.assertIn(
+            "Content-Length and Transfer-Encoding are advisory",
+            download_body,
+        )
+        self.assertNotIn("from error", download_body)
+        self.assertEqual(acquisition_body.count("_download("), 3)
+        for artifact_kind in ("archive", "checkpoint", "wheel"):
+            self.assertEqual(
+                acquisition_body.count(
+                    f'artifact_kind="{artifact_kind}"'
+                ),
+                1,
+            )
+            for failure in (
+                "url",
+                "redirect",
+                "response",
+                "header",
+                "stream-length",
+                "digest",
+                "transport",
+                "destination",
+            ):
+                self.assertIn(
+                    "fabrica-build-gate: acquisition-"
+                    + artifact_kind
+                    + "-"
+                    + failure,
+                    acquisition_source,
+                )
         self.assertIn("verify_dependency_build_ready(", acquisition_source)
         self.assertIn("verify_runtime_artifacts(", acquisition_source)
         self.assertNotIn("runpod", acquisition_source.lower())

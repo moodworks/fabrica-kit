@@ -8,7 +8,7 @@ import os
 import shutil
 import stat
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any, Literal, Sequence
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit
 from urllib.request import (
@@ -41,6 +41,83 @@ ARCHIVE_HOST = "codeload.github.com"
 CHECKPOINT_HOST = "dl.fbaipublicfiles.com"
 WHEEL_HOST = "files.pythonhosted.org"
 DOWNLOAD_CHUNK_BYTES = 1024 * 1024
+ArtifactKind = Literal["archive", "checkpoint", "wheel"]
+
+_ARTIFACT_HOSTS = {
+    "archive": ARCHIVE_HOST,
+    "checkpoint": CHECKPOINT_HOST,
+    "wheel": WHEEL_HOST,
+}
+_ACQUISITION_ERROR_CODES = {
+    "archive": {
+        "url": "fabrica-build-gate: acquisition-archive-url",
+        "redirect": "fabrica-build-gate: acquisition-archive-redirect",
+        "response": "fabrica-build-gate: acquisition-archive-response",
+        "header": "fabrica-build-gate: acquisition-archive-header",
+        "stream-length": (
+            "fabrica-build-gate: acquisition-archive-stream-length"
+        ),
+        "digest": "fabrica-build-gate: acquisition-archive-digest",
+        "transport": "fabrica-build-gate: acquisition-archive-transport",
+        "destination": (
+            "fabrica-build-gate: acquisition-archive-destination"
+        ),
+    },
+    "checkpoint": {
+        "url": "fabrica-build-gate: acquisition-checkpoint-url",
+        "redirect": (
+            "fabrica-build-gate: acquisition-checkpoint-redirect"
+        ),
+        "response": (
+            "fabrica-build-gate: acquisition-checkpoint-response"
+        ),
+        "header": "fabrica-build-gate: acquisition-checkpoint-header",
+        "stream-length": (
+            "fabrica-build-gate: acquisition-checkpoint-stream-length"
+        ),
+        "digest": "fabrica-build-gate: acquisition-checkpoint-digest",
+        "transport": (
+            "fabrica-build-gate: acquisition-checkpoint-transport"
+        ),
+        "destination": (
+            "fabrica-build-gate: acquisition-checkpoint-destination"
+        ),
+    },
+    "wheel": {
+        "url": "fabrica-build-gate: acquisition-wheel-url",
+        "redirect": "fabrica-build-gate: acquisition-wheel-redirect",
+        "response": "fabrica-build-gate: acquisition-wheel-response",
+        "header": "fabrica-build-gate: acquisition-wheel-header",
+        "stream-length": (
+            "fabrica-build-gate: acquisition-wheel-stream-length"
+        ),
+        "digest": "fabrica-build-gate: acquisition-wheel-digest",
+        "transport": "fabrica-build-gate: acquisition-wheel-transport",
+        "destination": (
+            "fabrica-build-gate: acquisition-wheel-destination"
+        ),
+    },
+}
+_ACQUISITION_CONTRACT_ERROR = (
+    "fabrica-build-gate: acquisition-artifact-kind"
+)
+_REQUEST_ARTIFACT_KIND = "_fabrica_artifact_kind"
+
+
+class _AcquisitionGateError(ArtifactError):
+    pass
+
+
+def _acquisition_error(
+    artifact_kind: object,
+    failure: str,
+) -> _AcquisitionGateError:
+    if not isinstance(artifact_kind, str):
+        return _AcquisitionGateError(_ACQUISITION_CONTRACT_ERROR)
+    codes = _ACQUISITION_ERROR_CODES.get(artifact_kind)
+    if codes is None or failure not in codes:
+        return _AcquisitionGateError(_ACQUISITION_CONTRACT_ERROR)
+    return _AcquisitionGateError(codes[failure])
 
 
 class _RejectRedirects(HTTPRedirectHandler):
@@ -53,7 +130,12 @@ class _RejectRedirects(HTTPRedirectHandler):
         _headers: Any,
         _new_url: Any,
     ) -> None:
-        raise ArtifactError("Reviewed acquisition redirect was refused.")
+        artifact_kind = getattr(
+            _request,
+            _REQUEST_ARTIFACT_KIND,
+            None,
+        )
+        raise _acquisition_error(artifact_kind, "redirect") from None
 
 
 def _safe_empty_directory(path: Path) -> None:
@@ -66,87 +148,204 @@ def _safe_empty_directory(path: Path) -> None:
 def _download(
     *,
     opener: Any,
+    artifact_kind: ArtifactKind,
     url: str,
     expected_host: str,
     expected_byte_size: int,
     expected_sha256: str,
     destination: Path,
 ) -> None:
-    parsed = urlsplit(url)
     if (
-        not url.isascii()
-        or parsed.scheme != "https"
-        or parsed.hostname != expected_host
-        or parsed.port is not None
-        or parsed.username is not None
-        or parsed.password is not None
-        or parsed.query
-        or parsed.fragment
+        artifact_kind not in _ARTIFACT_HOSTS
+        or expected_host != _ARTIFACT_HOSTS[artifact_kind]
     ):
-        raise ArtifactError("Reviewed acquisition URL is invalid.")
-    request = Request(
-        url,
-        headers={
-            "Accept": "application/octet-stream",
-            "User-Agent": "fabrica-sam-build-acquisition-v1",
-        },
-        method="GET",
-    )
+        raise _AcquisitionGateError(_ACQUISITION_CONTRACT_ERROR)
+    try:
+        parsed = urlsplit(url)
+        valid_url = (
+            url.isascii()
+            and parsed.scheme == "https"
+            and parsed.hostname == expected_host
+            and parsed.port is None
+            and parsed.username is None
+            and parsed.password is None
+            and not parsed.query
+            and not parsed.fragment
+        )
+    except Exception:
+        valid_url = False
+    if not valid_url:
+        raise _acquisition_error(artifact_kind, "url") from None
+    try:
+        request = Request(
+            url,
+            headers={
+                "Accept": "application/octet-stream",
+                "Accept-Encoding": "identity",
+                "User-Agent": "fabrica-sam-build-acquisition-v1",
+            },
+            method="GET",
+        )
+        setattr(request, _REQUEST_ARTIFACT_KIND, artifact_kind)
+    except Exception:
+        raise _acquisition_error(artifact_kind, "url") from None
     descriptor = -1
     try:
-        descriptor = os.open(
-            destination,
-            os.O_WRONLY
-            | os.O_CREAT
-            | os.O_EXCL
-            | getattr(os, "O_NOFOLLOW", 0),
-            0o444,
-        )
-        with opener.open(request, timeout=300) as response:
-            if response.status != 200 or response.geturl() != url:
-                raise ArtifactError("Reviewed acquisition response drifted.")
-            raw_length = response.headers.get("Content-Length")
+        try:
+            descriptor = os.open(
+                destination,
+                os.O_WRONLY
+                | os.O_CREAT
+                | os.O_EXCL
+                | getattr(os, "O_NOFOLLOW", 0),
+                0o444,
+            )
+        except Exception:
+            raise _acquisition_error(
+                artifact_kind,
+                "destination",
+            ) from None
+        try:
+            response_context = opener.open(request, timeout=300)
+        except _AcquisitionGateError:
+            raise
+        except Exception:
+            raise _acquisition_error(
+                artifact_kind,
+                "transport",
+            ) from None
+        with response_context as response:
+            try:
+                response_status = response.status
+                effective_url = response.geturl()
+            except Exception:
+                raise _acquisition_error(
+                    artifact_kind,
+                    "response",
+                ) from None
+            if response_status != 200 or effective_url != url:
+                raise _acquisition_error(
+                    artifact_kind,
+                    "response",
+                ) from None
+            try:
+                content_encoding = response.headers.get(
+                    "Content-Encoding"
+                )
+            except Exception:
+                raise _acquisition_error(
+                    artifact_kind,
+                    "header",
+                ) from None
             if (
-                raw_length is None
-                or not raw_length.isascii()
-                or not raw_length.isdigit()
-                or int(raw_length) != expected_byte_size
-                or response.headers.get("Content-Encoding", "identity")
-                not in ("identity", "")
+                content_encoding is not None
+                and (
+                    not isinstance(content_encoding, str)
+                    or content_encoding.strip().lower()
+                    not in ("", "identity")
+                )
             ):
-                raise ArtifactError("Reviewed acquisition length drifted.")
+                raise _acquisition_error(
+                    artifact_kind,
+                    "header",
+                ) from None
+
+            # Content-Length and Transfer-Encoding are advisory framing
+            # metadata. Acceptance depends only on bounded streamed bytes and
+            # the reviewed digest below.
             digest = hashlib.sha256()
             observed_size = 0
-            with os.fdopen(descriptor, "wb", closefd=True) as output:
+            try:
+                output_context = os.fdopen(
+                    descriptor,
+                    "wb",
+                    closefd=True,
+                )
                 descriptor = -1
-                while observed_size <= expected_byte_size:
-                    block = response.read(
-                        min(
-                            DOWNLOAD_CHUNK_BYTES,
-                            expected_byte_size - observed_size + 1,
-                        )
-                    )
-                    if not block:
-                        break
-                    observed_size += len(block)
-                    if observed_size > expected_byte_size:
-                        raise ArtifactError(
-                            "Reviewed acquisition length drifted."
-                        )
-                    digest.update(block)
-                    output.write(block)
-            if (
-                observed_size != expected_byte_size
-                or digest.hexdigest() != expected_sha256
-            ):
-                raise ArtifactError("Reviewed acquisition identity drifted.")
-    except ArtifactError:
+            except Exception:
+                raise _acquisition_error(
+                    artifact_kind,
+                    "destination",
+                ) from None
+            try:
+                with output_context as output:
+                    while observed_size <= expected_byte_size:
+                        try:
+                            block = response.read(
+                                min(
+                                    DOWNLOAD_CHUNK_BYTES,
+                                    expected_byte_size - observed_size + 1,
+                                )
+                            )
+                        except Exception:
+                            raise _acquisition_error(
+                                artifact_kind,
+                                "transport",
+                            ) from None
+                        if not isinstance(block, bytes):
+                            raise _acquisition_error(
+                                artifact_kind,
+                                "transport",
+                            ) from None
+                        if not block:
+                            break
+                        observed_size += len(block)
+                        if observed_size > expected_byte_size:
+                            raise _acquisition_error(
+                                artifact_kind,
+                                "stream-length",
+                            ) from None
+                        digest.update(block)
+                        try:
+                            written = output.write(block)
+                        except Exception:
+                            raise _acquisition_error(
+                                artifact_kind,
+                                "destination",
+                            ) from None
+                        if written != len(block):
+                            raise _acquisition_error(
+                                artifact_kind,
+                                "destination",
+                            ) from None
+            except _AcquisitionGateError:
+                raise
+            except Exception:
+                raise _acquisition_error(
+                    artifact_kind,
+                    "destination",
+                ) from None
+            if observed_size != expected_byte_size:
+                raise _acquisition_error(
+                    artifact_kind,
+                    "stream-length",
+                ) from None
+            if digest.hexdigest() != expected_sha256:
+                raise _acquisition_error(
+                    artifact_kind,
+                    "digest",
+                ) from None
+    except _AcquisitionGateError:
         raise
-    except (HTTPError, OSError, TimeoutError, URLError) as error:
-        raise ArtifactError("Reviewed acquisition failed closed.") from error
+    except (HTTPError, OSError, TimeoutError, URLError):
+        raise _acquisition_error(
+            artifact_kind,
+            "transport",
+        ) from None
+    except Exception:
+        raise _acquisition_error(
+            artifact_kind,
+            "transport",
+        ) from None
     finally:
         if descriptor >= 0:
-            os.close(descriptor)
+            try:
+                os.close(descriptor)
+            except Exception:
+                raise _acquisition_error(
+                    artifact_kind,
+                    "destination",
+                ) from None
 
 
 def _copy_regular(source: Path, destination: Path) -> None:
@@ -244,6 +443,7 @@ def acquire(arguments: argparse.Namespace) -> None:
     checkpoint_spec = manifest["checkpoint"]
     _download(
         opener=opener,
+        artifact_kind="archive",
         url=archive_spec["url"],
         expected_host=ARCHIVE_HOST,
         expected_byte_size=archive_spec["byteSize"],
@@ -252,6 +452,7 @@ def acquire(arguments: argparse.Namespace) -> None:
     )
     _download(
         opener=opener,
+        artifact_kind="checkpoint",
         url=checkpoint_spec["url"],
         expected_host=CHECKPOINT_HOST,
         expected_byte_size=checkpoint_spec["byteSize"],
@@ -261,6 +462,7 @@ def acquire(arguments: argparse.Namespace) -> None:
     for wheel in wheel_entries:
         _download(
             opener=opener,
+            artifact_kind="wheel",
             url=wheel["url"],
             expected_host=WHEEL_HOST,
             expected_byte_size=wheel["byteSize"],

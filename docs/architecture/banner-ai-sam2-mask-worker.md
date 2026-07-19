@@ -34,7 +34,12 @@ and license review; no wheel is tracked. The provider-free preparation performed
 local Docker build, base pull, artifact/model execution, endpoint, provider health
 call, or external inference. A later, separately authorized first RunPod GitHub build
 attempt reached the immutable-base package-metadata gate and failed there. It produced
-no final image and performed no model-health activity.
+no final image and performed no model-health activity. Subsequent authorized build
+`ddad2cf2-5b79-490a-8646-669ae6649d05` on `runpod-sam-build-002` passed the repaired
+base checks, but its initial acquisition attempt and automatic retry failed identically
+at the first archive's pre-stream length-header gate. It also produced no final image
+or worker, and no endpoint, GPU, model-health, fixture, inference, or other follow-on
+provider operation occurred.
 
 ## Pinned model evidence
 
@@ -207,7 +212,7 @@ pulled locally or executed, so the manifest stores `patch=null`. It does not bin
 unacquired upstream Dockerfile or claim OCI evidence proved Python. Both Docker stages
 assert only the 3.11 major/minor tuple; a later completed-image inventory must record
 the exact patch. Health performs artifact verification only and does not eagerly
-import torch or load the engine. The failed build produced no final image or model
+import torch or load the engine. Neither failed build produced a final image or model
 health evidence.
 
 The production automatic generator profile is frozen explicitly:
@@ -454,9 +459,14 @@ proxy-disabled, redirect-refusing opener, it verifies the manifest-bound lock,
 wheelhouse manifest, and dependency-license bytes and proves their exact
 lock-to-filename/version/hash-to-license closure. It downloads only the reviewed
 official archive, checkpoint, and 16 wheel URLs; rejects alternate hosts, redirects,
-changed effective URLs, queries, fragments, credentials, ports, status/length/encoding
-drift, short/long bodies, and wrong hashes; audits archive/checkpoint/wheel structure;
-and emits one closed build-input directory.
+changed effective URLs, queries, fragments, credentials, ports, non-200 status, and
+nonidentity content encoding. `Content-Length` and `Transfer-Encoding` are advisory
+framing metadata even when absent, malformed, stale, or exact; neither can accept,
+reject, or substitute for body verification. Each identity-encoded response is read
+with an expected-size-plus-one ceiling and is accepted only when its actual final byte
+count and SHA-256 match the reviewed pins. Short or long streams, wrong digests, and
+transport failures use fixed artifact-kind redacted codes. The stage then audits
+archive/checkpoint/wheel structure and emits one closed build-input directory.
 
 The final stage starts again from the immutable PyTorch base digest, copies only the
 closed inputs, and mounts the verified wheelhouse read-only. Every final-stage `RUN`
@@ -709,7 +719,10 @@ The accepted repair changes remain uncommitted and unpushed. Do not start anothe
 RunPod GitHub build or create an endpoint until a separately authorized reviewed commit
 and push to `main` makes every repaired build input available to the remote
 repository-root context. The first authorized attempt stopped at the base-package gate
-before final image completion, so no final image digest exists.
+before final image completion. Build
+`ddad2cf2-5b79-490a-8646-669ae6649d05` and its automatic retry later stopped at the
+first archive's pre-stream length-header gate. Neither produced a final image, so no
+final image digest exists.
 
 The exact first future console configuration is health-only:
 
@@ -755,6 +768,9 @@ production admission, billing, or web-route authority.
 No local Docker build or base pull, endpoint creation, provider health probe, fixture
 upload, torch/SAM execution, checkpoint load, or GPU inference was performed by this
 milestone. The separately authorized first RunPod GitHub build attempt failed at the
-base-package gate and produced no final image or model-health result. Matching reviewed
-hashes establish artifact identity only; they do not prove artifact safety, semantic
-compatibility, or model correctness.
+base-package gate. Subsequent authorized build
+`ddad2cf2-5b79-490a-8646-669ae6649d05` passed those repaired checks, then failed
+identically on its automatic retry at the first archive's pre-stream length-header
+gate. Neither produced a final image, worker, or model-health result, and this repair
+performed no provider operation. Matching reviewed hashes establish artifact identity
+only; they do not prove artifact safety, semantic compatibility, or model correctness.

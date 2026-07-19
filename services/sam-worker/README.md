@@ -12,9 +12,13 @@ RunPod Load Balancer server on port 80:
 
 This milestone prepares a reproducible GitHub build source. A later, separately
 authorized first GitHub build attempt reached the immutable-base package-metadata gate
-and stopped there. It produced no final image and performed no endpoint creation,
-checkpoint load, model health check, GPU inference, fixture upload, or inference
-request. These uncommitted repairs do not authorize another build.
+and stopped there. A subsequent authorized RunPod build
+`ddad2cf2-5b79-490a-8646-669ae6649d05` on `runpod-sam-build-002` passed the repaired
+base checks, but both its initial acquisition attempt and automatic retry failed
+identically at the first archive's pre-stream length-header gate. Neither build
+produced a final image or worker, and no endpoint, GPU, model-health, fixture, or
+inference operation followed. This repair performs no provider operation and does not
+authorize another build.
 
 ## Fixed GitHub build source
 
@@ -126,12 +130,17 @@ lock-to-wheel-filename/version/hash-to-license closure. It then:
 
 1. downloads the one reviewed SAM archive, checkpoint, and 16 reviewed wheel URLs;
 2. rejects proxies, redirects, alternate hosts, query strings, fragments, credentials,
-   ports, changed response URLs, content encodings, and content-length drift;
-3. enforces byte limits and SHA-256 while creating new, non-followed files;
-4. audits archive/checkpoint structure and every wheel ZIP, tag, distribution
+   ports, changed response URLs, non-200 status, and nonidentity content encodings;
+3. explicitly requests identity encoding and treats `Content-Length` and
+   `Transfer-Encoding` as advisory, including when absent, malformed, or stale;
+4. enforces an expected-size-plus-one streaming ceiling and accepts only the exact
+   actual byte count and SHA-256 while creating new, non-followed files;
+5. emits only fixed artifact-kind failure codes without URLs, paths, header values,
+   expected/observed values, hashes, or raw transport causes;
+6. audits archive/checkpoint structure and every wheel ZIP, tag, distribution
    identity, protected namespace, and active `Requires-Dist` edge;
-5. extracts only the reviewed runtime source/config/licenses; and
-6. emits one closed build-input directory.
+7. extracts only the reviewed runtime source/config/licenses; and
+8. emits one closed build-input directory.
 
 The `runtime` stage starts again from the exact immutable base digest. It copies only
 that closed directory, mounts the verified wheelhouse read-only from the acquisition
@@ -237,7 +246,8 @@ health-only console configuration injects none.
 Any completed image from this source is health-only and non-promotable even when a real
 SHA is supplied. A real SHA improves provenance but does not satisfy the later image
 inventory, model-load, GPU-health, or inference promotion gates. The first authorized
-build attempt stopped before final image completion, so no final image digest exists.
+build and build `ddad2cf2-5b79-490a-8646-669ae6649d05` both stopped before final image
+completion, so no final image digest exists.
 
 ## Provider-free verification
 
