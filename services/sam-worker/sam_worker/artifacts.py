@@ -21,7 +21,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any, Dict, Iterable, List, Mapping, Sequence, Tuple
 
 REVIEWED_ARTIFACT_MANIFEST_SHA256 = (
-    "a2211fc5f29892678669a86d197ae5215ecfde2c1ad3a85ad9c39093e20f516b"
+    "baab7246927ea22ac9f769cab60af2fc3c03fe3ef81aa9a660ab56441365647d"
 )
 MANIFEST_MAXIMUM_BYTES = 64_000
 TREE_DIGEST_DOMAIN = b"fabrica-path-content-tree-v1\x00"
@@ -1017,13 +1017,13 @@ def validate_reviewed_manifest(
         {
             "assertAtBuild": True,
             "name": "torch",
-            "version": "2.5.1",
+            "version": "2.5.1+cu124",
         },
         {
             "assertAtBuild": True,
-            "compatibleWith": "torch==2.5.1",
+            "compatibleWith": "torch==2.5.1+cu124",
             "name": "torchvision",
-            "version": "0.20.1",
+            "version": "0.20.1+cu124",
         },
     ]:
         raise ArtifactError("Base-owned dependency assertions drifted.")
@@ -1978,15 +1978,15 @@ def parse_dependency_licenses(
                 "license": "BSD-3-Clause",
                 "name": "torch",
                 "source": "immutable-pytorch-base",
-                "version": "2.5.1",
+                "version": "2.5.1+cu124",
             },
             {
                 "assertion": "importlib.metadata.version",
-                "compatibility": "torch==2.5.1",
+                "compatibility": "torch==2.5.1+cu124",
                 "license": "BSD-3-Clause",
                 "name": "torchvision",
                 "source": "immutable-pytorch-base",
-                "version": "0.20.1",
+                "version": "0.20.1+cu124",
             },
         ]
         or not isinstance(value["packages"], list)

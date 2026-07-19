@@ -5,11 +5,13 @@ import base64
 import binascii
 import copy
 import hashlib
+import importlib.metadata
 import json
 import math
 import os
 import re
 import runpy
+import shlex
 import struct
 import sys
 import tempfile
@@ -1791,6 +1793,90 @@ class StaticSourceTests(unittest.TestCase):
                 run_instructions.append("\n".join(current))
                 current = []
         self.assertFalse(current)
+        invariant_markers = (
+            "fabrica-build-gate: acquisition-cpython-major-minor",
+            "fabrica-build-gate: source-revision",
+            "fabrica-build-gate: runtime-cpython-major-minor",
+            "fabrica-build-gate: torch-metadata-",
+            "fabrica-build-gate: torchvision-metadata-",
+            "groupadd --gid 10001 fabrica",
+            "fabrica-build-gate: runtime-user-",
+        )
+        invariant_positions = []
+        for marker in invariant_markers:
+            matching = [
+                index
+                for index, instruction in enumerate(run_instructions)
+                if marker in instruction
+            ]
+            self.assertEqual(len(matching), 1, marker)
+            invariant_positions.append(matching[0])
+        self.assertEqual(
+            invariant_positions,
+            sorted(set(invariant_positions)),
+        )
+        invariant_runs = [
+            run_instructions[index] for index in invariant_positions
+        ]
+        self.assertTrue(
+            all("--network=none" in instruction for instruction in invariant_runs)
+        )
+        for instruction in invariant_runs:
+            if "groupadd --gid 10001 fabrica" not in instruction:
+                self.assertIn("SystemExit(", instruction)
+            self.assertNotIn("assert ", instruction)
+        self.assertIn(
+            "sys.version_info[:2] != (3, 11)",
+            invariant_runs[0],
+        )
+        self.assertIn(
+            "sys.version_info[:2] != (3, 11)",
+            invariant_runs[2],
+        )
+        self.assertIn(
+            "metadata.version('torch')",
+            invariant_runs[3],
+        )
+        self.assertIn("'2.5.1+cu124'", invariant_runs[3])
+        self.assertIn(
+            "metadata.version('torchvision')",
+            invariant_runs[4],
+        )
+        self.assertIn("'0.20.1+cu124'", invariant_runs[4])
+        for instruction in invariant_runs[3:5]:
+            self.assertIn(
+                "except metadata.PackageNotFoundError:",
+                instruction,
+            )
+            self.assertNotRegex(
+                instruction,
+                r"\b(?:from|import) (?:torch|torchvision)\b",
+            )
+        self.assertIn(
+            "(user.pw_uid, user.pw_gid, group.gr_gid) "
+            "!= (10001, 10001, 10001)",
+            invariant_runs[6],
+        )
+        self.assertEqual(
+            set(
+                re.findall(
+                    r"SystemExit\('"
+                    r"(fabrica-build-gate: [a-z0-9-]+)'\)",
+                    "\n".join(invariant_runs),
+                )
+            ),
+            {
+                "fabrica-build-gate: acquisition-cpython-major-minor",
+                "fabrica-build-gate: source-revision",
+                "fabrica-build-gate: runtime-cpython-major-minor",
+                "fabrica-build-gate: torch-metadata-missing",
+                "fabrica-build-gate: torch-metadata-mismatch",
+                "fabrica-build-gate: torchvision-metadata-missing",
+                "fabrica-build-gate: torchvision-metadata-mismatch",
+                "fabrica-build-gate: runtime-user-missing",
+                "fabrica-build-gate: runtime-user-identity",
+            },
+        )
         self.assertEqual(
             sum("--network=default" in item for item in run_instructions),
             1,
@@ -1918,7 +2004,7 @@ class StaticSourceTests(unittest.TestCase):
             )
         )
         self.assertIn(
-            "torch==2.5.1 and torchvision==0.20.1",
+            "torch==2.5.1+cu124 and torchvision==0.20.1+cu124",
             runtime_requirements,
         )
         self.assertNotIn("hydra-core", runtime_requirements)
@@ -2040,6 +2126,155 @@ class StaticSourceTests(unittest.TestCase):
                 "Authorization:",
             ):
                 self.assertNotIn(forbidden, source)
+
+    def test_docker_invariant_mutations_fail_with_fixed_diagnostics(
+        self,
+    ) -> None:
+        dockerfile = (
+            ROOT / "services/sam-worker/Dockerfile"
+        ).read_text("utf-8")
+        run_instructions: list[str] = []
+        current: list[str] = []
+        for line in dockerfile.splitlines():
+            if line.startswith("RUN "):
+                current = [line]
+            elif current:
+                current.append(line)
+            if current and not current[-1].endswith("\\"):
+                run_instructions.append("\n".join(current))
+                current = []
+
+        def instruction(marker: str) -> str:
+            matching = [
+                value for value in run_instructions if marker in value
+            ]
+            self.assertEqual(len(matching), 1, marker)
+            return matching[0]
+
+        def python_code(marker: str) -> str:
+            tokens = shlex.split(
+                instruction(marker).replace("\\\n", " ")
+            )
+            self.assertIn("-c", tokens)
+            return tokens[tokens.index("-c") + 1]
+
+        revision_code = python_code(
+            "fabrica-build-gate: source-revision"
+        )
+        for value in (
+            "unavailable",
+            "1" * 40,
+            "0123456789abcdef0123456789abcdef01234567",
+        ):
+            with self.subTest(valid_revision=value):
+                with patch.object(sys, "argv", ["python", value]):
+                    exec(revision_code, {})
+        for value in (
+            "",
+            "0" * 40,
+            "1" * 39,
+            "1" * 41,
+            "A" * 40,
+            "g" * 40,
+            " unavailable",
+            "unavailable ",
+            "refs/heads/main",
+        ):
+            with self.subTest(invalid_revision=value):
+                with patch.object(sys, "argv", ["python", value]):
+                    with self.assertRaisesRegex(
+                        SystemExit,
+                        "^fabrica-build-gate: source-revision$",
+                    ):
+                        exec(revision_code, {})
+
+        for marker, distribution, expected in (
+            (
+                "fabrica-build-gate: torch-metadata-",
+                "torch",
+                "2.5.1+cu124",
+            ),
+            (
+                "fabrica-build-gate: torchvision-metadata-",
+                "torchvision",
+                "0.20.1+cu124",
+            ),
+        ):
+            code = python_code(marker)
+            with self.subTest(distribution=distribution, result="exact"):
+                with patch(
+                    "importlib.metadata.version",
+                    return_value=expected,
+                ):
+                    exec(code, {})
+            with self.subTest(distribution=distribution, result="missing"):
+                with patch(
+                    "importlib.metadata.version",
+                    side_effect=importlib.metadata.PackageNotFoundError,
+                ):
+                    with self.assertRaisesRegex(
+                        SystemExit,
+                        "^fabrica-build-gate: "
+                        + distribution
+                        + "-metadata-missing$",
+                    ):
+                        exec(code, {})
+            with self.subTest(distribution=distribution, result="mismatch"):
+                with patch(
+                    "importlib.metadata.version",
+                    return_value=expected.split("+", 1)[0],
+                ):
+                    with self.assertRaisesRegex(
+                        SystemExit,
+                        "^fabrica-build-gate: "
+                        + distribution
+                        + "-metadata-mismatch$",
+                    ):
+                        exec(code, {})
+
+        identity_code = python_code(
+            "fabrica-build-gate: runtime-user-"
+        )
+        exact_user = types.SimpleNamespace(
+            pw_uid=10001,
+            pw_gid=10001,
+        )
+        exact_group = types.SimpleNamespace(gr_gid=10001)
+        with (
+            patch("pwd.getpwnam", return_value=exact_user),
+            patch("grp.getgrnam", return_value=exact_group),
+        ):
+            exec(identity_code, {})
+        for user, group in (
+            (
+                types.SimpleNamespace(pw_uid=10002, pw_gid=10001),
+                exact_group,
+            ),
+            (
+                types.SimpleNamespace(pw_uid=10001, pw_gid=10002),
+                exact_group,
+            ),
+            (
+                exact_user,
+                types.SimpleNamespace(gr_gid=10002),
+            ),
+        ):
+            with self.subTest(user=user, group=group):
+                with (
+                    patch("pwd.getpwnam", return_value=user),
+                    patch("grp.getgrnam", return_value=group),
+                ):
+                    with self.assertRaisesRegex(
+                        SystemExit,
+                        "^fabrica-build-gate: runtime-user-identity$",
+                    ):
+                        exec(identity_code, {})
+        with patch("pwd.getpwnam", side_effect=KeyError):
+            with self.assertRaisesRegex(
+                SystemExit,
+                "^fabrica-build-gate: runtime-user-missing$",
+            ):
+                exec(identity_code, {})
 
     def test_legacy_example_manifests_are_replaced_by_reviewed_manifest(
         self,

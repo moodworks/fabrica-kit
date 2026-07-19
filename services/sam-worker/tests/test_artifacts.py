@@ -436,6 +436,26 @@ class ReviewedManifestTests(unittest.TestCase):
             reviewed["dependencies"]["acquisitionOccurred"]
         )
         self.assertEqual(
+            reviewed["dependencies"]["baseOwned"],
+            [
+                {
+                    "assertAtBuild": True,
+                    "name": "torch",
+                    "version": "2.5.1+cu124",
+                },
+                {
+                    "assertAtBuild": True,
+                    "compatibleWith": "torch==2.5.1+cu124",
+                    "name": "torchvision",
+                    "version": "0.20.1+cu124",
+                },
+            ],
+        )
+        self.assertEqual(
+            reviewed["baseImage"]["pytorchConfigObservation"],
+            "2.5.1",
+        )
+        self.assertEqual(
             reviewed["dependencies"]["requirementsLock"]["sha256"],
             "a52ec65c9bb270eef33a71dbf8971731dbf99135ecdffad6f392e39b6c42d525",
         )
@@ -445,7 +465,7 @@ class ReviewedManifestTests(unittest.TestCase):
         )
         self.assertEqual(
             reviewed["dependencies"]["dependencyLicenses"]["sha256"],
-            "b4e0a1b37810aef0e8131de5494b857690cc65a1f12d52f0f9018ebd11a48276",
+            "2ff748f49c22662c25058397606f419bd5cc213d6797e3be7f6a8e4f9e52a95e",
         )
 
     def test_repository_base_and_license_cross_bindings_fail_closed(self) -> None:
@@ -507,6 +527,21 @@ class ReviewedManifestTests(unittest.TestCase):
             "unresolved-deployment-time-blocking"
         )
         mutations.append(dependency_status)
+        base_owned_torch = manifest()
+        base_owned_torch["dependencies"]["baseOwned"][0]["version"] = (
+            "2.5.1"
+        )
+        mutations.append(base_owned_torch)
+        base_owned_torchvision = manifest()
+        base_owned_torchvision["dependencies"]["baseOwned"][1][
+            "version"
+        ] = "0.20.1"
+        mutations.append(base_owned_torchvision)
+        base_owned_compatibility = manifest()
+        base_owned_compatibility["dependencies"]["baseOwned"][1][
+            "compatibleWith"
+        ] = "torch==2.5.1"
+        mutations.append(base_owned_compatibility)
         for mutated in mutations:
             resign(mutated)
             with self.subTest(mutated=mutated):
@@ -1260,15 +1295,15 @@ class DependencyReadyTests(unittest.TestCase):
                     "license": "BSD-3-Clause",
                     "name": "torch",
                     "source": "immutable-pytorch-base",
-                    "version": "2.5.1",
+                    "version": "2.5.1+cu124",
                 },
                 {
                     "assertion": "importlib.metadata.version",
-                    "compatibility": "torch==2.5.1",
+                    "compatibility": "torch==2.5.1+cu124",
                     "license": "BSD-3-Clause",
                     "name": "torchvision",
                     "source": "immutable-pytorch-base",
-                    "version": "0.20.1",
+                    "version": "0.20.1+cu124",
                 },
             ],
             "inventoryKind": "fabrica-runtime-dependency-licenses-v1",
@@ -1390,6 +1425,14 @@ class DependencyReadyTests(unittest.TestCase):
         self.assertEqual(set(license_dependencies), set(locked))
         self.assertNotIn("torch", locked)
         self.assertNotIn("torchvision", locked)
+        self.assertFalse(
+            any(
+                entry["filename"].lower().startswith(
+                    ("torch-", "torchvision-")
+                )
+                for entry in inventory
+            )
+        )
         for filename, expected_digest in (
             (
                 "requirements.lock",
@@ -1401,7 +1444,7 @@ class DependencyReadyTests(unittest.TestCase):
             ),
             (
                 "dependency-licenses.json",
-                "b4e0a1b37810aef0e8131de5494b857690cc65a1f12d52f0f9018ebd11a48276",
+                "2ff748f49c22662c25058397606f419bd5cc213d6797e3be7f6a8e4f9e52a95e",
             ),
         ):
             self.assertEqual(

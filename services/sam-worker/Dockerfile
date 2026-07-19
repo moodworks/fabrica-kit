@@ -8,12 +8,13 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     TRANSFORMERS_OFFLINE=1 \
     PYTHONPATH=/opt/fabrica/worker
 
-RUN --network=none python -c "import sys; assert sys.version_info[:2] == (3, 11), sys.version" \
-    && mkdir -p \
-        /opt/fabrica/build \
-        /opt/fabrica/worker \
-        /opt/fabrica/sam \
-        /opt/fabrica/sam2-overlay
+RUN --network=none python -c "import sys; exec(\"if sys.version_info[:2] != (3, 11):\\n    raise SystemExit('fabrica-build-gate: acquisition-cpython-major-minor')\")"
+
+RUN --network=none mkdir -p \
+    /opt/fabrica/build \
+    /opt/fabrica/worker \
+    /opt/fabrica/sam \
+    /opt/fabrica/sam2-overlay
 
 COPY services/sam-worker/sam_worker /opt/fabrica/worker/sam_worker
 COPY services/sam-worker/runtime-overlay /opt/fabrica/sam2-overlay
@@ -44,11 +45,18 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     TRANSFORMERS_OFFLINE=1 \
     PYTHONPATH=/opt/fabrica/sam2-overlay:/opt/fabrica/runtime-deps:/opt/fabrica/worker:/opt/fabrica/sam2-source
 
-RUN --network=none python -c "import re,sys; value=sys.argv[1]; assert value == 'unavailable' or (re.fullmatch(r'[0-9a-f]{40}', value) and value != '0' * 40)" "${FABRICA_GIT_SHA}" \
-    && python -c "import sys; assert sys.version_info[:2] == (3, 11), sys.version" \
-    && python -c "import importlib.metadata as m; assert m.version('torch') == '2.5.1'; assert m.version('torchvision') == '0.20.1'" \
-    && groupadd --gid 10001 fabrica \
+RUN --network=none python -c "import re,sys; value=sys.argv[1]; valid=value == 'unavailable' or (re.fullmatch(r'[0-9a-f]{40}', value) is not None and value != '0' * 40); exec(\"if not valid:\\n    raise SystemExit('fabrica-build-gate: source-revision')\")" "${FABRICA_GIT_SHA}"
+
+RUN --network=none python -c "import sys; exec(\"if sys.version_info[:2] != (3, 11):\\n    raise SystemExit('fabrica-build-gate: runtime-cpython-major-minor')\")"
+
+RUN --network=none python -c "import importlib.metadata as metadata; exec(\"try:\\n    observed = metadata.version('torch')\\nexcept metadata.PackageNotFoundError:\\n    raise SystemExit('fabrica-build-gate: torch-metadata-missing') from None\\nif observed != '2.5.1+cu124':\\n    raise SystemExit('fabrica-build-gate: torch-metadata-mismatch')\")"
+
+RUN --network=none python -c "import importlib.metadata as metadata; exec(\"try:\\n    observed = metadata.version('torchvision')\\nexcept metadata.PackageNotFoundError:\\n    raise SystemExit('fabrica-build-gate: torchvision-metadata-missing') from None\\nif observed != '0.20.1+cu124':\\n    raise SystemExit('fabrica-build-gate: torchvision-metadata-mismatch')\")"
+
+RUN --network=none groupadd --gid 10001 fabrica \
     && useradd --uid 10001 --gid fabrica --create-home --shell /usr/sbin/nologin fabrica
+
+RUN --network=none python -c "import grp,pwd; exec(\"try:\\n    user = pwd.getpwnam('fabrica')\\n    group = grp.getgrnam('fabrica')\\nexcept KeyError:\\n    raise SystemExit('fabrica-build-gate: runtime-user-missing') from None\\nif (user.pw_uid, user.pw_gid, group.gr_gid) != (10001, 10001, 10001):\\n    raise SystemExit('fabrica-build-gate: runtime-user-identity')\")"
 
 LABEL org.opencontainers.image.source="https://github.com/moodworks/fabrica-kit" \
       org.opencontainers.image.revision="${FABRICA_GIT_SHA}" \
@@ -60,7 +68,7 @@ LABEL org.opencontainers.image.source="https://github.com/moodworks/fabrica-kit"
       io.fabrica.sam.config="configs/sam2.1/sam2.1_hiera_b+.yaml" \
       io.fabrica.sam.config-sha256="e73f9e9547b305040552ee943ebd3a34cee5727a76fc2ab88b87f7b28b430754" \
       io.fabrica.sam.checkpoint-sha256="a2345aede8715ab1d5d31b4a509fb160c5a4af1970f199d9054ccfb746c004c5" \
-      io.fabrica.sam.artifact-manifest-sha256="a2211fc5f29892678669a86d197ae5215ecfde2c1ad3a85ad9c39093e20f516b" \
+      io.fabrica.sam.artifact-manifest-sha256="baab7246927ea22ac9f769cab60af2fc3c03fe3ef81aa9a660ab56441365647d" \
       io.fabrica.sam.hosting-profile-sha256="1687de7e1936944b0f8b8a14ed4500a988f92558fe3c1680cfe3acc7bc8b8f3d" \
       io.fabrica.sam.direct-adapter-profile-sha256="62809b35b0ccf2d28f1bcd086857718a7c909b247adeccdddd587305066449a4" \
       io.fabrica.sam.runtime-adapter-profile-sha256="82a110c9739c2990d663a86f848bc9a0218391c6f21565b16dcda24baf8f1826"

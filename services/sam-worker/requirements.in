@@ -1,6 +1,7 @@
 # Direct runtime intentions. requirements.lock is the canonical closed build lock.
-# The immutable base owns torch==2.5.1 and torchvision==0.20.1; both are asserted
-# before installation and are forbidden from the lock and wheelhouse.
+# The immutable base owns torch==2.5.1+cu124 and torchvision==0.20.1+cu124;
+# both full distribution identities are checked before installation and are
+# forbidden from the lock and wheelhouse.
 fastapi==0.115.12
 uvicorn==0.34.2
 numpy==1.26.4

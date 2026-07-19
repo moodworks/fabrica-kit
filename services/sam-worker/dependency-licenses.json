@@ -5,15 +5,15 @@
       "license": "BSD-3-Clause",
       "name": "torch",
       "source": "immutable-pytorch-base",
-      "version": "2.5.1"
+      "version": "2.5.1+cu124"
     },
     {
       "assertion": "importlib.metadata.version",
-      "compatibility": "torch==2.5.1",
+      "compatibility": "torch==2.5.1+cu124",
       "license": "BSD-3-Clause",
       "name": "torchvision",
       "source": "immutable-pytorch-base",
-      "version": "0.20.1"
+      "version": "0.20.1+cu124"
     }
   ],
   "inventoryKind": "fabrica-runtime-dependency-licenses-v1",

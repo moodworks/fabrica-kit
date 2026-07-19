@@ -30,9 +30,11 @@ one canonical copy and paired retrieval evidence under ignored `.local-data`, an
 discarded duplicate bodies only after comparison. It also retained exact OCI
 manifest/config metadata without pulling a base layer. This milestone resolved and
 downloaded the exact runtime wheels only for package-index identity, hash, metadata,
-and license review; no wheel is tracked. No Docker build, base pull, artifact/model
-execution, image publication, RunPod GitHub build, endpoint, provider health call, or
-external inference occurred.
+and license review; no wheel is tracked. The provider-free preparation performed no
+local Docker build, base pull, artifact/model execution, endpoint, provider health
+call, or external inference. A later, separately authorized first RunPod GitHub build
+attempt reached the immutable-base package-metadata gate and failed there. It produced
+no final image and performed no model-health activity.
 
 ## Pinned model evidence
 
@@ -128,8 +130,8 @@ They were retrieved at exactly `2026-07-18T13:15:50Z`. The reviewed facts are:
 - GitHub integration can select a repository, branch, and Dockerfile and then build,
   store, and deploy the image. The fixed future source is repository
   `moodworks/fabrica-kit`, branch `main`, Dockerfile
-  `services/sam-worker/Dockerfile`, with repository-root context. No build is
-  authorized here, and the reviewed official guide supplies no automatic
+  `services/sam-worker/Dockerfile`, with repository-root context. No additional build
+  is authorized by this repair, and the reviewed official guide supplies no automatic
   build-argument Git-SHA contract.
 
 Native construction and execution fail closed at or after
@@ -141,7 +143,7 @@ does not depend on live provider evidence and remains available after expiry.
 
 The tracked `services/sam-worker/artifact-manifest.json` is a closed,
 self-digesting contract with reviewed SHA-256
-`a2211fc5f29892678669a86d197ae5215ecfde2c1ad3a85ad9c39093e20f516b`.
+`baab7246927ea22ac9f769cab60af2fc3c03fe3ef81aa9a660ab56441365647d`.
 It records `artifactExecutionOccurred=false` and `modelInferenceOccurred=false`.
 
 | Artifact                   | Exact observed identity                                                                                                                                                                                                                                                                                            |
@@ -188,23 +190,25 @@ for `linux/amd64`. Its raw manifest is 1,366 bytes with that same digest; its ex
 4,665-byte config has SHA-256
 `946241f40f56c5ac17b12be451a9ff6bf7163acaac37d1f15bbc7404f4394e57`.
 The verifier binds the config descriptor and platform without pulling layers.
-The retained OCI config records `PYTORCH_VERSION=2.5.1` in final `Env`,
+The retained OCI config records the bare `PYTORCH_VERSION=2.5.1` value in final `Env`,
 `CUDA_VERSION=12.4.1` and `TARGETPLATFORM` in build history, Ubuntu 22.04 in OCI
 labels, and `amd64`/`linux` in platform fields. CUDA is not a final environment
-observation. cuDNN 9 is only the reviewed `cudnn9` tag identity. No runtime version
-assertion occurred.
+observation. cuDNN 9 is only the reviewed `cudnn9` tag identity. That bare OCI
+environment value is distinct from installed Python distribution metadata. The first
+separately authorized GitHub build reached and failed at the old base-package gate;
+the repaired contract binds exact installed identities `torch==2.5.1+cu124` and
+`torchvision==0.20.1+cu124`, with compatibility
+`torch==2.5.1+cu124`. The build gates query `importlib.metadata` without importing
+torch or torchvision.
 
-CPython 3.11.x is a required future build compatibility assertion. The retained OCI
-metadata does not expose the exact Python patch, and no base image/layer was pulled or
-executed, so the manifest stores `patch=null`. It does not bind an unacquired upstream
-Dockerfile or claim OCI evidence proved Python. Both Docker stages assert 3.11
-major/minor; a separately authorized build must record the exact patch. Health performs
-artifact verification only and does not eagerly import torch or load the engine.
-PyTorch 2.5.1 is observed in retained OCI config. The `torchvision` distribution and
-import namespace remain reserved to the immutable base and forbidden in the future
-lock/wheelhouse, but retained OCI evidence does not prove installed torchvision
-0.20.1. A future build must assert and record that exact runtime version before final
-image acceptance.
+CPython 3.11 major/minor is the only current interpreter compatibility claim. The
+retained OCI metadata does not expose the exact Python patch, and no base layer was
+pulled locally or executed, so the manifest stores `patch=null`. It does not bind an
+unacquired upstream Dockerfile or claim OCI evidence proved Python. Both Docker stages
+assert only the 3.11 major/minor tuple; a later completed-image inventory must record
+the exact patch. Health performs artifact verification only and does not eagerly
+import torch or load the engine. The failed build produced no final image or model
+health evidence.
 
 The production automatic generator profile is frozen explicitly:
 
@@ -413,7 +417,7 @@ canonical CPython 3.11/Linux AMD64 dependency inputs:
 | -------------------------- | ----: | ------------------------------------------------------------------ |
 | `requirements.lock`        | 1,535 | `a52ec65c9bb270eef33a71dbf8971731dbf99135ecdffad6f392e39b6c42d525` |
 | `wheelhouse-manifest.json` | 5,741 | `390054e8574bda53e710cefcbeb44a5dcdaba35f79cf4cfa029bf079deadd39b` |
-| `dependency-licenses.json` | 5,018 | `b4e0a1b37810aef0e8131de5494b857690cc65a1f12d52f0f9018ebd11a48276` |
+| `dependency-licenses.json` | 5,036 | `2ff748f49c22662c25058397606f419bd5cc213d6797e3be7f6a8e4f9e52a95e` |
 
 The exact 16-wheel runtime closure is `annotated-types==0.7.0`,
 `anyio==4.14.2`, `click==8.4.2`, `fastapi==0.115.12`, `h11==0.16.0`,
@@ -434,8 +438,8 @@ Wheel verification requires an exact regular non-symlink directory inventory,
 collision-free names, CRC-valid ZIPs, matching `METADATA`/`WHEEL`/`RECORD`, compatible
 CPython 3.11 Linux AMD64 tags, and exact dependency metadata. Protected top-level
 `sam_worker`, `sam2`, `torch`, `torchvision`, `nvidia`, and `triton` namespaces fail.
-The immutable base owns asserted `torch==2.5.1` and compatible
-`torchvision==0.20.1`; neither is reinstalled.
+The immutable base owns asserted `torch==2.5.1+cu124` and compatible
+`torchvision==0.20.1+cu124`; neither is reinstalled.
 
 The fixed future GitHub source is repository `moodworks/fabrica-kit`, branch `main`,
 Dockerfile `services/sam-worker/Dockerfile`, repository-root context, and
@@ -701,10 +705,11 @@ reproduction JSON do not each embed the banner, and none is represented as SAM o
 
 ## Future controlled deployment
 
-The accepted changes remain uncommitted and unpushed. Do not start a RunPod GitHub
-build or create an endpoint until a separately authorized reviewed commit and push to
-`main` makes every new build input available to the remote repository-root context.
-No final image digest exists before that build.
+The accepted repair changes remain uncommitted and unpushed. Do not start another
+RunPod GitHub build or create an endpoint until a separately authorized reviewed commit
+and push to `main` makes every repaired build input available to the remote
+repository-root context. The first authorized attempt stopped at the base-package gate
+before final image completion, so no final image digest exists.
 
 The exact first future console configuration is health-only:
 
@@ -747,8 +752,9 @@ model/config/checkpoint, exact fixture bytes/dimensions/digest, limits, cost cap
 dispatch, and zero retry/poll. No health-only configuration grants POST, inference,
 production admission, billing, or web-route authority.
 
-No Docker build or base pull, RunPod GitHub build, image publication, endpoint creation,
-provider health probe, fixture upload, torch/SAM execution, checkpoint load, GPU
-inference, or paid provider activity was performed by this milestone. Matching reviewed
+No local Docker build or base pull, endpoint creation, provider health probe, fixture
+upload, torch/SAM execution, checkpoint load, or GPU inference was performed by this
+milestone. The separately authorized first RunPod GitHub build attempt failed at the
+base-package gate and produced no final image or model-health result. Matching reviewed
 hashes establish artifact identity only; they do not prove artifact safety, semantic
 compatibility, or model correctness.

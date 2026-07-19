@@ -10,9 +10,11 @@ RunPod Load Balancer server on port 80:
 - one process, one model instance, and one admitted inference request
 - no startup-time or request-time download
 
-This milestone prepares a reproducible GitHub build source. It does not authorize a
-RunPod build, endpoint, image pull, checkpoint load, GPU execution, fixture upload, or
-inference request.
+This milestone prepares a reproducible GitHub build source. A later, separately
+authorized first GitHub build attempt reached the immutable-base package-metadata gate
+and stopped there. It produced no final image and performed no endpoint creation,
+checkpoint load, model health check, GPU inference, fixture upload, or inference
+request. These uncommitted repairs do not authorize another build.
 
 ## Fixed GitHub build source
 
@@ -45,7 +47,7 @@ context contract. Every `COPY` source is a repository file selected by that allo
 
 `artifact-manifest.json` is the executable source of truth. Its self-digest is:
 
-`a2211fc5f29892678669a86d197ae5215ecfde2c1ad3a85ad9c39093e20f516b`
+`baab7246927ea22ac9f769cab60af2fc3c03fe3ef81aa9a660ab56441365647d`
 
 | Artifact                | Exact identity                                                                                                          |
 | ----------------------- | ----------------------------------------------------------------------------------------------------------------------- |
@@ -77,7 +79,7 @@ are:
 | -------------------------- | ----: | ------------------------------------------------------------------ |
 | `requirements.lock`        | 1,535 | `a52ec65c9bb270eef33a71dbf8971731dbf99135ecdffad6f392e39b6c42d525` |
 | `wheelhouse-manifest.json` | 5,741 | `390054e8574bda53e710cefcbeb44a5dcdaba35f79cf4cfa029bf079deadd39b` |
-| `dependency-licenses.json` | 5,018 | `b4e0a1b37810aef0e8131de5494b857690cc65a1f12d52f0f9018ebd11a48276` |
+| `dependency-licenses.json` | 5,036 | `2ff748f49c22662c25058397606f419bd5cc213d6797e3be7f6a8e4f9e52a95e` |
 
 The exact runtime wheel closure is:
 
@@ -108,10 +110,12 @@ distribution license identity and the active wheel-metadata dependency edges for
 16 packages. Bundled NumPy and Pillow notices remain retained in their wheel/install
 license files; they are not normalized into a component-level SBOM.
 
-The immutable PyTorch base owns `torch==2.5.1` and
-`torchvision==0.20.1`. The final build asserts both identities before installation.
-Neither package, nor CUDA/cuDNN/NVIDIA wheels, may appear in the lock or wheelhouse.
-No second torch build is installed.
+The retained OCI config's bare `PYTORCH_VERSION=2.5.1` value is distinct from the
+installed distribution metadata. The immutable PyTorch base owns exactly
+`torch==2.5.1+cu124` and `torchvision==0.20.1+cu124`, with compatibility bound to
+`torch==2.5.1+cu124`. The final build checks those full metadata versions without
+importing either package. Neither package, nor CUDA/cuDNN/NVIDIA wheels, may appear in
+the lock or wheelhouse. No second torch build is installed.
 
 ## Two-stage Docker behavior
 
@@ -230,10 +234,10 @@ The Dockerfile and build inputs define or copy no API key, credential, token, or
 Docker secret. None may enter a build argument, layer, or label, and the exact
 health-only console configuration injects none.
 
-This milestone's image is health-only and non-promotable even when a real SHA is
-later supplied. A real SHA improves provenance but does not satisfy the later image
-inventory, model-load, GPU-health, or inference promotion gates. No image digest may
-be claimed before RunPod actually builds the image.
+Any completed image from this source is health-only and non-promotable even when a real
+SHA is supplied. A real SHA improves provenance but does not satisfy the later image
+inventory, model-load, GPU-health, or inference promotion gates. The first authorized
+build attempt stopped before final image completion, so no final image digest exists.
 
 ## Provider-free verification
 
@@ -261,8 +265,8 @@ context, offline final installation, and forbidden provider/secret operations.
 
 ## Exact next RunPod configuration
 
-Do not create or build this endpoint in this milestone. After a separately authorized
-reviewed commit and push, enter exactly:
+Do not create this endpoint or trigger another build as part of this repair. After a
+separately authorized reviewed commit and push, enter exactly:
 
 | RunPod setting                   | Value                            |
 | -------------------------------- | -------------------------------- |
