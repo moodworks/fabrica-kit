@@ -135,20 +135,45 @@
     "noticeMemberCount": 0
   },
   "dependencies": {
-    "acquisitionOccurred": false,
-    "buildStatus": "unresolved-deployment-time-blocking",
+    "acquisitionOccurred": true,
+    "adapterProfile": {
+      "byteSize": 4307,
+      "sha256": "b9be5669490a37fe9912ef97aa12f21ea8db9ee6f9fc08b779b62c50f6f16dd9",
+      "status": "reviewed"
+    },
+    "baseOwned": [
+      {
+        "assertAtBuild": true,
+        "name": "torch",
+        "version": "2.5.1"
+      },
+      {
+        "assertAtBuild": true,
+        "compatibleWith": "torch==2.5.1",
+        "name": "torchvision",
+        "version": "0.20.1"
+      }
+    ],
+    "buildStatus": "reviewed-wheel-only-ready",
+    "dependencyLicenses": {
+      "byteSize": 5018,
+      "sha256": "b4e0a1b37810aef0e8131de5494b857690cc65a1f12d52f0f9018ebd11a48276",
+      "status": "reviewed"
+    },
     "requirementsLock": {
-      "status": "unresolved",
-      "byteSize": null,
-      "sha256": null
+      "status": "reviewed",
+      "byteSize": 1535,
+      "sha256": "a52ec65c9bb270eef33a71dbf8971731dbf99135ecdffad6f392e39b6c42d525"
     },
     "wheelhouseInventory": {
-      "status": "unresolved",
-      "byteSize": null,
-      "sha256": null
+      "status": "reviewed",
+      "byteSize": 5741,
+      "sha256": "390054e8574bda53e710cefcbeb44a5dcdaba35f79cf4cfa029bf079deadd39b"
     },
     "policy": {
+      "downloadOnlyExactUrls": true,
       "lockFormat": "pip-require-hashes-no-directives-v1",
+      "requireMetadataClosure": true,
       "wheelhouseFormat": "fabrica-wheel-only-inventory-v1",
       "wheelFilesOnly": true,
       "rejectDirectUrls": true,
@@ -183,5 +208,5 @@
     "osConfigObservation": "Ubuntu 22.04",
     "runtimeAssertionStatus": "deferred-no-image-layer-pull-or-execution"
   },
-  "manifestSha256": "84d7743701a0f9aa9d76716e771155fc6de6a0b6c5bc84746f55a8725f6a5529"
+  "manifestSha256": "a2211fc5f29892678669a86d197ae5215ecfde2c1ad3a85ad9c39093e20f516b"
 }

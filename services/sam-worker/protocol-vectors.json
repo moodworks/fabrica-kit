@@ -26,8 +26,8 @@
             "inferenceReady": false
           },
           "model-staged-not-loaded": {
-            "status": 204,
-            "body": "empty",
+            "status": 503,
+            "body": "strict-redacted-json",
             "inferenceReady": false
           },
           "model-loaded-ready": {
@@ -88,7 +88,7 @@
         ]
       }
     },
-    "sha256": "2e5d64b6741802f7963fa678d174fca92a367a32672764fae5831c3131702f3a"
+    "sha256": "1687de7e1936944b0f8b8a14ed4500a988f92558fe3c1680cfe3acc7bc8b8f3d"
   },
   "limits": {
     "rawMaskWorkingBytes": 268435456

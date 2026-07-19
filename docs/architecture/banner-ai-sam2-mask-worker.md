@@ -1,6 +1,6 @@
 # Banner AI SAM 2.1 mask worker
 
-Status: provider-free foundation; production execution inactive
+Status: provider-free GitHub-build preparation; production execution inactive
 Contract: `sam-mask-v1`
 RunPod evidence retrieved: 2026-07-18T13:15:50Z
 RunPod evidence expires: 2026-08-18T13:15:50Z (fail closed)
@@ -28,9 +28,11 @@ No real model ran. An authorized evidence-acquisition step downloaded two copies
 the official archive, config, and checkpoint, compared them independently, retained
 one canonical copy and paired retrieval evidence under ignored `.local-data`, and
 discarded duplicate bodies only after comparison. It also retained exact OCI
-manifest/config metadata without pulling a base layer. No dependency lock or wheel was
-acquired. No Docker build, base pull, artifact/model execution, image publication,
-RunPod endpoint, provider health call, or external inference occurred.
+manifest/config metadata without pulling a base layer. This milestone resolved and
+downloaded the exact runtime wheels only for package-index identity, hash, metadata,
+and license review; no wheel is tracked. No Docker build, base pull, artifact/model
+execution, image publication, RunPod GitHub build, endpoint, provider health call, or
+external inference occurred.
 
 ## Pinned model evidence
 
@@ -117,13 +119,18 @@ They were retrieved at exactly `2026-07-18T13:15:50Z`. The reviewed facts are:
   authenticated examples send `Authorization: Bearer RUNPOD_API_KEY`;
 - the application port defaults to `PORT=80`; `PORT_HEALTH` defaults to the same port
   and the default health path is `/ping`;
-- RunPod interprets `/ping` status `200` as healthy, `204` as initializing, and every
-  other status as unhealthy;
+- RunPod treats `/ping` status `200` as healthy. The active worker deliberately uses
+  `503` for every not-ready state and returns `200` only after its one model is fully
+  loaded and inference-ready;
 - the provider documents a two-minute no-worker request timeout, a 5.5-minute
   per-request processing timeout, and a 30 MB request and response payload limit; the
   Fabrica boundary below is deliberately stricter;
-- GitHub integration builds, stores, and deploys the image. It is excluded from this
-  controlled flow because those coupled external changes are not authorized here.
+- GitHub integration can select a repository, branch, and Dockerfile and then build,
+  store, and deploy the image. The fixed future source is repository
+  `moodworks/fabrica-kit`, branch `main`, Dockerfile
+  `services/sam-worker/Dockerfile`, with repository-root context. No build is
+  authorized here, and the reviewed official guide supplies no automatic
+  build-argument Git-SHA contract.
 
 Native construction and execution fail closed at or after
 `2026-08-18T13:15:50Z`. An earlier material change, removal, or conflict in any reviewed
@@ -134,7 +141,7 @@ does not depend on live provider evidence and remains available after expiry.
 
 The tracked `services/sam-worker/artifact-manifest.json` is a closed,
 self-digesting contract with reviewed SHA-256
-`84d7743701a0f9aa9d76716e771155fc6de6a0b6c5bc84746f55a8725f6a5529`.
+`a2211fc5f29892678669a86d197ae5215ecfde2c1ad3a85ad9c39093e20f516b`.
 It records `artifactExecutionOccurred=false` and `modelInferenceOccurred=false`.
 
 | Artifact                   | Exact observed identity                                                                                                                                                                                                                                                                                            |
@@ -342,37 +349,48 @@ Before inference, the worker validates:
 - side, pixel, decoded allocation, prompt, request, and output limits.
 
 Production startup first performs a light, stdlib-only preflight over the reviewed
-manifest, runtime source directory, checkpoint, and two exact runtime license paths.
-It checks the evidence window, strict manifest identity, types, sizes, and license
-inventory without importing torch or hashing the checkpoint. The background attempt
-then verifies the entire runtime source tree, config, upstream loader, checkpoint
-size/SHA/ZIP structure, and license hashes before any torch, NumPy, or SAM import.
+manifest, runtime source directory, checkpoint, two exact runtime licenses,
+selected-config adapter/overlay/loader, exact requirements lock, wheel manifest,
+dependency-license inventory, and installed runtime-dependency directory. It checks
+the evidence window, strict manifest identity, types, sizes, closed dependency graph,
+exact installed distribution versions, and protected namespaces without importing
+torch or hashing the checkpoint. The background attempt then verifies the entire
+runtime source tree, config, upstream loader, checkpoint size/SHA/ZIP structure,
+licenses, overlay, selected loader, dependency inputs, and installed closure before
+any torch, NumPy, or SAM import.
 
-Only after full verification does it call
-`build_sam2("configs/sam2.1/sam2.1_hiera_b+.yaml", ckpt_path=None, ...)`, followed by
-exactly `torch.load(checkpoint, map_location="cpu", weights_only=True)`. The checkpoint
-top level must be exactly `{model}`, the state must be nonempty with string keys, and
-explicit missing or unexpected state keys fail startup. The exact model loads once per
-warm worker. Requests execute in inference mode with CUDA when available and CPU as
-the supported fallback. Request-specific predictor and CPU/GPU objects are cleared in
-`finally`; the verified warm model remains. No download occurs at container startup or
-request time, and inference source has no network client.
+Only after full verification does the hash-bound selected-config loader parse the
+exact 3,650-byte YAML, require its exact 14 target path occurrences and 12 unique
+target strings, directly construct the reviewed graph, move the one model to the
+selected device, and put it in evaluation mode. The four-file overlay bypasses only
+the upstream Hydra initializer and supplies a fixed-redacted refusal for the otherwise
+unused iopath open call; it makes no general Hydra or iopath compatibility claim.
+Exactly `torch.load(checkpoint, map_location="cpu", weights_only=True)` then reads the
+checkpoint. Its top level must be exactly `{model}`, the state must be nonempty with
+string keys, and explicit missing or unexpected state keys fail startup. The exact
+model loads once per warm worker. Requests execute in inference mode with CUDA when
+available and CPU as the supported fallback. Request-specific predictor and CPU/GPU
+objects are cleared in `finally`; the verified warm model remains. No download occurs
+at container startup or request time, and inference source has no network client.
 
 Readiness is a cached four-state process contract:
 
 | Cached state              | `/ping` | Body                 | Inference |
 | ------------------------- | ------: | -------------------- | --------- |
 | `model-not-staged`        |     503 | strict redacted JSON | refused   |
-| `model-staged-not-loaded` |     204 | empty                | refused   |
+| `model-staged-not-loaded` |     503 | strict redacted JSON | refused   |
 | `model-loaded-ready`      |     200 | strict redacted JSON | eligible  |
 | `startup-blocked`         |     503 | strict redacted JSON | refused   |
 
-All health responses use `Cache-Control: no-store` and omit `Retry-After`. The five
-presence identities are the manifest, runtime source root, checkpoint, Apache license,
-and BSD license. Only all five plus a successful light preflight permit the FastAPI
-lifespan to start one background model-load attempt and report `204`; partial or
-invalid staging is blocked. No identities means not staged. One process owns one warm
-model. `/ping` remains responsive while blocking full hashing/load runs in a thread.
+All health responses use `Cache-Control: no-store` and omit `Retry-After`. The staged
+presence set is the manifest, runtime source root, checkpoint, adapter profile,
+overlay, model loader, requirements lock, wheel manifest, dependency-license
+inventory, installed runtime-dependency root, Apache license, and BSD license. Only
+the full set plus a successful light preflight permits the FastAPI lifespan to start
+one background model-load attempt. Partial or invalid staging is blocked; no
+identities means not staged. One process owns one warm model. `/ping` stays `503` and
+responsive while full hashing/load runs in a thread, and becomes `200` only after
+successful model load and execution-identity verification.
 
 After readiness, `/v1/masks` acquires its one nonblocking admission permit before
 buffering the body. A second request receives `429` immediately; there is no application
@@ -388,67 +406,86 @@ drift fail closed.
 
 ### Dependency and Docker build gate
 
-No dependency lock, wheel, or inventory was acquired or reviewed. The manifest records
-`buildStatus=unresolved-deployment-time-blocking`,
-`acquisitionOccurred=false`, and null lock/inventory sizes and hashes. The stdlib
-`audit-build` command rejects this reviewed status before touching archive, base, or
-dependency paths. The Dockerfile chains `audit-build` before root `pip`, making the
-current source deliberately non-buildable. Matching self-authored sidecars cannot
-bypass the trust boundary because sidecars are not accepted.
+The manifest now records `buildStatus=reviewed-wheel-only-ready` and binds three
+canonical CPython 3.11/Linux AMD64 dependency inputs:
 
-The ready-state verifier is already implemented and synthetic-tested. A future
-separately reviewed manifest revision must bind exact raw `requirements.lock` size/SHA
-and exact raw `wheelhouse-inventory.json` size/SHA. The canonical closed inventory
-lists every exact `.whl` filename, size, and SHA-256; the verifier requires an exact
-regular non-symlink directory inventory, collision-free names, CRC-valid wheel ZIPs,
-one matching `METADATA`/`WHEEL`/`RECORD`, compatible CPython 3.11 tags, and either
-pure-`any`, `linux_x86_64`, or `manylinux*_x86_64` platform identity. `musllinux` is
-rejected for the Ubuntu/glibc base. Every `.dist-info` top-level entry must use the one
-exact filename-bound root. Protected top-level `sam_worker`, `sam2`, `torch`,
-`torchvision`, `nvidia`, and `triton` namespaces are rejected for directory entries as
-well as files. Lock and wheelhouse must remain an exact one-wheel-per-locked-package
-bijection.
+| Input                      | Bytes | SHA-256                                                            |
+| -------------------------- | ----: | ------------------------------------------------------------------ |
+| `requirements.lock`        | 1,535 | `a52ec65c9bb270eef33a71dbf8971731dbf99135ecdffad6f392e39b6c42d525` |
+| `wheelhouse-manifest.json` | 5,741 | `390054e8574bda53e710cefcbeb44a5dcdaba35f79cf4cfa029bf079deadd39b` |
+| `dependency-licenses.json` | 5,018 | `b4e0a1b37810aef0e8131de5494b857690cc65a1f12d52f0f9018ebd11a48276` |
 
-The deterministic lock grammar is one sorted unique
+The exact 16-wheel runtime closure is `annotated-types==0.7.0`,
+`anyio==4.14.2`, `click==8.4.2`, `fastapi==0.115.12`, `h11==0.16.0`,
+`idna==3.18`, `numpy==1.26.4`, `pillow==11.0.0`, `pydantic==2.13.4`,
+`pydantic-core==2.46.4`, `pyyaml==6.0.2`, `starlette==0.46.2`,
+`tqdm==4.67.1`, `typing-extensions==4.16.0`,
+`typing-inspection==0.4.2`, and `uvicorn==0.34.2`. Every package has one exact
+wheel filename, size, SHA-256, official `files.pythonhosted.org` URL,
+package-level distribution license identity, and reviewed active `Requires-Dist`
+edges. NumPy and Pillow bundled notices remain retained in their wheel/install
+license files; the inventory is not a normalized component SBOM.
+
+The deterministic lock grammar remains one sorted unique
 `canonical-name==version --hash=sha256:<64-lowercase-hex>` record per line with a final
 newline. URLs, VCS, editables, local paths, includes/options, markers, extras,
-index/find-links directives, sdists, and base-owned packages fail. PyTorch 2.5.1 is
-OCI-config-observed and immutable-base-owned. `torchvision` remains a base-owned
-distribution/namespace and is absent from runtime dependency intentions; its intended
-exact 0.20.1 version remains a future-build runtime assertion. Only exact version/hash
-records and inventory-bound wheels may reach offline pip with
-`PIP_CONFIG_FILE=/dev/null`, `--only-binary=:all:`, `--no-deps`, `--no-index`, and
-`--require-hashes`.
+index/find-links directives, source distributions, and base-owned packages fail.
+Wheel verification requires an exact regular non-symlink directory inventory,
+collision-free names, CRC-valid ZIPs, matching `METADATA`/`WHEEL`/`RECORD`, compatible
+CPython 3.11 Linux AMD64 tags, and exact dependency metadata. Protected top-level
+`sam_worker`, `sam2`, `torch`, `torchvision`, `nvidia`, and `triton` namespaces fail.
+The immutable base owns asserted `torch==2.5.1` and compatible
+`torchvision==0.20.1`; neither is reinstalled.
 
-The future ignored input layout is exactly:
+The fixed future GitHub source is repository `moodworks/fabrica-kit`, branch `main`,
+Dockerfile `services/sam-worker/Dockerfile`, repository-root context, and
+`linux/amd64`. `Dockerfile.dockerignore` is default-deny and re-includes every exact
+tracked `COPY` source. The build needs no local artifact staging, absolute developer
+path, untracked wheel, Git LFS object, developer cache, Docker secret, or file outside
+that context. These accepted changes remain uncommitted and unpushed, so the remote
+builder cannot consume them until a separately authorized reviewed commit and push.
 
-```text
-.local-data/banner-ai/sam-worker-build/
-  sam2-source.tar.gz
-  sam2.1_hiera_b+.yaml
-  sam2.1_hiera_base_plus.pt
-  LICENSE
-  LICENSE_cctorch
-  pytorch-base-manifest.json
-  pytorch-base-config.json
-  requirements.lock
-  wheelhouse-inventory.json
-  wheelhouse/*.whl
-```
+The acquisition stage is the only network-enabled `RUN`. Before creating its
+proxy-disabled, redirect-refusing opener, it verifies the manifest-bound lock,
+wheelhouse manifest, and dependency-license bytes and proves their exact
+lock-to-filename/version/hash-to-license closure. It downloads only the reviewed
+official archive, checkpoint, and 16 wheel URLs; rejects alternate hosts, redirects,
+changed effective URLs, queries, fragments, credentials, ports, status/length/encoding
+drift, short/long bodies, and wrong hashes; audits archive/checkpoint/wheel structure;
+and emits one closed build-input directory.
 
-The Docker context is default-deny and re-includes only the Dockerfile, reviewed
-manifest, flat worker `*.py` files, those exact named inputs, and wheels at that one
-level. Unexpected untracked files, `.env`, Git data, secrets, caches, nested worker
-files, sidecars, sdists, and other `.local-data` cannot enter. The multi-stage runtime
-copies only reviewed worker source, extracted `sam2/**`, two runtime licenses,
-checkpoint/manifest, and—after a future resolved gate—reviewed runtime dependencies.
-The broad archive, archive-only licenses, base metadata, and staging directory never
-enter the final stage. Upstream installation/setup hooks are never invoked.
+The final stage starts again from the immutable PyTorch base digest, copies only the
+closed inputs, and mounts the verified wheelhouse read-only. Every final-stage `RUN`
+uses `--network=none`. Installation is
+`--no-cache-dir --no-compile --no-index --only-binary=:all: --no-deps
+--find-links=file:///opt/fabrica/wheelhouse --require-hashes`. The unused pip
+console-script directory is removed. The reviewed NumPy wheel ships one bytecode cache,
+so the same offline `RUN` removes all `.pyc` and empty `__pycache__` paths and asserts
+none remain. The wheelhouse, acquisition program, broad archive, scratch, Git metadata,
+and download/bytecode caches do not enter the final image. Runtime files are
+root-owned/read-only; the server exposes `80/tcp` and runs as UID/GID 10001.
 
-Downloaded archives, checkpoints, base metadata, locks, wheels, and every
-`.local-data` path remain outside Git. A bounded provider-free `git ls-files -z` test
-rejects model/checkpoint/archive/wheel suffixes and exact artifact basenames and checks
-that no downloaded binary reaches Banner AI package exports or web source.
+Installed verification proves the exact distribution name/version closure and rejects
+protected namespace shadowing; it is not a full base-image/filesystem SBOM. The
+immutable base owns `/opt/conda`, Python, torch, pip, and any base-retained tools or
+caches. A later authorized image inventory must assess them before promotion;
+`/opt/conda` cannot be removed because it owns the runtime.
+
+OCI labels bind the source repository, supplied revision, SAM commit/model/config and
+config digest, checkpoint digest, artifact manifest, hosting/direct/runtime profile
+digests, and build contract. The only build argument is `FABRICA_GIT_SHA`: a lowercase
+nonzero 40-hex SHA or the exact sentinel `unavailable`. The sentinel is not a SHA and
+makes no revision claim. No official GitHub integration contract is assumed to inject
+one automatically. The Dockerfile/build defines or copies no secret or provider key;
+none may enter a build argument, layer, or label. The image label
+`io.fabrica.image-use=health-only-non-promotable-v1` is mandatory. This milestone's
+image remains non-promotable even if a real SHA is later supplied; the repository
+worker source is not independently manifest-hashed as a complete source bundle, and
+image inventory/model-load/GPU-health gates remain.
+
+A bounded provider-free `git ls-files -z` test continues to reject tracked
+model/checkpoint/archive/wheel suffixes and exact artifact basenames and checks that no
+downloaded binary reaches Banner AI package exports or web source.
 
 ### TypeScript server adapter
 
@@ -499,11 +536,11 @@ Live construction and dispatch require all of:
   `fabrica-binary-rle-v1` output identity;
 - the exact documentation retrieval/expiry tuple and all three reviewed profiles:
   - direct hosting SHA-256
-    `2e5d64b6741802f7963fa678d174fca92a367a32672764fae5831c3131702f3a`;
+    `1687de7e1936944b0f8b8a14ed4500a988f92558fe3c1680cfe3acc7bc8b8f3d`;
   - direct adapter V2 SHA-256
-    `c114b8b0bc3030ef2d7df524c88bd1710c9e6bc264d186c6b9e8ee7845718747`;
+    `62809b35b0ccf2d28f1bcd086857718a7c909b247adeccdddd587305066449a4`;
   - direct authorization V2 SHA-256
-    `c1ab605534b23b8aa6be2433b333696eeed9f13e1f87be76a49e60a26bc7509e`.
+    `7fa4110fce04f5e87d4a95a669b6d30c4085bc6eb078e2adaa763334f292f139`.
 
 The authorization says `clientDispatchMaximum=1`,
 `applicationInferenceMaximum=1`, `clientRetryCount=0`, and `pollCount=0`. It explicitly
@@ -557,8 +594,8 @@ identity, integer timings, exact filter accounting, count, ordered candidates, a
 response digest. The fake execution union contains only fake engine identity,
 definition digest, and `NOT_SAM_OUTPUT`; it cannot claim Meta model/config/checkpoint
 identity. The live union contains only the exact reviewed Meta identity. It remains
-unconstructable in this milestone because the dependency build gate is unresolved and
-no reviewed image/endpoint/execution authorization exists.
+unconstructable in this milestone because no built image digest, endpoint, GPU/model
+health evidence, or execution authorization exists.
 
 ## Mask encoding and deterministic filtering
 
@@ -664,79 +701,54 @@ reproduction JSON do not each embed the banner, and none is represented as SAM o
 
 ## Future controlled deployment
 
-Deployment is blocked first by the unresolved dependency lock/wheelhouse contract. A
-future acquisition must follow this order:
+The accepted changes remain uncommitted and unpushed. Do not start a RunPod GitHub
+build or create an endpoint until a separately authorized reviewed commit and push to
+`main` makes every new build input available to the remote repository-root context.
+No final image digest exists before that build.
 
-1. Before `2026-08-18T19:31:18Z`, or sooner if an official source changes, recheck the
-   exact Meta artifact sources. Recheck RunPod evidence before its separate
-   `2026-08-18T13:15:50Z` expiry.
-2. In a separately authorized isolated environment, create a new empty acquisition
-   directory exclusively, either under the ignored `.local-data` boundary or in
-   isolated temporary storage. Create distinct destination files with
-   no-overwrite/exclusive semantics and download each exact official
-   archive/config/checkpoint URL twice. Never overwrite retained evidence. Do not
-   execute, import, or install artifact code or deserialize the checkpoint
-   pickle/tensors.
-3. On both copies run `shasum -a 256 <file>` and
-   `openssl dgst -sha256 <file>`. Require all four hashes, exact byte sizes, and a byte
-   comparison such as `cmp -s` to match the manifest. Retain one approved canonical
-   body and paired headers; discard the duplicate body only after every comparison
-   succeeds. Run the stdlib audits over that canonical archive,
-   source/config/tree/license bindings, checkpoint ZIP/CRC/member structure, and base
-   manifest/config descriptor. Acquire no base layer.
-4. Separately acquire a lock and wheelhouse for the exact runtime intentions. Produce a
-   closed wheel inventory. Review exact lock/inventory bytes and each wheel
-   name/size/SHA, run the URL/VCS/editable/directive/sdist/extra rejections, then update
-   and re-sign/review the manifest's ready-state fields. No current dependency hash is
-   known or implied by this milestone.
-5. In future CI, retrieve only into ephemeral storage and verify exact size/SHA before
-   any parser, installer, import, or execution. Run archive/checkpoint/base/license
-   audits, the strict dependency parser/inventory, Git binary/local-data scans, and the
-   exact final image inventory. CI must fail on extra or changed bytes.
-6. Stage only the exact ignored layout. Run the complete `audit-build` command from the
-   worker README on the host first. Only after it succeeds may the literal two-stage
-   `linux/amd64` Dockerfile run with `docker build --network=none`. Both stages use the
-   exact immutable base digest; no build arg or `latest` is accepted. The same resolved
-   audit runs inside the build before offline root `pip`. Record the exact CPython 3.11
-   patch, assert and record installed torchvision 0.20.1, record the
-   non-root/read-only file inventory, run full health verification and import/network
-   scans, and record the final image digest.
-7. Push the reviewed image once to an approved registry and retain its immutable
-   registry digest. RunPod GitHub integration remains excluded because it couples an
-   external build/deploy to repository state.
-8. Create exactly one RunPod endpoint of type **Load Balancer**, not Queue, pinned to
-   that digest. Record the chosen GPU and price, one GPU per worker, minimum/active
-   workers `0`, maximum `1`, port `80`, health `/ping`, inference `/v1/masks`, timeout,
-   cold-start/idle policy, and exact cost cap. No provider queue, retry, or image
-   credential is allowed.
-9. With active workers set to zero, do not assume the public endpoint will expose the
-   worker's internal `204` during cold start. Before inference authorization, either
-   confirm readiness in the RunPod console and then make one authenticated public
-   `GET /ping` that must return `200`, or obtain a separate bounded GET-only health
-   authorization with a fixed finite count of at least three attempts, 5–10 seconds
-   apart, stopping on `200`. The worker's internal `204` remains a container-health
-   state and is not public readiness evidence. Re-review redacted logs and secret
-   isolation. The GET-only sequence grants no POST, inference dispatch, inference
-   claim, or inference retry. If health does not reach `200`, stop without inference.
-10. Create a new, unexpired, single-use
-    `single-fixture-sam-runpod-direct-v2` authorization bound to the endpoint, immutable
-    image, all profile/evidence identities, exact model/config/checkpoint, and only the
-    738×255, 125,894-byte fixture with SHA-256
-    `40f8a1c4312ec86cb4e38e16b9a423e85c2a9e3cf5f98a4bc510c23f3d4cf073`.
-    Authorize `automatic-candidates`, exact limits/RLE, one dispatch, one application
-    inference, zero retry/poll, wall timeout/cost cap, and
-    `providerBillingGuarantee=false`; grant no production admission or web route.
-11. Only after that explicit execution authorization, use the server-only
-    `RUNPOD_API_KEY` reference to submit the bare request once. Capture redacted
-    telemetry/strict response evidence, inspect candidate masks, and stop. Timeout,
-    cancellation, connection loss, truncation, or 5xx is indeterminate and receives no
-    retry.
+The exact first future console configuration is health-only:
 
-That one-fixture run is evidence gathering only. It cannot activate production, change
-the canonical scene schema, or grant Qwen geometric authority.
+| Setting                          | Value                            |
+| -------------------------------- | -------------------------------- |
+| Endpoint type                    | Load Balancer                    |
+| Repository                       | `moodworks/fabrica-kit`          |
+| Branch                           | `main`                           |
+| Dockerfile                       | `services/sam-worker/Dockerfile` |
+| Container port                   | `80`                             |
+| Health path                      | `/ping`                          |
+| Inference path                   | `/v1/masks`                      |
+| Active/minimum workers           | `0`                              |
+| Maximum workers                  | `1`                              |
+| GPUs per worker                  | `1`                              |
+| GPU group                        | A4000 / A4500 / RTX 4000, 16 GB  |
+| Maximum hourly price             | `$0.75`                          |
+| Total health-only deployment cap | `$2.00`                          |
 
-No dependency acquisition, Docker build or base pull, registry push, endpoint creation,
-secret inspection, provider health probe, torch/SAM execution, or provider inference
-was performed by this milestone. The retained archive/config/checkpoint and OCI
-metadata are acquisition evidence only. Matching observed hashes do not change that
-fact and do not prove artifact safety.
+That configuration uses no queue endpoint, automatic/client retry, fixture upload, or
+inference POST. It injects no build secret or provider key. The first separately
+authorized exercise may inspect the built image inventory and perform bounded
+authenticated GET-only health checks. `/ping` must remain `503` until the exact model
+is loaded and inference-ready and may return `200` only afterward. If health does not
+reach `200` within the explicit cost/time authorization, stop and scale back to zero
+without inference.
+
+The image remains labeled
+`io.fabrica.image-use=health-only-non-promotable-v1`. Supplying a real
+`FABRICA_GIT_SHA` improves source provenance but does not promote the image. The
+literal `unavailable` default is not a SHA and makes no revision claim. Before any
+promotion or inference authorization, a later review must record the actual final image
+digest, exact base Python patch, installed/base filesystem inventory, base-retained
+tools and caches, non-root/read-only inventory, successful one-model load, redacted
+logs, GPU health, and all profile/manifest identities.
+
+A later inference exercise remains outside this milestone and still requires a new,
+unexpired, single-use authorization bound to the endpoint, immutable image digest,
+model/config/checkpoint, exact fixture bytes/dimensions/digest, limits, cost cap, one
+dispatch, and zero retry/poll. No health-only configuration grants POST, inference,
+production admission, billing, or web-route authority.
+
+No Docker build or base pull, RunPod GitHub build, image publication, endpoint creation,
+provider health probe, fixture upload, torch/SAM execution, checkpoint load, GPU
+inference, or paid provider activity was performed by this milestone. Matching reviewed
+hashes establish artifact identity only; they do not prove artifact safety, semantic
+compatibility, or model correctness.

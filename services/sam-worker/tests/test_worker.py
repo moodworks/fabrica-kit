@@ -8,10 +8,14 @@ import hashlib
 import json
 import math
 import os
+import re
+import runpy
 import struct
 import sys
+import tempfile
 import threading
 import time
+import types
 import unittest
 import zlib
 from array import array
@@ -55,6 +59,14 @@ from sam_worker.protocol import (
     postprocess,
 )
 from sam_worker.hosting import DIRECT_HOSTING_PROFILE, DIRECT_HOSTING_PROFILE_SHA256
+from sam_worker.model_loader import (
+    TARGET_INVENTORY,
+    ModelConfigError,
+    _verify_constructor_origins,
+    build_reviewed_model,
+    instantiate_reviewed_config,
+    parse_reviewed_config,
+)
 from sam_worker.runtime import (
     MODEL_LOADED_READY,
     MODEL_NOT_STAGED,
@@ -64,6 +76,14 @@ from sam_worker.runtime import (
     create_production_runtime,
 )
 from sam_worker.server import validated_port
+
+try:
+    import yaml
+
+    YAML_TEST_DEPS_AVAILABLE = True
+except ModuleNotFoundError:
+    yaml = Any  # type: ignore[assignment]
+    YAML_TEST_DEPS_AVAILABLE = False
 
 ROOT = Path(__file__).resolve().parents[3]
 VECTORS = json.loads((ROOT / "services/sam-worker/protocol-vectors.json").read_text("utf-8"))
@@ -769,7 +789,20 @@ class DirectRuntimeTests(unittest.TestCase):
 
     def test_production_staging_classification_rejects_partial_artifacts(self) -> None:
         def state_for(
-            staged: tuple[bool, bool, bool, bool, bool],
+            staged: tuple[
+                bool,
+                bool,
+                bool,
+                bool,
+                bool,
+                bool,
+                bool,
+                bool,
+                bool,
+                bool,
+                bool,
+                bool,
+            ],
             *,
             preflight_error: Exception | None = None,
         ) -> str:
@@ -794,23 +827,23 @@ class DirectRuntimeTests(unittest.TestCase):
                 return state
 
         self.assertEqual(
-            state_for((False, False, False, False, False)),
+            state_for((False,) * 12),
             MODEL_NOT_STAGED,
         )
         self.assertEqual(
-            state_for((True, True, True, True, True)),
+            state_for((True,) * 12),
             MODEL_STAGED_NOT_LOADED,
         )
         self.assertEqual(
             state_for(
-                (True, True, True, True, True),
+                (True,) * 12,
                 preflight_error=ArtifactError("drift"),
             ),
             STARTUP_BLOCKED,
         )
-        for missing_index in range(5):
+        for missing_index in range(12):
             staged = tuple(
-                index != missing_index for index in range(5)
+                index != missing_index for index in range(12)
             )
             self.assertEqual(state_for(staged), STARTUP_BLOCKED)
 
@@ -871,6 +904,417 @@ class DirectRuntimeTests(unittest.TestCase):
                     validated_port()
 
 
+class SelectedConfigAdapterTests(unittest.TestCase):
+    def _selected_graph(self) -> Mapping[str, Any]:
+        return {
+            "model": {
+                "_target_": "sam2.modeling.sam2_base.SAM2Base",
+                "image_encoder": {
+                    "_target_": (
+                        "sam2.modeling.backbones.image_encoder.ImageEncoder"
+                    ),
+                    "trunk": {
+                        "_target_": (
+                            "sam2.modeling.backbones.hieradet.Hiera"
+                        )
+                    },
+                    "neck": {
+                        "_target_": (
+                            "sam2.modeling.backbones.image_encoder.FpnNeck"
+                        ),
+                        "position_encoding": {
+                            "_target_": (
+                                "sam2.modeling.position_encoding."
+                                "PositionEmbeddingSine"
+                            )
+                        },
+                    },
+                },
+                "memory_attention": {
+                    "_target_": (
+                        "sam2.modeling.memory_attention.MemoryAttention"
+                    ),
+                    "layer": {
+                        "_target_": (
+                            "sam2.modeling.memory_attention."
+                            "MemoryAttentionLayer"
+                        ),
+                        "self_attention": {
+                            "_target_": (
+                                "sam2.modeling.sam.transformer.RoPEAttention"
+                            )
+                        },
+                        "cross_attention": {
+                            "_target_": (
+                                "sam2.modeling.sam.transformer.RoPEAttention"
+                            )
+                        },
+                    },
+                },
+                "memory_encoder": {
+                    "_target_": (
+                        "sam2.modeling.memory_encoder.MemoryEncoder"
+                    ),
+                    "position_encoding": {
+                        "_target_": (
+                            "sam2.modeling.position_encoding."
+                            "PositionEmbeddingSine"
+                        )
+                    },
+                    "mask_downsampler": {
+                        "_target_": (
+                            "sam2.modeling.memory_encoder.MaskDownSampler"
+                        )
+                    },
+                    "fuser": {
+                        "_target_": (
+                            "sam2.modeling.memory_encoder.Fuser"
+                        ),
+                        "layer": {
+                            "_target_": (
+                                "sam2.modeling.memory_encoder.CXBlock"
+                            )
+                        },
+                    },
+                },
+            }
+        }
+
+    def test_fake_selected_graph_is_exact_and_applies_reviewed_overrides(
+        self,
+    ) -> None:
+        calls: list[tuple[str, Mapping[str, Any]]] = []
+
+        def constructor(path: str) -> Any:
+            def build(**kwargs: Any) -> Mapping[str, Any]:
+                calls.append((path, kwargs))
+                return {"constructedAt": path, "kwargs": kwargs}
+
+            return build
+
+        constructors = {
+            identity: constructor(identity[0])
+            for identity in TARGET_INVENTORY
+        }
+        model = instantiate_reviewed_config(
+            self._selected_graph(), constructors
+        )
+        self.assertEqual(model["constructedAt"], "model")
+        self.assertEqual(
+            model["kwargs"]["sam_mask_decoder_extra_args"],
+            {
+                "dynamic_multimask_stability_delta": 0.05,
+                "dynamic_multimask_stability_thresh": 0.98,
+                "dynamic_multimask_via_stability": True,
+            },
+        )
+        self.assertEqual(
+            {path for path, _kwargs in calls},
+            {path for path, _target in TARGET_INVENTORY},
+        )
+        self.assertEqual(len(calls), 14)
+        self.assertEqual(calls[-1][0], "model")
+
+        missing = dict(constructors)
+        del missing[TARGET_INVENTORY[-1]]
+        with self.assertRaisesRegex(
+            ModelConfigError, "constructor inventory"
+        ):
+            instantiate_reviewed_config(self._selected_graph(), missing)
+
+        hydra_control = copy.deepcopy(self._selected_graph())
+        hydra_control["model"]["_args_"] = []
+        with self.assertRaisesRegex(
+            ModelConfigError, "target inventory"
+        ):
+            instantiate_reviewed_config(hydra_control, constructors)
+
+        preconfigured = copy.deepcopy(self._selected_graph())
+        preconfigured["model"]["sam_mask_decoder_extra_args"] = {}
+        with self.assertRaisesRegex(
+            ModelConfigError, "postprocessing overrides"
+        ):
+            instantiate_reviewed_config(preconfigured, constructors)
+
+    def test_reviewed_builder_moves_one_fake_model_and_enters_eval(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source_root = root / "sam2-source"
+            source_package = source_root / "sam2"
+            source_package.mkdir(parents=True)
+            overlay_root = root / "sam2-overlay"
+            (overlay_root / "sam2").mkdir(parents=True)
+            (overlay_root / "iopath/common").mkdir(parents=True)
+            for path in (
+                overlay_root / "sam2/__init__.py",
+                overlay_root / "iopath/__init__.py",
+                overlay_root / "iopath/common/__init__.py",
+                overlay_root / "iopath/common/file_io.py",
+            ):
+                path.write_text("# fake reviewed origin\n", "utf-8")
+            config_path = root / "config.yaml"
+            config_path.write_bytes(b"x" * 3650)
+
+            module_attributes = {
+                "sam2.modeling.backbones.hieradet": ("Hiera",),
+                "sam2.modeling.backbones.image_encoder": (
+                    "FpnNeck",
+                    "ImageEncoder",
+                ),
+                "sam2.modeling.memory_attention": (
+                    "MemoryAttention",
+                    "MemoryAttentionLayer",
+                ),
+                "sam2.modeling.memory_encoder": (
+                    "CXBlock",
+                    "Fuser",
+                    "MaskDownSampler",
+                    "MemoryEncoder",
+                ),
+                "sam2.modeling.position_encoding": (
+                    "PositionEmbeddingSine",
+                ),
+                "sam2.modeling.sam.transformer": ("RoPEAttention",),
+                "sam2.modeling.sam2_base": ("SAM2Base",),
+            }
+            modules: Dict[str, Any] = {}
+            sam2_package = types.ModuleType("sam2")
+            sam2_package.__file__ = str(
+                overlay_root / "sam2/__init__.py"
+            )
+            sam2_package.__path__ = [str(source_package)]
+            modules["sam2"] = sam2_package
+            for package_name in (
+                "sam2.modeling",
+                "sam2.modeling.backbones",
+                "sam2.modeling.sam",
+            ):
+                package = types.ModuleType(package_name)
+                package.__path__ = [str(source_package)]
+                modules[package_name] = package
+            for module_name, attribute_names in module_attributes.items():
+                module = types.ModuleType(module_name)
+                module_path = source_package.joinpath(
+                    *module_name.split(".")[1:]
+                ).with_suffix(".py")
+                module_path.parent.mkdir(parents=True, exist_ok=True)
+                module_path.write_text("# fake constructor origin\n", "utf-8")
+                module.__file__ = str(module_path)
+                for attribute_name in attribute_names:
+                    constructor = type(attribute_name, (), {})
+                    constructor.__module__ = module_name
+                    setattr(module, attribute_name, constructor)
+                modules[module_name] = module
+
+            iopath_package = types.ModuleType("iopath")
+            iopath_package.__file__ = str(
+                overlay_root / "iopath/__init__.py"
+            )
+            iopath_package.__path__ = [str(overlay_root / "iopath")]
+            iopath_common = types.ModuleType("iopath.common")
+            iopath_common.__file__ = str(
+                overlay_root / "iopath/common/__init__.py"
+            )
+            iopath_common.__path__ = [
+                str(overlay_root / "iopath/common")
+            ]
+            iopath_file_io = types.ModuleType(
+                "iopath.common.file_io"
+            )
+            iopath_file_io.__file__ = str(
+                overlay_root / "iopath/common/file_io.py"
+            )
+            iopath_package.common = iopath_common
+            iopath_common.file_io = iopath_file_io
+            modules.update(
+                {
+                    "iopath": iopath_package,
+                    "iopath.common": iopath_common,
+                    "iopath.common.file_io": iopath_file_io,
+                    "yaml": types.ModuleType("yaml"),
+                }
+            )
+
+            events: list[tuple[str, str | None]] = []
+
+            class FakeModel:
+                def to(self, device: str) -> "FakeModel":
+                    events.append(("to", device))
+                    return self
+
+                def eval(self) -> None:
+                    events.append(("eval", None))
+
+            fake_model = FakeModel()
+
+            class Digest:
+                def hexdigest(self) -> str:
+                    return (
+                        "e73f9e9547b305040552ee943ebd3a34c"
+                        "ee5727a76fc2ab88b87f7b28b430754"
+                    )
+
+            with (
+                patch.dict(sys.modules, modules),
+                patch(
+                    "sam_worker.model_loader.IMAGE_CONFIG_PATH",
+                    config_path,
+                ),
+                patch(
+                    "sam_worker.model_loader.IMAGE_SOURCE_ROOT",
+                    source_root,
+                ),
+                patch(
+                    "sam_worker.model_loader.OVERLAY_ROOT",
+                    overlay_root,
+                ),
+                patch(
+                    "sam_worker.model_loader.hashlib.sha256",
+                    return_value=Digest(),
+                ),
+                patch(
+                    "sam_worker.model_loader.parse_reviewed_config",
+                    return_value=self._selected_graph(),
+                ),
+                patch(
+                    "sam_worker.model_loader.instantiate_reviewed_config",
+                    return_value=fake_model,
+                ) as instantiate,
+            ):
+                self.assertIs(build_reviewed_model("cuda"), fake_model)
+            self.assertEqual(events, [("to", "cuda"), ("eval", None)])
+            constructors = instantiate.call_args.args[1]
+            self.assertEqual(set(constructors), set(TARGET_INVENTORY))
+            self.assertEqual(len(constructors), 14)
+
+    def test_constructor_origin_outside_reviewed_source_fails_redacted(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "source/sam2"
+            source.mkdir(parents=True)
+            foreign_path = root / "foreign.py"
+            foreign_path.write_text("# foreign\n", "utf-8")
+            foreign_module = types.ModuleType("foreign_constructor")
+            foreign_module.__file__ = str(foreign_path)
+            constructor = type("Foreign", (), {})
+            constructor.__module__ = foreign_module.__name__
+            with patch.dict(
+                sys.modules,
+                {foreign_module.__name__: foreign_module},
+            ):
+                with self.assertRaisesRegex(
+                    ModelConfigError,
+                    "^Reviewed model target origin is invalid\\.$",
+                ):
+                    _verify_constructor_origins(
+                        {("model", "foreign.Foreign"): constructor},
+                        source,
+                    )
+
+    @unittest.skipUnless(
+        YAML_TEST_DEPS_AVAILABLE,
+        "the exact PyYAML runtime wheel is not installed on this bare host",
+    )
+    def test_yaml_parser_rejects_graph_features_and_target_drift(
+        self,
+    ) -> None:
+        payload = (
+            b"model:\n"
+            b"  _target_: reviewed.Root\n"
+            b"  child:\n"
+            b"    _target_: reviewed.Child\n"
+            b"    value: 1\n"
+        )
+        expected = {
+            "model": {
+                "_target_": "reviewed.Root",
+                "child": {
+                    "_target_": "reviewed.Child",
+                    "value": 1,
+                },
+            }
+        }
+        digest = hashlib.sha256(
+            json.dumps(
+                expected,
+                ensure_ascii=False,
+                separators=(",", ":"),
+                sort_keys=True,
+                allow_nan=False,
+            ).encode("utf-8")
+        ).hexdigest()
+        inventory = (
+            ("model", "reviewed.Root"),
+            ("model.child", "reviewed.Child"),
+        )
+        with (
+            patch(
+                "sam_worker.model_loader.PARSED_CONFIG_SHA256",
+                digest,
+            ),
+            patch(
+                "sam_worker.model_loader.TARGET_INVENTORY",
+                inventory,
+            ),
+            patch(
+                "sam_worker.model_loader.ALLOWED_TARGETS",
+                frozenset(target for _path, target in inventory),
+            ),
+        ):
+            self.assertEqual(parse_reviewed_config(payload, yaml), expected)
+
+        for invalid in (
+            b"model:\n  key: one\n  key: two\n",
+            b"model: &model\n  child: *model\n",
+            b"%YAML 1.2\n---\nmodel: {}\n",
+            b"model: !!map {}\n",
+            b"model:\n  <<: {foreign: true}\n",
+            b"model:\n  value: ${env:SECRET}\n",
+            b"model:\n  weights_path: /private/model.pt\n",
+            b"model:\n  _target_: foreign.Target\n",
+        ):
+            with self.subTest(invalid=invalid):
+                with self.assertRaises(ModelConfigError):
+                    parse_reviewed_config(invalid, yaml)
+
+    def test_iopath_overlay_refuses_before_inspecting_hostile_path(
+        self,
+    ) -> None:
+        overlay = runpy.run_path(
+            str(
+                ROOT
+                / "services/sam-worker/runtime-overlay/"
+                "iopath/common/file_io.py"
+            )
+        )
+        touched = False
+
+        class HostilePath:
+            def __fspath__(self) -> str:
+                nonlocal touched
+                touched = True
+                raise AssertionError("secret path must not be inspected")
+
+            def __str__(self) -> str:
+                nonlocal touched
+                touched = True
+                return "/private/secret-checkpoint"
+
+        with self.assertRaisesRegex(
+            RuntimeError,
+            "^External model weight access is disabled\\.$",
+        ):
+            overlay["g_pathmgr"].open(
+                HostilePath(),
+                token="top-secret",
+            )
+        self.assertFalse(touched)
+
+
 try:
     from fastapi.testclient import TestClient
 
@@ -888,7 +1332,7 @@ except ModuleNotFoundError:
     "pinned FastAPI/httpx test intentions are not installed on this bare host",
 )
 class DirectHttpTests(unittest.TestCase):
-    def test_health_states_are_cached_redacted_and_bodyless_while_loading(self) -> None:
+    def test_health_is_redacted_and_503_until_model_is_ready(self) -> None:
         ready = SamWorkerRuntime(FakeEngine([]), MODEL_LOADED_READY)
         with TestClient(create_app(ready)) as client:
             response = client.get("/ping")
@@ -929,10 +1373,11 @@ class DirectHttpTests(unittest.TestCase):
         with TestClient(create_app(loading)) as client:
             self.assertTrue(loading_started.wait(1))
             response = client.get("/ping")
-            self.assertEqual(response.status_code, 204)
-            self.assertEqual(response.content, b"")
-            self.assertNotIn("content-length", response.headers)
-            self.assertNotIn("content-type", response.headers)
+            self.assertEqual(response.status_code, 503)
+            self.assertEqual(
+                response.json()["state"], MODEL_STAGED_NOT_LOADED
+            )
+            self.assertFalse(response.json()["inferenceReady"])
             self.assertEqual(response.headers["cache-control"], "no-store")
             self.assertNotIn("retry-after", response.headers)
             finish_loading.set()
@@ -1176,8 +1621,15 @@ class StaticSourceTests(unittest.TestCase):
         hosting_source = (worker / "hosting.py").read_text("utf-8")
         server_source = (worker / "server.py").read_text("utf-8")
         health_source = (worker / "health.py").read_text("utf-8")
+        loader_source = (worker / "model_loader.py").read_text("utf-8")
         boundary_source = app_source + runtime_source + hosting_source + server_source
-        all_source = protocol_source + engine_source + boundary_source + health_source
+        all_source = (
+            protocol_source
+            + engine_source
+            + boundary_source
+            + health_source
+            + loader_source
+        )
         for forbidden in (
             "\nimport requests",
             "\nfrom requests",
@@ -1221,7 +1673,10 @@ class StaticSourceTests(unittest.TestCase):
             "import torch",
             engine_source[: engine_source.index("    def load(self)")],
         )
-        self.assertIn("ckpt_path=None", load_body)
+        self.assertIn("build_reviewed_model(self._device)", load_body)
+        self.assertNotIn("import hydra", loader_source.lower())
+        self.assertNotIn("import omegaconf", loader_source.lower())
+        self.assertNotIn("importlib", loader_source)
         self.assertIn("load_reviewed_checkpoint(torch, model)", load_body)
         self.assertIn("weights_only=True", engine_source)
         self.assertIn('set(payload) != {"model"}', engine_source)
@@ -1232,10 +1687,12 @@ class StaticSourceTests(unittest.TestCase):
 
     def test_dockerfile_requires_controlled_pinned_inputs_and_nonroot_runtime(self) -> None:
         dockerfile = (ROOT / "services/sam-worker/Dockerfile").read_text("utf-8")
+        acquisition_source = (
+            ROOT / "services/sam-worker/acquire_build.py"
+        ).read_text("utf-8")
         health_source = (
             ROOT / "services/sam-worker/sam_worker/health.py"
         ).read_text("utf-8")
-        self.assertFalse(dockerfile.startswith("# syntax="))
         immutable_base = (
             "pytorch/pytorch:2.5.1-cuda12.4-cudnn9-runtime@sha256:"
             "c8268a92a69bd500f8be0e665b2630ee006dadaf7bfbc24249141b15ff622755"
@@ -1246,71 +1703,202 @@ class StaticSourceTests(unittest.TestCase):
             ),
             2,
         )
-        self.assertNotIn("ARG ", dockerfile)
-        self.assertIn("--require-hashes", dockerfile)
-        self.assertIn("--no-index", dockerfile)
-        self.assertIn("audit-build", dockerfile)
+        self.assertIn("AS acquisition", dockerfile)
+        self.assertIn("AS runtime", dockerfile)
+        self.assertIn("ARG FABRICA_GIT_SHA=unavailable", dockerfile)
+        self.assertIn("value != '0' * 40", dockerfile)
         self.assertLess(
-            dockerfile.index("python -m sam_worker.artifacts audit-build"),
-            dockerfile.index("python -m pip install"),
+            dockerfile.index("value == 'unavailable'"),
+            dockerfile.index("LABEL org.opencontainers.image.source"),
         )
-        ordered_fragments = (
-            "python -m sam_worker.artifacts audit-build",
-            "python -m pip install",
-            "python -m sam_worker.artifacts extract-runtime",
-            "install -m 0444",
-            "python -m sam_worker.artifacts verify-runtime",
-            "python -m sam_worker.health",
-            "USER 10001:10001",
-            'CMD ["python", "-m", "sam_worker.server"]',
+        self.assertIn("git-sha40-or-unavailable-v1", dockerfile)
+        self.assertIn(
+            'io.fabrica.image-use="health-only-non-promotable-v1"',
+            dockerfile,
         )
-        ordered_positions = [
-            dockerfile.index(fragment) for fragment in ordered_fragments
-        ]
-        self.assertEqual(ordered_positions, sorted(ordered_positions))
         reviewed_manifest = json.loads(
             (
                 ROOT / "services/sam-worker/artifact-manifest.json"
             ).read_text("utf-8")
         )
+        adapter_profile = json.loads(
+            (
+                ROOT / "services/sam-worker/adapter-profile.json"
+            ).read_text("utf-8")
+        )
+        labels = dict(
+            re.findall(
+                r'(org[.]opencontainers[.]image[.][a-z-]+|'
+                r'io[.]fabrica[.][a-z0-9.-]+)="([^"]*)"',
+                dockerfile,
+            )
+        )
+        self.assertEqual(
+            labels,
+            {
+                "org.opencontainers.image.source": (
+                    "https://github.com/moodworks/fabrica-kit"
+                ),
+                "org.opencontainers.image.revision": (
+                    "${FABRICA_GIT_SHA}"
+                ),
+                "io.fabrica.source-revision-contract": (
+                    "git-sha40-or-unavailable-v1"
+                ),
+                "io.fabrica.image-use": (
+                    "health-only-non-promotable-v1"
+                ),
+                "io.fabrica.build-contract.version": (
+                    "fabrica-sam-runpod-github-v1"
+                ),
+                "io.fabrica.sam.repository-commit": (
+                    reviewed_manifest["repository"]["commit"]
+                ),
+                "io.fabrica.sam.model-id": (
+                    reviewed_manifest["model"]["modelId"]
+                ),
+                "io.fabrica.sam.config": (
+                    reviewed_manifest["config"]["runtimeIdentity"]
+                ),
+                "io.fabrica.sam.config-sha256": (
+                    reviewed_manifest["config"]["sha256"]
+                ),
+                "io.fabrica.sam.checkpoint-sha256": (
+                    reviewed_manifest["checkpoint"]["sha256"]
+                ),
+                "io.fabrica.sam.artifact-manifest-sha256": (
+                    reviewed_manifest["manifestSha256"]
+                ),
+                "io.fabrica.sam.hosting-profile-sha256": (
+                    DIRECT_HOSTING_PROFILE_SHA256
+                ),
+                "io.fabrica.sam.direct-adapter-profile-sha256": (
+                    "62809b35b0ccf2d28f1bcd086857718a7c909b247adeccdddd587305066449a4"
+                ),
+                "io.fabrica.sam.runtime-adapter-profile-sha256": (
+                    adapter_profile["profileSha256"]
+                ),
+            },
+        )
+        run_instructions: list[str] = []
+        current: list[str] = []
+        for line in dockerfile.splitlines():
+            if line.startswith("RUN "):
+                current = [line]
+            elif current:
+                current.append(line)
+            if current and not current[-1].endswith("\\"):
+                run_instructions.append("\n".join(current))
+                current = []
+        self.assertFalse(current)
+        self.assertEqual(
+            sum("--network=default" in item for item in run_instructions),
+            1,
+        )
+        self.assertTrue(
+            all(
+                "--network=" in instruction
+                for instruction in run_instructions
+            )
+        )
+        self.assertTrue(
+            all(
+                "--network=none" in instruction
+                for instruction in run_instructions
+                if "--network=default" not in instruction
+            )
+        )
+        runtime_stage = dockerfile.split(" AS runtime", 1)[1]
+        self.assertNotIn("--network=default", runtime_stage)
+        self.assertLess(
+            dockerfile.index("verify-dependencies"),
+            dockerfile.index("python -m pip install"),
+        )
+        self.assertLess(
+            dockerfile.index("python -m pip install"),
+            dockerfile.index("verify-installed"),
+        )
+        self.assertLess(
+            dockerfile.index("verify-installed"),
+            dockerfile.index("verify-runtime"),
+        )
+        for required in (
+            "--no-index",
+            "--no-compile",
+            "--find-links=file:///opt/fabrica/wheelhouse",
+            "--require-hashes",
+            "--only-binary=:all:",
+            "--no-deps",
+            "--target=/opt/fabrica/runtime-deps",
+            "rm -rf /opt/fabrica/runtime-deps/bin",
+            "test ! -e /opt/fabrica/runtime-deps/bin",
+            "find /opt/fabrica/runtime-deps -type f -name '*.pyc' -delete",
+            "find /opt/fabrica/runtime-deps -type d -name __pycache__ -empty -delete",
+            "path.suffix == '.pyc' or path.name == '__pycache__'",
+            "EXPOSE 80/tcp",
+            "USER 10001:10001",
+            "HEALTHCHECK NONE",
+            'CMD ["python", "-m", "sam_worker.server"]',
+            "io.fabrica.sam.artifact-manifest-sha256",
+            'io.fabrica.sam.config-sha256="'
+            "e73f9e9547b305040552ee943ebd3a34cee5727a76fc2ab88b87f7b28b430754"
+            '"',
+            "io.fabrica.sam.hosting-profile-sha256",
+            "io.fabrica.sam.direct-adapter-profile-sha256",
+            "io.fabrica.sam.runtime-adapter-profile-sha256",
+        ):
+            self.assertIn(required, dockerfile)
         self.assertEqual(
             reviewed_manifest["dependencies"]["buildStatus"],
-            "unresolved-deployment-time-blocking",
+            "reviewed-wheel-only-ready",
         )
-        self.assertFalse(
+        self.assertTrue(
             reviewed_manifest["dependencies"]["acquisitionOccurred"]
         )
-        self.assertIn("pytorch-base-manifest.json", dockerfile)
-        self.assertIn("pytorch-base-config.json", dockerfile)
-        self.assertIn("wheelhouse-inventory.json", dockerfile)
-        self.assertIn("--platform linux/amd64", dockerfile)
-        self.assertIn("extract-runtime", dockerfile)
-        self.assertIn("verify-runtime", dockerfile)
-        self.assertIn("--target=/opt/fabrica/runtime-deps", dockerfile)
-        self.assertIn("PIP_CONFIG_FILE=/dev/null", dockerfile)
-        self.assertIn("--only-binary=:all:", dockerfile)
-        self.assertIn("--no-deps", dockerfile)
+        self.assertIn("urllib.request", acquisition_source)
+        self.assertIn("_RejectRedirects", acquisition_source)
+        self.assertIn("ProxyHandler({})", acquisition_source)
+        acquisition_body = acquisition_source[
+            acquisition_source.index("def acquire(") :
+        ]
+        self.assertLess(
+            acquisition_body.index("verify_dependency_input_set("),
+            acquisition_body.index("opener = build_opener("),
+        )
+        self.assertLess(
+            acquisition_body.index("verify_dependency_input_set("),
+            acquisition_body.index("_download("),
+        )
         self.assertIn(
-            "--find-links=file:///opt/fabrica/staged/wheelhouse",
+            'ARCHIVE_HOST = "codeload.github.com"',
+            acquisition_source,
+        )
+        self.assertIn(
+            'CHECKPOINT_HOST = "dl.fbaipublicfiles.com"',
+            acquisition_source,
+        )
+        self.assertIn(
+            'WHEEL_HOST = "files.pythonhosted.org"',
+            acquisition_source,
+        )
+        self.assertIn("response.geturl() != url", acquisition_source)
+        self.assertIn("verify_dependency_build_ready(", acquisition_source)
+        self.assertIn("verify_runtime_artifacts(", acquisition_source)
+        self.assertNotIn("runpod", acquisition_source.lower())
+        self.assertNotIn("RUNPOD_API_KEY", acquisition_source)
+        self.assertNotIn(".local-data", dockerfile)
+        self.assertNotIn("COPY .git", dockerfile)
+        self.assertNotIn(
+            "COPY --from=acquisition /opt/fabrica/closed/wheelhouse ",
             dockerfile,
         )
-        self.assertNotIn("pip install --no-cache-dir --no-index --no-build-isolation", dockerfile)
+        self.assertNotIn("acquire_build.py /opt/fabrica/worker", dockerfile)
+        self.assertNotIn(
+            "COPY --from=acquisition /opt/fabrica/build",
+            dockerfile,
+        )
         self.assertNotIn("tar --extract", dockerfile)
         self.assertNotIn("pip install .", dockerfile)
-        self.assertNotIn("requirements.lock.sha256", dockerfile)
-        self.assertNotIn("wheelhouse.sha256", dockerfile)
-        self.assertNotIn(
-            "COPY --from=artifact-audit /opt/fabrica/staged",
-            dockerfile,
-        )
-        self.assertNotIn(
-            "COPY --from=artifact-audit /opt/fabrica/sam2-source.tar.gz",
-            dockerfile,
-        )
-        self.assertIn("USER 10001:10001", dockerfile)
-        self.assertIn("python -m sam_worker.health", dockerfile)
-        self.assertIn("HEALTHCHECK NONE", dockerfile)
-        self.assertIn('CMD ["python", "-m", "sam_worker.server"]', dockerfile)
         for forbidden in ("curl ", "wget ", "git clone", ":latest", "RUNPOD_API_KEY"):
             self.assertNotIn(forbidden, dockerfile)
         runtime_requirements = (
@@ -1330,10 +1918,12 @@ class StaticSourceTests(unittest.TestCase):
             )
         )
         self.assertIn(
-            "torch==2.5.1 and torchvision==0.20.1 are owned by the "
-            "immutable base image",
+            "torch==2.5.1 and torchvision==0.20.1",
             runtime_requirements,
         )
+        self.assertNotIn("hydra-core", runtime_requirements)
+        self.assertNotIn("omegaconf", runtime_requirements)
+        self.assertNotIn("iopath", runtime_requirements)
         self.assertNotIn("runpod", runtime_requirements.lower())
         test_requirements = (
             ROOT / "services/sam-worker/requirements.test.in"
@@ -1342,14 +1932,27 @@ class StaticSourceTests(unittest.TestCase):
         dockerignore = (
             ROOT / "services/sam-worker/Dockerfile.dockerignore"
         ).read_text("utf-8").splitlines()
-        self.assertEqual(dockerignore[0], "**")
         self.assertEqual(
-            set(dockerignore[1:]),
-            {
+            dockerignore,
+            [
+                "**",
                 "!services/",
                 "!services/sam-worker/",
                 "!services/sam-worker/Dockerfile",
                 "!services/sam-worker/artifact-manifest.json",
+                "!services/sam-worker/adapter-profile.json",
+                "!services/sam-worker/dependency-licenses.json",
+                "!services/sam-worker/requirements.lock",
+                "!services/sam-worker/wheelhouse-manifest.json",
+                "!services/sam-worker/acquire_build.py",
+                "!services/sam-worker/runtime-overlay/",
+                "!services/sam-worker/runtime-overlay/iopath/",
+                "!services/sam-worker/runtime-overlay/iopath/__init__.py",
+                "!services/sam-worker/runtime-overlay/iopath/common/",
+                "!services/sam-worker/runtime-overlay/iopath/common/__init__.py",
+                "!services/sam-worker/runtime-overlay/iopath/common/file_io.py",
+                "!services/sam-worker/runtime-overlay/sam2/",
+                "!services/sam-worker/runtime-overlay/sam2/__init__.py",
                 "!services/sam-worker/sam_worker/",
                 "!services/sam-worker/sam_worker/__init__.py",
                 "!services/sam-worker/sam_worker/app.py",
@@ -1357,51 +1960,56 @@ class StaticSourceTests(unittest.TestCase):
                 "!services/sam-worker/sam_worker/engine.py",
                 "!services/sam-worker/sam_worker/health.py",
                 "!services/sam-worker/sam_worker/hosting.py",
+                "!services/sam-worker/sam_worker/model_loader.py",
                 "!services/sam-worker/sam_worker/protocol.py",
                 "!services/sam-worker/sam_worker/runtime.py",
                 "!services/sam-worker/sam_worker/server.py",
-                "!.local-data/",
-                "!.local-data/banner-ai/",
-                "!.local-data/banner-ai/sam-worker-build/",
-                "!.local-data/banner-ai/sam-worker-build/requirements.lock",
-                "!.local-data/banner-ai/sam-worker-build/"
-                "wheelhouse-inventory.json",
-                "!.local-data/banner-ai/sam-worker-build/wheelhouse/",
-                "!.local-data/banner-ai/sam-worker-build/"
-                "wheelhouse/*.whl",
-                "!.local-data/banner-ai/sam-worker-build/"
-                "sam2-source.tar.gz",
-                "!.local-data/banner-ai/sam-worker-build/"
-                "sam2.1_hiera_b+.yaml",
-                "!.local-data/banner-ai/sam-worker-build/"
-                "sam2.1_hiera_base_plus.pt",
-                "!.local-data/banner-ai/sam-worker-build/LICENSE",
-                "!.local-data/banner-ai/sam-worker-build/"
-                "LICENSE_cctorch",
-                "!.local-data/banner-ai/sam-worker-build/"
-                "pytorch-base-manifest.json",
-                "!.local-data/banner-ai/sam-worker-build/"
-                "pytorch-base-config.json",
-            },
+            ],
         )
-        self.assertFalse(
-            any(
-                token in line
-                for line in dockerignore[1:]
-                for token in (
-                    "**",
-                    ".git",
-                    ".env",
-                    "__pycache__",
-                    "*.pyc",
-                    "secrets",
-                )
+        required_context = {
+            "!services/sam-worker/Dockerfile",
+            "!services/sam-worker/artifact-manifest.json",
+            "!services/sam-worker/adapter-profile.json",
+            "!services/sam-worker/dependency-licenses.json",
+            "!services/sam-worker/requirements.lock",
+            "!services/sam-worker/wheelhouse-manifest.json",
+            "!services/sam-worker/acquire_build.py",
+            "!services/sam-worker/sam_worker/model_loader.py",
+            "!services/sam-worker/runtime-overlay/iopath/common/file_io.py",
+            "!services/sam-worker/runtime-overlay/sam2/__init__.py",
+        }
+        self.assertTrue(required_context.issubset(set(dockerignore)))
+        for included in required_context:
+            self.assertTrue(
+                (ROOT / included[1:]).is_file(),
+                included,
+            )
+        context_copy_sources = set(
+            re.findall(
+                r"^COPY (?!--from=)([^ ]+) ",
+                dockerfile,
+                flags=re.MULTILINE,
             )
         )
-        self.assertNotIn("!services/sam-worker/sam_worker/*.py", dockerignore)
-        self.assertNotIn(
-            "!.local-data/banner-ai/sam-worker-build/**", dockerignore
+        self.assertEqual(
+            context_copy_sources,
+            {
+                "services/sam-worker/sam_worker",
+                "services/sam-worker/runtime-overlay",
+                "services/sam-worker/artifact-manifest.json",
+                "services/sam-worker/adapter-profile.json",
+                "services/sam-worker/dependency-licenses.json",
+                "services/sam-worker/requirements.lock",
+                "services/sam-worker/wheelhouse-manifest.json",
+                "services/sam-worker/acquire_build.py",
+            },
         )
+        for source in context_copy_sources:
+            self.assertTrue((ROOT / source).exists(), source)
+        self.assertFalse(
+            any(".local-data" in line for line in dockerignore)
+        )
+        self.assertNotIn("!services/sam-worker/sam_worker/*.py", dockerignore)
         self.assertIn(
             "from .artifacts import",
             health_source,
@@ -1409,6 +2017,29 @@ class StaticSourceTests(unittest.TestCase):
         self.assertNotIn("from .engine", health_source)
         self.assertNotIn("ProductionSamEngine", health_source)
         self.assertNotIn(".load(", health_source)
+        for required in (
+            "IMAGE_REQUIREMENTS_LOCK_PATH",
+            "IMAGE_WHEELHOUSE_MANIFEST_PATH",
+            "IMAGE_DEPENDENCY_LICENSES_PATH",
+            "IMAGE_RUNTIME_DEPENDENCIES_ROOT",
+        ):
+            self.assertIn(required, health_source)
+        self.assertEqual(
+            [
+                line
+                for line in dockerfile.splitlines()
+                if line.startswith("ARG ")
+            ],
+            ["ARG FABRICA_GIT_SHA=unavailable"],
+        )
+        for source in (dockerfile, acquisition_source):
+            for forbidden in (
+                "RUNPOD_API_KEY",
+                "RUNPOD_API_URL",
+                "api.runpod.io",
+                "Authorization:",
+            ):
+                self.assertNotIn(forbidden, source)
 
     def test_legacy_example_manifests_are_replaced_by_reviewed_manifest(
         self,

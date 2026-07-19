@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import email.policy
 import hashlib
+import importlib.metadata
 import json
 import os
 import posixpath
@@ -20,7 +21,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any, Dict, Iterable, List, Mapping, Sequence, Tuple
 
 REVIEWED_ARTIFACT_MANIFEST_SHA256 = (
-    "84d7743701a0f9aa9d76716e771155fc6de6a0b6c5bc84746f55a8725f6a5529"
+    "a2211fc5f29892678669a86d197ae5215ecfde2c1ad3a85ad9c39093e20f516b"
 )
 MANIFEST_MAXIMUM_BYTES = 64_000
 TREE_DIGEST_DOMAIN = b"fabrica-path-content-tree-v1\x00"
@@ -36,6 +37,23 @@ IMAGE_CHECKPOINT_PATH = (
     Path("/opt/fabrica/sam/checkpoints") / "sam2.1_hiera_base_plus.pt"
 )
 IMAGE_LICENSE_ROOT = Path("/opt/fabrica/sam/licenses")
+IMAGE_ADAPTER_PROFILE_PATH = Path("/opt/fabrica/sam/adapter-profile.json")
+IMAGE_DEPENDENCY_LICENSES_PATH = Path(
+    "/opt/fabrica/sam/dependency-licenses.json"
+)
+IMAGE_REQUIREMENTS_LOCK_PATH = Path(
+    "/opt/fabrica/sam/requirements.lock"
+)
+IMAGE_WHEELHOUSE_MANIFEST_PATH = Path(
+    "/opt/fabrica/sam/wheelhouse-manifest.json"
+)
+IMAGE_RUNTIME_DEPENDENCIES_ROOT = Path(
+    "/opt/fabrica/runtime-deps"
+)
+IMAGE_OVERLAY_ROOT = Path("/opt/fabrica/sam2-overlay")
+IMAGE_MODEL_LOADER_PATH = Path(
+    "/opt/fabrica/worker/sam_worker/model_loader.py"
+)
 SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 RFC3339_UTC_PATTERN = re.compile(
     r"^(?P<date>[0-9]{4}-[0-9]{2}-[0-9]{2})T"
@@ -71,6 +89,79 @@ FORBIDDEN_IMPORT_NAMESPACES = {
     "torchvision",
     "nvidia",
     "triton",
+}
+REVIEWED_ADAPTER_TARGET_INVENTORY = [
+    {"path": "model", "target": "sam2.modeling.sam2_base.SAM2Base"},
+    {
+        "path": "model.image_encoder",
+        "target": "sam2.modeling.backbones.image_encoder.ImageEncoder",
+    },
+    {
+        "path": "model.image_encoder.trunk",
+        "target": "sam2.modeling.backbones.hieradet.Hiera",
+    },
+    {
+        "path": "model.image_encoder.neck",
+        "target": "sam2.modeling.backbones.image_encoder.FpnNeck",
+    },
+    {
+        "path": "model.image_encoder.neck.position_encoding",
+        "target": "sam2.modeling.position_encoding.PositionEmbeddingSine",
+    },
+    {
+        "path": "model.memory_attention",
+        "target": "sam2.modeling.memory_attention.MemoryAttention",
+    },
+    {
+        "path": "model.memory_attention.layer",
+        "target": "sam2.modeling.memory_attention.MemoryAttentionLayer",
+    },
+    {
+        "path": "model.memory_attention.layer.self_attention",
+        "target": "sam2.modeling.sam.transformer.RoPEAttention",
+    },
+    {
+        "path": "model.memory_attention.layer.cross_attention",
+        "target": "sam2.modeling.sam.transformer.RoPEAttention",
+    },
+    {
+        "path": "model.memory_encoder",
+        "target": "sam2.modeling.memory_encoder.MemoryEncoder",
+    },
+    {
+        "path": "model.memory_encoder.position_encoding",
+        "target": "sam2.modeling.position_encoding.PositionEmbeddingSine",
+    },
+    {
+        "path": "model.memory_encoder.mask_downsampler",
+        "target": "sam2.modeling.memory_encoder.MaskDownSampler",
+    },
+    {
+        "path": "model.memory_encoder.fuser",
+        "target": "sam2.modeling.memory_encoder.Fuser",
+    },
+    {
+        "path": "model.memory_encoder.fuser.layer",
+        "target": "sam2.modeling.memory_encoder.CXBlock",
+    },
+]
+REVIEWED_DEPENDENCY_LICENSES = {
+    "annotated-types": "MIT",
+    "anyio": "MIT",
+    "click": "BSD-3-Clause",
+    "fastapi": "MIT",
+    "h11": "MIT",
+    "idna": "BSD-3-Clause",
+    "numpy": "BSD-3-Clause",
+    "pillow": "MIT-CMU",
+    "pydantic": "MIT",
+    "pydantic-core": "MIT",
+    "pyyaml": "MIT",
+    "starlette": "BSD-3-Clause",
+    "tqdm": "MPL-2.0 AND MIT",
+    "typing-extensions": "PSF-2.0",
+    "typing-inspection": "MIT",
+    "uvicorn": "BSD-3-Clause",
 }
 
 
@@ -887,7 +978,10 @@ def validate_reviewed_manifest(
         manifest["dependencies"],
         {
             "acquisitionOccurred",
+            "adapterProfile",
+            "baseOwned",
             "buildStatus",
+            "dependencyLicenses",
             "requirementsLock",
             "wheelhouseInventory",
             "policy",
@@ -904,10 +998,41 @@ def validate_reviewed_manifest(
         {"status", "byteSize", "sha256"},
         "artifactManifest.dependencies.wheelhouseInventory",
     )
+    dependency_licenses = _closed_object(
+        dependencies["dependencyLicenses"],
+        {"status", "byteSize", "sha256"},
+        "artifactManifest.dependencies.dependencyLicenses",
+    )
+    adapter_profile = _closed_object(
+        dependencies["adapterProfile"],
+        {"status", "byteSize", "sha256"},
+        "artifactManifest.dependencies.adapterProfile",
+    )
+    base_owned = _list(
+        dependencies["baseOwned"],
+        2,
+        "artifactManifest.dependencies.baseOwned",
+    )
+    if base_owned != [
+        {
+            "assertAtBuild": True,
+            "name": "torch",
+            "version": "2.5.1",
+        },
+        {
+            "assertAtBuild": True,
+            "compatibleWith": "torch==2.5.1",
+            "name": "torchvision",
+            "version": "0.20.1",
+        },
+    ]:
+        raise ArtifactError("Base-owned dependency assertions drifted.")
     dependency_policy = _closed_object(
         dependencies["policy"],
         {
+            "downloadOnlyExactUrls",
             "lockFormat",
+            "requireMetadataClosure",
             "wheelhouseFormat",
             "wheelFilesOnly",
             "rejectDirectUrls",
@@ -921,7 +1046,9 @@ def validate_reviewed_manifest(
         "artifactManifest.dependencies.policy",
     )
     expected_dependency_policy = {
+        "downloadOnlyExactUrls": True,
         "lockFormat": "pip-require-hashes-no-directives-v1",
+        "requireMetadataClosure": True,
         "wheelhouseFormat": "fabrica-wheel-only-inventory-v1",
         "wheelFilesOnly": True,
         "rejectDirectUrls": True,
@@ -944,6 +1071,8 @@ def validate_reviewed_manifest(
         is not True
         for field in (
             "wheelFilesOnly",
+            "downloadOnlyExactUrls",
+            "requireMetadataClosure",
             "rejectDirectUrls",
             "rejectVcs",
             "rejectEditables",
@@ -963,6 +1092,10 @@ def validate_reviewed_manifest(
             != {"status": "unresolved", "byteSize": None, "sha256": None}
             or wheelhouse_inventory
             != {"status": "unresolved", "byteSize": None, "sha256": None}
+            or dependency_licenses
+            != {"status": "unresolved", "byteSize": None, "sha256": None}
+            or adapter_profile
+            != {"status": "unresolved", "byteSize": None, "sha256": None}
         ):
             raise ArtifactError(
                 "Reviewed unresolved dependency gate drifted."
@@ -980,6 +1113,14 @@ def validate_reviewed_manifest(
             (
                 wheelhouse_inventory,
                 "artifactManifest.dependencies.wheelhouseInventory",
+            ),
+            (
+                dependency_licenses,
+                "artifactManifest.dependencies.dependencyLicenses",
+            ),
+            (
+                adapter_profile,
+                "artifactManifest.dependencies.adapterProfile",
             ),
         ):
             if identity["status"] != "reviewed":
@@ -1737,7 +1878,16 @@ def parse_wheelhouse_inventory(data: bytes) -> Sequence[Mapping[str, Any]]:
         or len(inventory["wheels"]) > 256
     ):
         raise ArtifactError("Wheelhouse inventory identity is invalid.")
-    expected_encoding = (canonical_json(inventory) + "\n").encode("utf-8")
+    expected_encoding = (
+        json.dumps(
+            inventory,
+            ensure_ascii=False,
+            indent=2,
+            sort_keys=True,
+            allow_nan=False,
+        )
+        + "\n"
+    ).encode("utf-8")
     if data != expected_encoding:
         raise ArtifactError("Wheelhouse inventory encoding is not canonical.")
     filenames: List[str] = []
@@ -1745,7 +1895,7 @@ def parse_wheelhouse_inventory(data: bytes) -> Sequence[Mapping[str, Any]]:
     for value in inventory["wheels"]:
         entry = _closed_object(
             value,
-            {"filename", "byteSize", "sha256"},
+            {"filename", "byteSize", "sha256", "url"},
             "wheelhouseInventory.wheels entry",
         )
         filename = _string(
@@ -1771,6 +1921,18 @@ def parse_wheelhouse_inventory(data: bytes) -> Sequence[Mapping[str, Any]]:
         _sha256(
             entry["sha256"], "wheelhouseInventory.wheels.sha256"
         )
+        url = _string(entry["url"], "wheelhouseInventory.wheels.url")
+        if (
+            not url.isascii()
+            or not url.startswith(
+                "https://files.pythonhosted.org/packages/"
+            )
+            or "?" in url
+            or "#" in url
+            or "\\" in url
+            or url.rsplit("/", 1)[-1] != filename
+        ):
+            raise ArtifactError("Wheel acquisition URL is not reviewed.")
         filenames.append(filename)
         entries.append(entry)
     _validate_collision_free(filenames, "Wheelhouse inventory")
@@ -1781,6 +1943,127 @@ def parse_wheelhouse_inventory(data: bytes) -> Sequence[Mapping[str, Any]]:
     return entries
 
 
+def parse_dependency_licenses(
+    data: bytes,
+    *,
+    locked: Mapping[str, Tuple[str, str]],
+    inventory: Sequence[Mapping[str, Any]],
+) -> Mapping[str, Tuple[str, ...]]:
+    value = strict_json_bytes(data)
+    value = _closed_object(
+        value,
+        {
+            "baseOwned",
+            "inventoryKind",
+            "inventoryVersion",
+            "packages",
+            "target",
+        },
+        "dependencyLicenses",
+    )
+    if (
+        value["inventoryKind"]
+        != "fabrica-runtime-dependency-licenses-v1"
+        or value["inventoryVersion"] != 1
+        or value["target"]
+        != {
+            "implementation": "CPython",
+            "platform": "linux/amd64",
+            "python": "3.11",
+        }
+        or value["baseOwned"]
+        != [
+            {
+                "assertion": "importlib.metadata.version",
+                "license": "BSD-3-Clause",
+                "name": "torch",
+                "source": "immutable-pytorch-base",
+                "version": "2.5.1",
+            },
+            {
+                "assertion": "importlib.metadata.version",
+                "compatibility": "torch==2.5.1",
+                "license": "BSD-3-Clause",
+                "name": "torchvision",
+                "source": "immutable-pytorch-base",
+                "version": "0.20.1",
+            },
+        ]
+        or not isinstance(value["packages"], list)
+        or len(value["packages"]) != len(locked)
+    ):
+        raise ArtifactError("Dependency license inventory identity drifted.")
+    filename_by_name: Dict[str, str] = {}
+    for wheel in inventory:
+        match = WHEEL_FILENAME_PATTERN.fullmatch(wheel["filename"])
+        if match is None:
+            raise ArtifactError("Dependency license wheel identity drifted.")
+        name = _canonical_distribution_name(match.group("distribution"))
+        filename_by_name[name] = wheel["filename"]
+    observed: Dict[str, Tuple[str, ...]] = {}
+    package_names: List[str] = []
+    for package in value["packages"]:
+        package = _closed_object(
+            package,
+            {
+                "evidence",
+                "filename",
+                "license",
+                "name",
+                "runtimeDependencies",
+                "version",
+            },
+            "dependencyLicenses.packages entry",
+        )
+        name = _string(package["name"], "dependencyLicenses.packages.name")
+        version = _string(
+            package["version"], "dependencyLicenses.packages.version"
+        )
+        if (
+            _canonical_distribution_name(name) != name
+            or name not in locked
+            or locked[name][0] != version
+            or filename_by_name.get(name) != package["filename"]
+            or package["license"] != REVIEWED_DEPENDENCY_LICENSES.get(name)
+            or not _string(
+                package["evidence"], "dependencyLicenses.packages.evidence"
+            ).startswith("wheel-METADATA")
+            or not isinstance(package["runtimeDependencies"], list)
+        ):
+            raise ArtifactError("Dependency license package binding drifted.")
+        dependencies: List[str] = []
+        for dependency in package["runtimeDependencies"]:
+            dependency_name = _string(
+                dependency,
+                "dependencyLicenses.packages.runtimeDependencies",
+            )
+            if (
+                _canonical_distribution_name(dependency_name)
+                != dependency_name
+                or dependency_name not in locked
+                or dependency_name == name
+            ):
+                raise ArtifactError(
+                    "Dependency metadata closure is not locked."
+                )
+            dependencies.append(dependency_name)
+        if dependencies != sorted(
+            set(dependencies), key=lambda item: item.encode("ascii")
+        ):
+            raise ArtifactError(
+                "Dependency metadata closure ordering drifted."
+            )
+        if name in observed:
+            raise ArtifactError("Dependency license package is duplicated.")
+        observed[name] = tuple(dependencies)
+        package_names.append(name)
+    if package_names != sorted(
+        package_names, key=lambda item: item.encode("ascii")
+    ) or set(observed) != set(locked):
+        raise ArtifactError("Dependency license inventory is incomplete.")
+    return observed
+
+
 def _single_metadata_header(message: Any, name: str) -> str:
     values = message.get_all(name, [])
     if len(values) != 1 or not isinstance(values[0], str) or not values[0]:
@@ -1788,11 +2071,43 @@ def _single_metadata_header(message: Any, name: str) -> str:
     return values[0]
 
 
-def audit_wheel(
+def _active_runtime_dependency_names(message: Any) -> Tuple[str, ...]:
+    names: set[str] = set()
+    for requirement in message.get_all("Requires-Dist", []):
+        if not isinstance(requirement, str) or not requirement:
+            raise ArtifactError("Wheel dependency metadata drifted.")
+        marker = requirement.split(";", 1)[1].strip() if ";" in requirement else ""
+        if "extra ==" in marker:
+            continue
+        if marker in {
+            "python_version < '3.9'",
+            'python_version < "3.10"',
+            "python_version < '3.10'",
+            'python_version < "3.11"',
+            "python_version < '3.11'",
+            "platform_system == 'Windows'",
+            'platform_system == "Windows"',
+            "sys_platform == 'win32'",
+            'sys_platform == "win32"',
+        }:
+            continue
+        if marker not in {"", 'python_version < "3.13"', "python_version < '3.13'"}:
+            raise ArtifactError("Wheel dependency marker is unsupported.")
+        match = re.match(
+            r"^[ \t]*(?P<name>[A-Za-z0-9]+(?:[-_.][A-Za-z0-9]+)*)",
+            requirement,
+        )
+        if match is None:
+            raise ArtifactError("Wheel dependency metadata drifted.")
+        names.add(_canonical_distribution_name(match.group("name")))
+    return tuple(sorted(names, key=lambda item: item.encode("ascii")))
+
+
+def _audit_wheel_details(
     wheel_path: Path,
     *,
     expected_filename: str,
-) -> Tuple[str, str]:
+) -> Tuple[str, str, Tuple[str, ...]]:
     filename_match = WHEEL_FILENAME_PATTERN.fullmatch(expected_filename)
     if filename_match is None:
         raise ArtifactError("Wheel filename grammar drifted.")
@@ -1964,16 +2279,37 @@ def audit_wheel(
         or canonical_name.startswith("nvidia-")
     ):
         raise ArtifactError("Wheel distribution identity drifted.")
-    return canonical_name, metadata_version
+    return (
+        canonical_name,
+        metadata_version,
+        _active_runtime_dependency_names(metadata_message),
+    )
 
 
-def verify_dependency_build_ready(
+def audit_wheel(
+    wheel_path: Path,
+    *,
+    expected_filename: str,
+) -> Tuple[str, str]:
+    name, version, _dependencies = _audit_wheel_details(
+        wheel_path, expected_filename=expected_filename
+    )
+    return name, version
+
+
+def verify_dependency_input_set(
     manifest: Mapping[str, Any],
     *,
     requirements_lock_path: Path,
     wheelhouse_inventory_path: Path,
-    wheelhouse_root: Path,
-) -> None:
+    dependency_licenses_path: Path,
+) -> Tuple[
+    Mapping[str, Tuple[str, str]],
+    Sequence[Mapping[str, Any]],
+    Mapping[str, Tuple[str, ...]],
+]:
+    """Verify the manifest-bound dependency graph before any wheel request."""
+
     dependencies = manifest["dependencies"]
     if (
         dependencies["buildStatus"] != "reviewed-wheel-only-ready"
@@ -1992,8 +2328,58 @@ def verify_dependency_build_ready(
         dependencies["wheelhouseInventory"],
         "Reviewed wheelhouse inventory",
     )
+    dependency_license_data = _read_verified_dependency_file(
+        dependency_licenses_path,
+        dependencies["dependencyLicenses"],
+        "Reviewed dependency license inventory",
+    )
     locked = parse_dependency_lock(lock_data)
     inventory = parse_wheelhouse_inventory(inventory_data)
+    observed: Dict[str, Tuple[str, str]] = {}
+    for identity in inventory:
+        filename_match = WHEEL_FILENAME_PATTERN.fullmatch(
+            identity["filename"]
+        )
+        if filename_match is None:
+            raise ArtifactError("Wheelhouse package identity drifted.")
+        name = _canonical_distribution_name(
+            filename_match.group("distribution")
+        )
+        version_and_hash = (
+            filename_match.group("version"),
+            identity["sha256"],
+        )
+        if name in observed:
+            raise ArtifactError(
+                "Wheelhouse contains duplicate distribution wheels."
+            )
+        observed[name] = version_and_hash
+    if observed != dict(locked):
+        raise ArtifactError(
+            "Dependency lock and wheelhouse package closure drifted."
+        )
+    license_dependencies = parse_dependency_licenses(
+        dependency_license_data,
+        locked=locked,
+        inventory=inventory,
+    )
+    return locked, inventory, license_dependencies
+
+
+def verify_dependency_build_ready(
+    manifest: Mapping[str, Any],
+    *,
+    requirements_lock_path: Path,
+    wheelhouse_inventory_path: Path,
+    dependency_licenses_path: Path,
+    wheelhouse_root: Path,
+) -> None:
+    locked, inventory, license_dependencies = verify_dependency_input_set(
+        manifest,
+        requirements_lock_path=requirements_lock_path,
+        wheelhouse_inventory_path=wheelhouse_inventory_path,
+        dependency_licenses_path=dependency_licenses_path,
+    )
     try:
         metadata = wheelhouse_root.lstat()
         with os.scandir(wheelhouse_root) as directory_entries:
@@ -2018,7 +2404,7 @@ def verify_dependency_build_ready(
             identity["sha256"],
             "Reviewed wheel",
         )
-        name, version = audit_wheel(
+        name, version, runtime_dependencies = _audit_wheel_details(
             wheel_path, expected_filename=identity["filename"]
         )
         if name in observed:
@@ -2026,10 +2412,321 @@ def verify_dependency_build_ready(
                 "Wheelhouse contains duplicate distribution wheels."
             )
         observed[name] = (version, identity["sha256"])
+        if runtime_dependencies != license_dependencies.get(name):
+            raise ArtifactError(
+                "Wheel dependency metadata closure drifted."
+            )
     if observed != dict(locked):
         raise ArtifactError(
             "Dependency lock and wheelhouse package closure drifted."
         )
+
+
+def verify_installed_dependencies(
+    *,
+    manifest: Mapping[str, Any],
+    requirements_lock_path: Path,
+    runtime_dependencies_root: Path,
+) -> None:
+    lock_data = _read_verified_dependency_file(
+        requirements_lock_path,
+        manifest["dependencies"]["requirementsLock"],
+        "Reviewed dependency lock",
+    )
+    locked = parse_dependency_lock(lock_data)
+    try:
+        metadata = runtime_dependencies_root.lstat()
+    except OSError as error:
+        raise ArtifactError("Installed dependency root is absent.") from error
+    if (
+        not stat.S_ISDIR(metadata.st_mode)
+        or runtime_dependencies_root.is_symlink()
+    ):
+        raise ArtifactError("Installed dependency root type drifted.")
+    observed: Dict[str, str] = {}
+    try:
+        distributions = importlib.metadata.distributions(
+            path=[str(runtime_dependencies_root)]
+        )
+        for distribution in distributions:
+            name = _canonical_distribution_name(
+                distribution.metadata["Name"]
+            )
+            version = distribution.version
+            if name in observed:
+                raise ArtifactError(
+                    "Installed dependency is duplicated."
+                )
+            observed[name] = version
+    except ArtifactError:
+        raise
+    except (KeyError, OSError, TypeError, ValueError) as error:
+        raise ArtifactError(
+            "Installed dependency metadata is invalid."
+        ) from error
+    if observed != {
+        name: version for name, (version, _digest) in locked.items()
+    }:
+        raise ArtifactError("Installed dependency closure drifted.")
+    for namespace in FORBIDDEN_IMPORT_NAMESPACES:
+        for candidate in (
+            runtime_dependencies_root / namespace,
+            runtime_dependencies_root / (namespace + ".py"),
+        ):
+            if candidate.exists() or candidate.is_symlink():
+                raise ArtifactError(
+                    "Installed dependency shadows a protected namespace."
+                )
+
+
+def verify_runtime_adapter(
+    manifest: Mapping[str, Any],
+    *,
+    adapter_profile_path: Path,
+    overlay_root: Path,
+    model_loader_path: Path,
+    source_root: Path,
+) -> Mapping[str, Any]:
+    profile_data = _read_verified_dependency_file(
+        adapter_profile_path,
+        manifest["dependencies"]["adapterProfile"],
+        "Reviewed adapter profile",
+    )
+    profile = strict_json_bytes(profile_data)
+    profile = _closed_object(
+        profile,
+        {
+            "config",
+            "contractVersion",
+            "generalHydraCompatibilityClaim",
+            "iopathRefusal",
+            "loader",
+            "overlay",
+            "postprocessingOverrides",
+            "profileSha256",
+            "semanticCompatibilityStatus",
+            "upstreamHydraBypassed",
+            "upstreamPackageInitializerExecuted",
+        },
+        "adapterProfile",
+    )
+    profile_digest = _sha256(
+        profile["profileSha256"], "adapterProfile.profileSha256"
+    )
+    core = dict(profile)
+    del core["profileSha256"]
+    if hashlib.sha256(
+        canonical_json(core).encode("utf-8")
+    ).hexdigest() != profile_digest:
+        raise ArtifactError("Adapter profile self-digest drifted.")
+    if (
+        profile["contractVersion"]
+        != "fabrica-sam-selected-config-adapter-v1"
+        or profile["semanticCompatibilityStatus"]
+        != "deferred-no-torch-or-sam-execution"
+        or profile["upstreamHydraBypassed"] is not True
+        or profile["upstreamPackageInitializerExecuted"] is not False
+        or profile["generalHydraCompatibilityClaim"] is not False
+    ):
+        raise ArtifactError("Adapter profile policy drifted.")
+
+    config = _closed_object(
+        profile["config"],
+        {
+            "byteSize",
+            "parsedCanonicalSha256",
+            "repositoryPath",
+            "sha256",
+            "targetInventory",
+            "targetOccurrenceCount",
+            "uniqueTargetCount",
+        },
+        "adapterProfile.config",
+    )
+    target_inventory = _list(
+        config["targetInventory"], 14, "adapterProfile.config.targetInventory"
+    )
+    target_paths: List[str] = []
+    target_values: List[str] = []
+    for item in target_inventory:
+        target = _closed_object(
+            item, {"path", "target"}, "adapterProfile.config.targetInventory entry"
+        )
+        target_paths.append(
+            _safe_repository_path(
+                target["path"].replace(".", "/"),
+                "adapterProfile.config.targetInventory.path",
+            ).replace("/", ".")
+        )
+        target_values.append(
+            _string(
+                target["target"],
+                "adapterProfile.config.targetInventory.target",
+            )
+        )
+    if (
+        config["repositoryPath"] != manifest["config"]["repositoryPath"]
+        or config["byteSize"] != manifest["config"]["byteSize"]
+        or config["sha256"] != manifest["config"]["sha256"]
+        or config["parsedCanonicalSha256"]
+        != "4c9b2a847cc3672fdc80cddf09bb5b4128e3b35d5ebbc732e3b1142d5de5f080"
+        or config["targetOccurrenceCount"] != 14
+        or config["uniqueTargetCount"] != 12
+        or target_inventory != REVIEWED_ADAPTER_TARGET_INVENTORY
+        or len(set(target_paths)) != 14
+        or len(set(target_values)) != 12
+    ):
+        raise ArtifactError("Adapter selected-config binding drifted.")
+
+    loader = _closed_object(
+        profile["loader"],
+        {"byteSize", "imagePath", "path", "sha256"},
+        "adapterProfile.loader",
+    )
+    if (
+        loader["path"]
+        != "services/sam-worker/sam_worker/model_loader.py"
+        or loader["imagePath"] != str(IMAGE_MODEL_LOADER_PATH)
+        or model_loader_path != IMAGE_MODEL_LOADER_PATH
+    ):
+        raise ArtifactError("Adapter loader path binding drifted.")
+    verify_file_identity(
+        model_loader_path,
+        _integer(loader["byteSize"], 1, 100_000, "adapterProfile.loader.byteSize"),
+        _sha256(loader["sha256"], "adapterProfile.loader.sha256"),
+        "Reviewed adapter loader",
+    )
+
+    overlay = _closed_object(
+        profile["overlay"],
+        {
+            "digestAlgorithm",
+            "files",
+            "imageRoot",
+            "regularFileBytes",
+            "regularFileCount",
+            "root",
+            "sha256",
+        },
+        "adapterProfile.overlay",
+    )
+    if (
+        overlay["root"] != "services/sam-worker/runtime-overlay"
+        or overlay["imageRoot"] != str(IMAGE_OVERLAY_ROOT)
+        or overlay_root != IMAGE_OVERLAY_ROOT
+        or overlay["digestAlgorithm"] != "fabrica-path-content-tree-v1"
+    ):
+        raise ArtifactError("Adapter overlay path binding drifted.")
+    file_specs = _list(
+        overlay["files"],
+        _integer(
+            overlay["regularFileCount"],
+            1,
+            32,
+            "adapterProfile.overlay.regularFileCount",
+        ),
+        "adapterProfile.overlay.files",
+    )
+    specs: Dict[str, Mapping[str, Any]] = {}
+    for value in file_specs:
+        identity = _closed_object(
+            value,
+            {"byteSize", "path", "sha256"},
+            "adapterProfile.overlay.files entry",
+        )
+        path = _safe_repository_path(
+            identity["path"], "adapterProfile.overlay.files.path"
+        )
+        _integer(
+            identity["byteSize"],
+            1,
+            100_000,
+            "adapterProfile.overlay.files.byteSize",
+        )
+        _sha256(identity["sha256"], "adapterProfile.overlay.files.sha256")
+        specs[path] = identity
+    if set(specs) != {
+        "iopath/__init__.py",
+        "iopath/common/__init__.py",
+        "iopath/common/file_io.py",
+        "sam2/__init__.py",
+    }:
+        raise ArtifactError("Adapter overlay file inventory drifted.")
+    try:
+        root_metadata = overlay_root.lstat()
+        entries = [
+            path
+            for path in overlay_root.rglob("*")
+        ]
+    except OSError as error:
+        raise ArtifactError("Adapter overlay is absent.") from error
+    if not stat.S_ISDIR(root_metadata.st_mode) or overlay_root.is_symlink():
+        raise ArtifactError("Adapter overlay root type drifted.")
+    actual_files: Dict[str, bytes] = {}
+    actual_directories: set[str] = set()
+    for path in entries:
+        relative = path.relative_to(overlay_root).as_posix()
+        metadata = path.lstat()
+        if stat.S_ISDIR(metadata.st_mode) and not path.is_symlink():
+            actual_directories.add(relative)
+        elif stat.S_ISREG(metadata.st_mode) and not path.is_symlink():
+            actual_files[relative] = path.read_bytes()
+        else:
+            raise ArtifactError("Adapter overlay contains a forbidden entry.")
+    if actual_directories != {"iopath", "iopath/common", "sam2"}:
+        raise ArtifactError("Adapter overlay directory inventory drifted.")
+    if set(actual_files) != set(specs):
+        raise ArtifactError("Adapter overlay file inventory drifted.")
+    records: List[Tuple[str, str, bytes | str]] = []
+    for path, data in actual_files.items():
+        identity = specs[path]
+        if (
+            len(data) != identity["byteSize"]
+            or hashlib.sha256(data).hexdigest() != identity["sha256"]
+        ):
+            raise ArtifactError("Adapter overlay file identity drifted.")
+        records.append(("F", path, data))
+    if (
+        sum(len(data) for data in actual_files.values())
+        != overlay["regularFileBytes"]
+        or path_content_tree_digest(records) != overlay["sha256"]
+    ):
+        raise ArtifactError("Adapter overlay tree identity drifted.")
+
+    iopath = _closed_object(
+        profile["iopathRefusal"],
+        {
+            "generalIopathCompatibilityClaim",
+            "hieraRepositoryPath",
+            "hieraSha256",
+            "openBehavior",
+            "selectedConfigContainsWeightsPath",
+        },
+        "adapterProfile.iopathRefusal",
+    )
+    if (
+        iopath["generalIopathCompatibilityClaim"] is not False
+        or iopath["selectedConfigContainsWeightsPath"] is not False
+        or iopath["openBehavior"] != "immediate-fixed-redacted-refusal"
+        or iopath["hieraRepositoryPath"]
+        != "sam2/modeling/backbones/hieradet.py"
+        or iopath["hieraSha256"]
+        != "03785581ca304d0451ae0df7a08ee0bf1e1dbe66fad285066e6b9ffc0d88d64f"
+    ):
+        raise ArtifactError("Adapter iopath refusal binding drifted.")
+    verify_file_identity(
+        source_root / iopath["hieraRepositoryPath"],
+        10_003,
+        iopath["hieraSha256"],
+        "Reviewed Hiera source",
+    )
+    if profile["postprocessingOverrides"] != {
+        "dynamic_multimask_stability_delta": 0.05,
+        "dynamic_multimask_stability_thresh": 0.98,
+        "dynamic_multimask_via_stability": True,
+    }:
+        raise ArtifactError("Adapter postprocessing parity drifted.")
+    return profile
 
 
 def verify_build_input_artifacts(
@@ -2043,6 +2740,7 @@ def verify_build_input_artifacts(
     base_config_json_path: Path,
     requirements_lock_path: Path,
     wheelhouse_inventory_path: Path,
+    dependency_licenses_path: Path,
     wheelhouse_root: Path,
     immutable_base_reference: str,
     platform: str,
@@ -2051,6 +2749,7 @@ def verify_build_input_artifacts(
         manifest,
         requirements_lock_path=requirements_lock_path,
         wheelhouse_inventory_path=wheelhouse_inventory_path,
+        dependency_licenses_path=dependency_licenses_path,
         wheelhouse_root=wheelhouse_root,
     )
     verify_base_image_selection(
@@ -2266,6 +2965,13 @@ def preflight_runtime_artifacts(
     source_root: Path,
     checkpoint_path: Path,
     licenses_root: Path,
+    adapter_profile_path: Path | None = None,
+    overlay_root: Path | None = None,
+    model_loader_path: Path | None = None,
+    requirements_lock_path: Path | None = None,
+    wheelhouse_inventory_path: Path | None = None,
+    dependency_licenses_path: Path | None = None,
+    runtime_dependencies_root: Path | None = None,
     now: datetime | None = None,
 ) -> Mapping[str, Any]:
     manifest = load_reviewed_manifest(manifest_path, now=now)
@@ -2308,6 +3014,41 @@ def preflight_runtime_artifacts(
             identity["byteSize"],
             "Runtime license",
         )
+    adapter_paths = (
+        adapter_profile_path,
+        overlay_root,
+        model_loader_path,
+    )
+    if any(path is not None for path in adapter_paths):
+        if any(path is None for path in adapter_paths):
+            raise ArtifactError("Runtime adapter paths are incomplete.")
+        verify_runtime_adapter(
+            manifest,
+            adapter_profile_path=adapter_profile_path,
+            overlay_root=overlay_root,
+            model_loader_path=model_loader_path,
+            source_root=source_root,
+        )
+    dependency_paths = (
+        requirements_lock_path,
+        wheelhouse_inventory_path,
+        dependency_licenses_path,
+        runtime_dependencies_root,
+    )
+    if any(path is not None for path in dependency_paths):
+        if any(path is None for path in dependency_paths):
+            raise ArtifactError("Runtime dependency paths are incomplete.")
+        verify_dependency_input_set(
+            manifest,
+            requirements_lock_path=requirements_lock_path,
+            wheelhouse_inventory_path=wheelhouse_inventory_path,
+            dependency_licenses_path=dependency_licenses_path,
+        )
+        verify_installed_dependencies(
+            manifest=manifest,
+            requirements_lock_path=requirements_lock_path,
+            runtime_dependencies_root=runtime_dependencies_root,
+        )
     return manifest
 
 
@@ -2317,12 +3058,54 @@ def verify_runtime_artifacts(
     source_root: Path,
     checkpoint_path: Path,
     licenses_root: Path,
+    adapter_profile_path: Path | None = None,
+    overlay_root: Path | None = None,
+    model_loader_path: Path | None = None,
+    requirements_lock_path: Path | None = None,
+    wheelhouse_inventory_path: Path | None = None,
+    dependency_licenses_path: Path | None = None,
+    runtime_dependencies_root: Path | None = None,
     now: datetime | None = None,
 ) -> Mapping[str, Any]:
     manifest = load_reviewed_manifest(manifest_path, now=now)
     verify_runtime_source_tree(source_root, manifest)
     verify_checkpoint_artifact(checkpoint_path, manifest)
     verify_license_directory(licenses_root, manifest["licenses"]["runtime"])
+    adapter_paths = (
+        adapter_profile_path,
+        overlay_root,
+        model_loader_path,
+    )
+    if any(path is not None for path in adapter_paths):
+        if any(path is None for path in adapter_paths):
+            raise ArtifactError("Runtime adapter paths are incomplete.")
+        verify_runtime_adapter(
+            manifest,
+            adapter_profile_path=adapter_profile_path,
+            overlay_root=overlay_root,
+            model_loader_path=model_loader_path,
+            source_root=source_root,
+        )
+    dependency_paths = (
+        requirements_lock_path,
+        wheelhouse_inventory_path,
+        dependency_licenses_path,
+        runtime_dependencies_root,
+    )
+    if any(path is not None for path in dependency_paths):
+        if any(path is None for path in dependency_paths):
+            raise ArtifactError("Runtime dependency paths are incomplete.")
+        verify_dependency_input_set(
+            manifest,
+            requirements_lock_path=requirements_lock_path,
+            wheelhouse_inventory_path=wheelhouse_inventory_path,
+            dependency_licenses_path=dependency_licenses_path,
+        )
+        verify_installed_dependencies(
+            manifest=manifest,
+            requirements_lock_path=requirements_lock_path,
+            runtime_dependencies_root=runtime_dependencies_root,
+        )
     return manifest
 
 
@@ -2446,6 +3229,7 @@ def _parser() -> argparse.ArgumentParser:
     audit.add_argument("--base-config", type=Path, required=True)
     audit.add_argument("--requirements-lock", type=Path, required=True)
     audit.add_argument("--wheelhouse-inventory", type=Path, required=True)
+    audit.add_argument("--dependency-licenses", type=Path, required=True)
     audit.add_argument("--wheelhouse", type=Path, required=True)
     audit.add_argument("--base-image", required=True)
     audit.add_argument("--platform", required=True)
@@ -2461,6 +3245,26 @@ def _parser() -> argparse.ArgumentParser:
     runtime.add_argument("--source-root", type=Path, required=True)
     runtime.add_argument("--checkpoint", type=Path, required=True)
     runtime.add_argument("--licenses-root", type=Path, required=True)
+    runtime.add_argument("--requirements-lock", type=Path, required=True)
+    runtime.add_argument(
+        "--wheelhouse-manifest", type=Path, required=True
+    )
+    runtime.add_argument(
+        "--dependency-licenses", type=Path, required=True
+    )
+    runtime.add_argument("--runtime-deps", type=Path, required=True)
+
+    dependency = subcommands.add_parser("verify-dependencies")
+    dependency.add_argument("--manifest", type=Path, required=True)
+    dependency.add_argument("--requirements-lock", type=Path, required=True)
+    dependency.add_argument("--wheelhouse-manifest", type=Path, required=True)
+    dependency.add_argument("--dependency-licenses", type=Path, required=True)
+    dependency.add_argument("--wheelhouse", type=Path, required=True)
+
+    installed = subcommands.add_parser("verify-installed")
+    installed.add_argument("--manifest", type=Path, required=True)
+    installed.add_argument("--requirements-lock", type=Path, required=True)
+    installed.add_argument("--runtime-deps", type=Path, required=True)
     return parser
 
 
@@ -2478,6 +3282,7 @@ def main(argv: Sequence[str] | None = None) -> None:
             base_config_json_path=arguments.base_config,
             requirements_lock_path=arguments.requirements_lock,
             wheelhouse_inventory_path=arguments.wheelhouse_inventory,
+            dependency_licenses_path=arguments.dependency_licenses,
             wheelhouse_root=arguments.wheelhouse,
             immutable_base_reference=arguments.base_image,
             platform=arguments.platform,
@@ -2490,10 +3295,32 @@ def main(argv: Sequence[str] | None = None) -> None:
             manifest=manifest,
         )
     elif arguments.command == "verify-runtime":
-        verify_runtime_source_tree(arguments.source_root, manifest)
-        verify_checkpoint_artifact(arguments.checkpoint, manifest)
-        verify_license_directory(
-            arguments.licenses_root, manifest["licenses"]["runtime"]
+        verify_runtime_artifacts(
+            manifest_path=arguments.manifest,
+            source_root=arguments.source_root,
+            checkpoint_path=arguments.checkpoint,
+            licenses_root=arguments.licenses_root,
+            adapter_profile_path=IMAGE_ADAPTER_PROFILE_PATH,
+            overlay_root=IMAGE_OVERLAY_ROOT,
+            model_loader_path=IMAGE_MODEL_LOADER_PATH,
+            requirements_lock_path=arguments.requirements_lock,
+            wheelhouse_inventory_path=arguments.wheelhouse_manifest,
+            dependency_licenses_path=arguments.dependency_licenses,
+            runtime_dependencies_root=arguments.runtime_deps,
+        )
+    elif arguments.command == "verify-dependencies":
+        verify_dependency_build_ready(
+            manifest,
+            requirements_lock_path=arguments.requirements_lock,
+            wheelhouse_inventory_path=arguments.wheelhouse_manifest,
+            dependency_licenses_path=arguments.dependency_licenses,
+            wheelhouse_root=arguments.wheelhouse,
+        )
+    elif arguments.command == "verify-installed":
+        verify_installed_dependencies(
+            manifest=manifest,
+            requirements_lock_path=arguments.requirements_lock,
+            runtime_dependencies_root=arguments.runtime_deps,
         )
     print("sam-worker-artifacts-ok")
 

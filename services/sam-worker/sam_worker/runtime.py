@@ -8,11 +8,18 @@ from typing import Any
 
 from .artifacts import ArtifactError, preflight_runtime_artifacts
 from .engine import (
+    ADAPTER_PROFILE_PATH,
     CHECKPOINT_PATH,
+    DEPENDENCY_LICENSES_PATH,
     LICENSE_ROOT,
     MANIFEST_PATH,
+    MODEL_LOADER_PATH,
+    OVERLAY_ROOT,
     ProductionSamEngine,
+    REQUIREMENTS_LOCK_PATH,
+    RUNTIME_DEPENDENCIES_ROOT,
     SOURCE_ROOT,
+    WHEELHOUSE_MANIFEST_PATH,
 )
 from .protocol import ValidatedRequest, build_response
 
@@ -85,6 +92,13 @@ def create_production_runtime() -> SamWorkerRuntime:
         MANIFEST_PATH,
         SOURCE_ROOT,
         CHECKPOINT_PATH,
+        ADAPTER_PROFILE_PATH,
+        OVERLAY_ROOT,
+        MODEL_LOADER_PATH,
+        REQUIREMENTS_LOCK_PATH,
+        WHEELHOUSE_MANIFEST_PATH,
+        DEPENDENCY_LICENSES_PATH,
+        RUNTIME_DEPENDENCIES_ROOT,
         *runtime_license_paths,
     )
     staged = tuple(_artifact_path_exists(path) for path in staged_paths)
@@ -99,6 +113,13 @@ def create_production_runtime() -> SamWorkerRuntime:
                 source_root=SOURCE_ROOT,
                 checkpoint_path=CHECKPOINT_PATH,
                 licenses_root=LICENSE_ROOT,
+                adapter_profile_path=ADAPTER_PROFILE_PATH,
+                overlay_root=OVERLAY_ROOT,
+                model_loader_path=MODEL_LOADER_PATH,
+                requirements_lock_path=REQUIREMENTS_LOCK_PATH,
+                wheelhouse_inventory_path=WHEELHOUSE_MANIFEST_PATH,
+                dependency_licenses_path=DEPENDENCY_LICENSES_PATH,
+                runtime_dependencies_root=RUNTIME_DEPENDENCIES_ROOT,
             )
         except ArtifactError:
             state = STARTUP_BLOCKED

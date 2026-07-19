@@ -5,6 +5,7 @@ import hashlib
 import io
 import json
 import os
+import shutil
 import stat
 import struct
 import subprocess
@@ -13,10 +14,13 @@ import tarfile
 import tempfile
 import unittest
 import zipfile
+from argparse import Namespace
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from typing import Any, Mapping, Sequence
 from unittest.mock import patch
+
+import acquire_build
 
 from sam_worker.artifacts import (
     REVIEWED_ARTIFACT_MANIFEST_SHA256,
@@ -28,6 +32,7 @@ from sam_worker.artifacts import (
     canonical_json,
     load_reviewed_manifest,
     manifest_self_digest,
+    parse_dependency_licenses,
     parse_dependency_lock,
     parse_wheelhouse_inventory,
     path_content_tree_digest,
@@ -39,8 +44,10 @@ from sam_worker.artifacts import (
     verify_base_image_selection,
     verify_build_input_artifacts,
     verify_dependency_build_ready,
+    verify_dependency_input_set,
     verify_file_identity,
     verify_license_directory,
+    verify_runtime_adapter,
 )
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -196,6 +203,7 @@ def make_wheel(
     metadata_name: str = "demo-pkg",
     version: str = "1.2.3",
     namespace: str = "demo_pkg",
+    requires_dist: Sequence[str] = (),
 ) -> None:
     dist_info = f"{distribution}-{version}.dist-info"
     members = {
@@ -203,7 +211,12 @@ def make_wheel(
         f"{dist_info}/METADATA": (
             "Metadata-Version: 2.1\n"
             f"Name: {metadata_name}\n"
-            f"Version: {version}\n\n"
+            f"Version: {version}\n"
+            + "".join(
+                f"Requires-Dist: {dependency}\n"
+                for dependency in requires_dist
+            )
+            + "\n"
         ).encode("utf-8"),
         f"{dist_info}/WHEEL": (
             "Wheel-Version: 1.0\n"
@@ -417,16 +430,22 @@ class ReviewedManifestTests(unittest.TestCase):
         )
         self.assertEqual(
             reviewed["dependencies"]["buildStatus"],
-            "unresolved-deployment-time-blocking",
+            "reviewed-wheel-only-ready",
         )
-        self.assertFalse(
+        self.assertTrue(
             reviewed["dependencies"]["acquisitionOccurred"]
         )
-        self.assertIsNone(
-            reviewed["dependencies"]["requirementsLock"]["sha256"]
+        self.assertEqual(
+            reviewed["dependencies"]["requirementsLock"]["sha256"],
+            "a52ec65c9bb270eef33a71dbf8971731dbf99135ecdffad6f392e39b6c42d525",
         )
-        self.assertIsNone(
-            reviewed["dependencies"]["wheelhouseInventory"]["sha256"]
+        self.assertEqual(
+            reviewed["dependencies"]["wheelhouseInventory"]["sha256"],
+            "390054e8574bda53e710cefcbeb44a5dcdaba35f79cf4cfa029bf079deadd39b",
+        )
+        self.assertEqual(
+            reviewed["dependencies"]["dependencyLicenses"]["sha256"],
+            "b4e0a1b37810aef0e8131de5494b857690cc65a1f12d52f0f9018ebd11a48276",
         )
 
     def test_repository_base_and_license_cross_bindings_fail_closed(self) -> None:
@@ -485,7 +504,7 @@ class ReviewedManifestTests(unittest.TestCase):
         mutations.append(python_patch)
         dependency_status = manifest()
         dependency_status["dependencies"]["buildStatus"] = (
-            "reviewed-wheel-only-ready"
+            "unresolved-deployment-time-blocking"
         )
         mutations.append(dependency_status)
         for mutated in mutations:
@@ -633,6 +652,55 @@ class FileAndLicenseTests(unittest.TestCase):
                     ),
                     synthetic,
                 )
+                with (
+                    patch(
+                        "sam_worker.artifacts."
+                        "verify_dependency_input_set"
+                    ) as dependency_inputs,
+                    patch(
+                        "sam_worker.artifacts."
+                        "verify_installed_dependencies"
+                    ) as installed_dependencies,
+                ):
+                    self.assertIs(
+                        preflight_runtime_artifacts(
+                            manifest_path=root / "manifest.json",
+                            source_root=source,
+                            checkpoint_path=checkpoint,
+                            licenses_root=licenses,
+                            requirements_lock_path=root
+                            / "requirements.lock",
+                            wheelhouse_inventory_path=root
+                            / "wheelhouse-manifest.json",
+                            dependency_licenses_path=root
+                            / "dependency-licenses.json",
+                            runtime_dependencies_root=root
+                            / "runtime-deps",
+                        ),
+                        synthetic,
+                    )
+                    dependency_inputs.assert_called_once()
+                    installed_dependencies.assert_called_once()
+                    dependency_inputs.side_effect = ArtifactError(
+                        "dependency tamper"
+                    )
+                    with self.assertRaisesRegex(
+                        ArtifactError, "dependency tamper"
+                    ):
+                        preflight_runtime_artifacts(
+                            manifest_path=root / "manifest.json",
+                            source_root=source,
+                            checkpoint_path=checkpoint,
+                            licenses_root=licenses,
+                            requirements_lock_path=root
+                            / "requirements.lock",
+                            wheelhouse_inventory_path=root
+                            / "wheelhouse-manifest.json",
+                            dependency_licenses_path=root
+                            / "dependency-licenses.json",
+                            runtime_dependencies_root=root
+                            / "runtime-deps",
+                        )
                 checkpoint.write_bytes(b"drift!")
                 with self.assertRaisesRegex(
                     ArtifactError, "type or byte size"
@@ -951,26 +1019,210 @@ class CheckpointStructureTests(unittest.TestCase):
                 audit_checkpoint_structure(checkpoint, structure)
 
 
+class AcquisitionDownloadTests(unittest.TestCase):
+    class _Response:
+        def __init__(
+            self,
+            data: bytes,
+            *,
+            status: int = 200,
+            url: str,
+            length: str | None = None,
+            encoding: str | None = None,
+        ) -> None:
+            self.status = status
+            self._url = url
+            self._data = data
+            self._offset = 0
+            self.headers: Dict[str, str] = {}
+            if length is not None:
+                self.headers["Content-Length"] = length
+            if encoding is not None:
+                self.headers["Content-Encoding"] = encoding
+
+        def __enter__(self) -> "AcquisitionDownloadTests._Response":
+            return self
+
+        def __exit__(self, *_args: Any) -> None:
+            return None
+
+        def geturl(self) -> str:
+            return self._url
+
+        def read(self, amount: int) -> bytes:
+            block = self._data[self._offset : self._offset + amount]
+            self._offset += len(block)
+            return block
+
+    class _Opener:
+        def __init__(
+            self, response: "AcquisitionDownloadTests._Response"
+        ) -> None:
+            self.response = response
+            self.calls = 0
+
+        def open(self, _request: Any, timeout: int) -> Any:
+            self.calls += 1
+            if timeout != 300:
+                raise AssertionError("acquisition timeout drifted")
+            return self.response
+
+    def test_download_accepts_only_exact_response_identity(
+        self,
+    ) -> None:
+        url = (
+            "https://files.pythonhosted.org/packages/reviewed/"
+            "demo-1.0-py3-none-any.whl"
+        )
+        payload = b"abc"
+        digest = sha256(payload)
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            destination = root / "good.whl"
+            opener = self._Opener(
+                self._Response(
+                    payload,
+                    url=url,
+                    length=str(len(payload)),
+                )
+            )
+            acquire_build._download(
+                opener=opener,
+                url=url,
+                expected_host="files.pythonhosted.org",
+                expected_byte_size=len(payload),
+                expected_sha256=digest,
+                destination=destination,
+            )
+            self.assertEqual(destination.read_bytes(), payload)
+            self.assertEqual(opener.calls, 1)
+
+            cases = {
+                "status": self._Response(
+                    payload,
+                    status=206,
+                    url=url,
+                    length="3",
+                ),
+                "effective-url": self._Response(
+                    payload,
+                    url=url + "?redirected=1",
+                    length="3",
+                ),
+                "missing-length": self._Response(payload, url=url),
+                "wrong-length": self._Response(
+                    payload, url=url, length="4"
+                ),
+                "encoding": self._Response(
+                    payload,
+                    url=url,
+                    length="3",
+                    encoding="gzip",
+                ),
+                "short": self._Response(
+                    b"ab", url=url, length="3"
+                ),
+                "long": self._Response(
+                    b"abcd", url=url, length="3"
+                ),
+                "hash": self._Response(
+                    b"abd", url=url, length="3"
+                ),
+            }
+            for name, response in cases.items():
+                with self.subTest(name=name):
+                    with self.assertRaises(ArtifactError):
+                        acquire_build._download(
+                            opener=self._Opener(response),
+                            url=url,
+                            expected_host="files.pythonhosted.org",
+                            expected_byte_size=3,
+                            expected_sha256=digest,
+                            destination=root / (name + ".whl"),
+                        )
+
+    def test_download_rejects_host_redirect_and_existing_destination(
+        self,
+    ) -> None:
+        valid_url = (
+            "https://files.pythonhosted.org/packages/reviewed/"
+            "demo-1.0-py3-none-any.whl"
+        )
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            opener = self._Opener(
+                self._Response(b"x", url=valid_url, length="1")
+            )
+            invalid_destination = root / "invalid-host.whl"
+            with self.assertRaisesRegex(
+                ArtifactError, "URL is invalid"
+            ):
+                acquire_build._download(
+                    opener=opener,
+                    url=valid_url.replace(
+                        "files.pythonhosted.org", "example.invalid"
+                    ),
+                    expected_host="files.pythonhosted.org",
+                    expected_byte_size=1,
+                    expected_sha256=sha256(b"x"),
+                    destination=invalid_destination,
+                )
+            self.assertEqual(opener.calls, 0)
+            self.assertFalse(invalid_destination.exists())
+
+            existing = root / "existing.whl"
+            existing.write_bytes(b"sentinel")
+            with self.assertRaisesRegex(
+                ArtifactError, "failed closed"
+            ):
+                acquire_build._download(
+                    opener=opener,
+                    url=valid_url,
+                    expected_host="files.pythonhosted.org",
+                    expected_byte_size=1,
+                    expected_sha256=sha256(b"x"),
+                    destination=existing,
+                )
+            self.assertEqual(opener.calls, 0)
+            self.assertEqual(existing.read_bytes(), b"sentinel")
+
+            with self.assertRaisesRegex(
+                ArtifactError, "redirect was refused"
+            ):
+                acquire_build._RejectRedirects().redirect_request(
+                    None,
+                    None,
+                    302,
+                    "redirect",
+                    {},
+                    "https://example.invalid/",
+                )
+
+
 class DependencyReadyTests(unittest.TestCase):
     def _ready_fixture(
         self,
         root: Path,
         *,
-        metadata_name: str = "demo-pkg",
-        namespace: str = "demo_pkg",
-    ) -> tuple[dict[str, Any], Path, Path, Path]:
+        metadata_name: str = "h11",
+        namespace: str = "h11",
+        requires_dist: Sequence[str] = (),
+    ) -> tuple[dict[str, Any], Path, Path, Path, Path]:
         wheelhouse = root / "wheelhouse"
         wheelhouse.mkdir()
-        filename = "demo_pkg-1.2.3-py3-none-any.whl"
+        filename = "h11-0.16.0-py3-none-any.whl"
         wheel = wheelhouse / filename
         make_wheel(
             wheel,
+            distribution="h11",
             metadata_name=metadata_name,
+            version="0.16.0",
             namespace=namespace,
+            requires_dist=requires_dist,
         )
         wheel_digest = sha256(wheel.read_bytes())
         lock_data = (
-            "demo-pkg==1.2.3 --hash=sha256:"
+            "h11==0.16.0 --hash=sha256:"
             + wheel_digest
             + "\n"
         ).encode("ascii")
@@ -984,14 +1236,71 @@ class DependencyReadyTests(unittest.TestCase):
                     "filename": filename,
                     "byteSize": wheel.stat().st_size,
                     "sha256": wheel_digest,
+                    "url": "https://files.pythonhosted.org/packages/test/"
+                    + filename,
                 }
             ],
         }
         inventory_data = (
-            canonical_json(inventory_value) + "\n"
+            json.dumps(
+                inventory_value,
+                ensure_ascii=False,
+                indent=2,
+                sort_keys=True,
+                allow_nan=False,
+            )
+            + "\n"
         ).encode("utf-8")
-        inventory_path = root / "wheelhouse-inventory.json"
+        inventory_path = root / "wheelhouse-manifest.json"
         inventory_path.write_bytes(inventory_data)
+        license_value = {
+            "baseOwned": [
+                {
+                    "assertion": "importlib.metadata.version",
+                    "license": "BSD-3-Clause",
+                    "name": "torch",
+                    "source": "immutable-pytorch-base",
+                    "version": "2.5.1",
+                },
+                {
+                    "assertion": "importlib.metadata.version",
+                    "compatibility": "torch==2.5.1",
+                    "license": "BSD-3-Clause",
+                    "name": "torchvision",
+                    "source": "immutable-pytorch-base",
+                    "version": "0.20.1",
+                },
+            ],
+            "inventoryKind": "fabrica-runtime-dependency-licenses-v1",
+            "inventoryVersion": 1,
+            "packages": [
+                {
+                    "evidence": "wheel-METADATA-License-and-LICENSE.txt",
+                    "filename": filename,
+                    "license": "MIT",
+                    "name": "h11",
+                    "runtimeDependencies": [],
+                    "version": "0.16.0",
+                }
+            ],
+            "target": {
+                "implementation": "CPython",
+                "platform": "linux/amd64",
+                "python": "3.11",
+            },
+        }
+        license_data = (
+            json.dumps(
+                license_value,
+                ensure_ascii=False,
+                indent=2,
+                sort_keys=True,
+                allow_nan=False,
+            )
+            + "\n"
+        ).encode("utf-8")
+        license_path = root / "dependency-licenses.json"
+        license_path.write_bytes(license_data)
         reviewed = copy.deepcopy(manifest())
         reviewed["dependencies"] = {
             **reviewed["dependencies"],
@@ -1007,13 +1316,102 @@ class DependencyReadyTests(unittest.TestCase):
                 "byteSize": len(inventory_data),
                 "sha256": sha256(inventory_data),
             },
+            "dependencyLicenses": {
+                "status": "reviewed",
+                "byteSize": len(license_data),
+                "sha256": sha256(license_data),
+            },
         }
         resign(reviewed)
-        return reviewed, lock_path, inventory_path, wheelhouse
+        return reviewed, lock_path, inventory_path, license_path, wheelhouse
+
+    def test_tracked_dependency_inputs_are_exact_closed_and_licensed(
+        self,
+    ) -> None:
+        worker = ROOT / "services/sam-worker"
+        reviewed = manifest()
+        locked, inventory, license_dependencies = (
+            verify_dependency_input_set(
+                reviewed,
+                requirements_lock_path=worker / "requirements.lock",
+                wheelhouse_inventory_path=worker
+                / "wheelhouse-manifest.json",
+                dependency_licenses_path=worker
+                / "dependency-licenses.json",
+            )
+        )
+        self.assertEqual(
+            {name: version for name, (version, _digest) in locked.items()},
+            {
+                "annotated-types": "0.7.0",
+                "anyio": "4.14.2",
+                "click": "8.4.2",
+                "fastapi": "0.115.12",
+                "h11": "0.16.0",
+                "idna": "3.18",
+                "numpy": "1.26.4",
+                "pillow": "11.0.0",
+                "pydantic": "2.13.4",
+                "pydantic-core": "2.46.4",
+                "pyyaml": "6.0.2",
+                "starlette": "0.46.2",
+                "tqdm": "4.67.1",
+                "typing-extensions": "4.16.0",
+                "typing-inspection": "0.4.2",
+                "uvicorn": "0.34.2",
+            },
+        )
+        filenames = {entry["filename"] for entry in inventory}
+        self.assertEqual(len(filenames), 16)
+        self.assertIn(
+            "PyYAML-6.0.2-cp311-cp311-manylinux_2_17_x86_64."
+            "manylinux2014_x86_64.whl",
+            filenames,
+        )
+        self.assertIn(
+            "numpy-1.26.4-cp311-cp311-manylinux_2_17_x86_64."
+            "manylinux2014_x86_64.whl",
+            filenames,
+        )
+        self.assertIn(
+            "pydantic_core-2.46.4-cp311-cp311-manylinux_2_17_x86_64."
+            "manylinux2014_x86_64.whl",
+            filenames,
+        )
+        self.assertTrue(
+            all(
+                entry["url"].startswith(
+                    "https://files.pythonhosted.org/packages/"
+                )
+                and entry["url"].endswith("/" + entry["filename"])
+                for entry in inventory
+            )
+        )
+        self.assertEqual(set(license_dependencies), set(locked))
+        self.assertNotIn("torch", locked)
+        self.assertNotIn("torchvision", locked)
+        for filename, expected_digest in (
+            (
+                "requirements.lock",
+                "a52ec65c9bb270eef33a71dbf8971731dbf99135ecdffad6f392e39b6c42d525",
+            ),
+            (
+                "wheelhouse-manifest.json",
+                "390054e8574bda53e710cefcbeb44a5dcdaba35f79cf4cfa029bf079deadd39b",
+            ),
+            (
+                "dependency-licenses.json",
+                "b4e0a1b37810aef0e8131de5494b857690cc65a1f12d52f0f9018ebd11a48276",
+            ),
+        ):
+            self.assertEqual(
+                sha256((worker / filename).read_bytes()),
+                expected_digest,
+            )
 
     def test_ready_manifest_and_exact_wheel_lock_inventory_pass(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
-            reviewed, lock_path, inventory_path, wheelhouse = (
+            reviewed, lock_path, inventory_path, license_path, wheelhouse = (
                 self._ready_fixture(Path(temporary))
             )
             validate_reviewed_manifest(
@@ -1025,8 +1423,103 @@ class DependencyReadyTests(unittest.TestCase):
                 reviewed,
                 requirements_lock_path=lock_path,
                 wheelhouse_inventory_path=inventory_path,
+                dependency_licenses_path=license_path,
                 wheelhouse_root=wheelhouse,
             )
+
+    def test_preacquisition_input_tamper_refuses_before_network_opener(
+        self,
+    ) -> None:
+        for mutation in ("foreign-host", "unlocked-hash"):
+            with self.subTest(mutation=mutation):
+                with tempfile.TemporaryDirectory() as temporary:
+                    root = Path(temporary)
+                    (
+                        reviewed,
+                        lock_path,
+                        inventory_path,
+                        license_path,
+                        _wheelhouse,
+                    ) = self._ready_fixture(root)
+                    inventory = json.loads(
+                        inventory_path.read_text("utf-8")
+                    )
+                    if mutation == "foreign-host":
+                        inventory["wheels"][0]["url"] = (
+                            "https://example.invalid/packages/"
+                            + inventory["wheels"][0]["filename"]
+                        )
+                    else:
+                        inventory["wheels"][0]["sha256"] = "1" * 64
+                    inventory_data = (
+                        json.dumps(
+                            inventory,
+                            ensure_ascii=False,
+                            indent=2,
+                            sort_keys=True,
+                            allow_nan=False,
+                        )
+                        + "\n"
+                    ).encode("utf-8")
+                    inventory_path.write_bytes(inventory_data)
+                    reviewed["dependencies"]["wheelhouseInventory"] = {
+                        "status": "reviewed",
+                        "byteSize": len(inventory_data),
+                        "sha256": sha256(inventory_data),
+                    }
+                    arguments = Namespace(
+                        closed=root / "closed",
+                        scratch=root / "scratch",
+                        requirements_lock=lock_path,
+                        wheelhouse_manifest=inventory_path,
+                        worker_root=root / "worker",
+                    )
+                    with (
+                        patch.object(
+                            acquire_build,
+                            "load_reviewed_manifest",
+                            return_value=reviewed,
+                        ),
+                        patch.object(
+                            acquire_build,
+                            "IMAGE_DEPENDENCY_LICENSES_PATH",
+                            license_path,
+                        ),
+                        patch.object(
+                            acquire_build,
+                            "build_opener",
+                        ) as opener,
+                    ):
+                        with self.assertRaises(ArtifactError):
+                            acquire_build.acquire(arguments)
+                        opener.assert_not_called()
+                    self.assertFalse(arguments.scratch.exists())
+                    self.assertFalse(arguments.closed.exists())
+
+    def test_postdownload_wheel_metadata_closure_is_mandatory(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            (
+                reviewed,
+                lock_path,
+                inventory_path,
+                license_path,
+                wheelhouse,
+            ) = self._ready_fixture(
+                Path(temporary),
+                requires_dist=("idna>=3",),
+            )
+            with self.assertRaisesRegex(
+                ArtifactError, "metadata closure"
+            ):
+                verify_dependency_build_ready(
+                    reviewed,
+                    requirements_lock_path=lock_path,
+                    wheelhouse_inventory_path=inventory_path,
+                    dependency_licenses_path=license_path,
+                    wheelhouse_root=wheelhouse,
+                )
 
     def test_lock_grammar_rejects_options_urls_extras_markers_and_drift(
         self,
@@ -1075,11 +1568,16 @@ class DependencyReadyTests(unittest.TestCase):
                     "filename": "demo_pkg-1.2.3-py3-none-any.whl",
                     "byteSize": 1,
                     "sha256": "1" * 64,
+                    "url": "https://files.pythonhosted.org/packages/test/"
+                    "demo_pkg-1.2.3-py3-none-any.whl",
                 }
             ],
         }
         parse_wheelhouse_inventory(
-            (canonical_json(value) + "\n").encode("utf-8")
+            (
+                json.dumps(value, indent=2, sort_keys=True)
+                + "\n"
+            ).encode("utf-8")
         )
         mutations = []
         unknown = copy.deepcopy(value)
@@ -1097,11 +1595,14 @@ class DependencyReadyTests(unittest.TestCase):
             with self.subTest(mutation=mutation):
                 with self.assertRaises(ArtifactError):
                     parse_wheelhouse_inventory(
-                        (canonical_json(mutation) + "\n").encode("utf-8")
+                        (
+                            json.dumps(mutation, indent=2, sort_keys=True)
+                            + "\n"
+                        ).encode("utf-8")
                     )
         with self.assertRaisesRegex(ArtifactError, "canonical"):
             parse_wheelhouse_inventory(
-                json.dumps(value, indent=2).encode("utf-8")
+                (canonical_json(value) + "\n").encode("utf-8")
             )
 
     def test_ready_gate_rejects_extra_symlink_mismatch_and_namespaces(
@@ -1109,7 +1610,7 @@ class DependencyReadyTests(unittest.TestCase):
     ) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            reviewed, lock_path, inventory_path, wheelhouse = (
+            reviewed, lock_path, inventory_path, license_path, wheelhouse = (
                 self._ready_fixture(root)
             )
             (wheelhouse / "foreign.whl").write_bytes(b"x")
@@ -1118,12 +1619,13 @@ class DependencyReadyTests(unittest.TestCase):
                     reviewed,
                     requirements_lock_path=lock_path,
                     wheelhouse_inventory_path=inventory_path,
+                    dependency_licenses_path=license_path,
                     wheelhouse_root=wheelhouse,
                 )
 
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            reviewed, lock_path, inventory_path, wheelhouse = (
+            reviewed, lock_path, inventory_path, license_path, wheelhouse = (
                 self._ready_fixture(root)
             )
             wheel = next(wheelhouse.iterdir())
@@ -1135,6 +1637,7 @@ class DependencyReadyTests(unittest.TestCase):
                     reviewed,
                     requirements_lock_path=lock_path,
                     wheelhouse_inventory_path=inventory_path,
+                    dependency_licenses_path=license_path,
                     wheelhouse_root=wheelhouse,
                 )
 
@@ -1149,7 +1652,7 @@ class DependencyReadyTests(unittest.TestCase):
             with self.subTest(namespace=namespace):
                 with tempfile.TemporaryDirectory() as temporary:
                     root = Path(temporary)
-                    reviewed, lock_path, inventory_path, wheelhouse = (
+                    reviewed, lock_path, inventory_path, license_path, wheelhouse = (
                         self._ready_fixture(root, namespace=namespace)
                     )
                     with self.assertRaisesRegex(
@@ -1159,6 +1662,7 @@ class DependencyReadyTests(unittest.TestCase):
                             reviewed,
                             requirements_lock_path=lock_path,
                             wheelhouse_inventory_path=inventory_path,
+                            dependency_licenses_path=license_path,
                             wheelhouse_root=wheelhouse,
                         )
 
@@ -1167,7 +1671,7 @@ class DependencyReadyTests(unittest.TestCase):
     ) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            reviewed, lock_path, inventory_path, wheelhouse = (
+            reviewed, lock_path, inventory_path, license_path, wheelhouse = (
                 self._ready_fixture(
                     root, metadata_name="foreign-package"
                 )
@@ -1179,11 +1683,12 @@ class DependencyReadyTests(unittest.TestCase):
                     reviewed,
                     requirements_lock_path=lock_path,
                     wheelhouse_inventory_path=inventory_path,
+                    dependency_licenses_path=license_path,
                     wheelhouse_root=wheelhouse,
                 )
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            reviewed, lock_path, inventory_path, wheelhouse = (
+            reviewed, lock_path, inventory_path, license_path, wheelhouse = (
                 self._ready_fixture(root)
             )
             foreign_lock = (
@@ -1204,6 +1709,7 @@ class DependencyReadyTests(unittest.TestCase):
                     reviewed,
                     requirements_lock_path=lock_path,
                     wheelhouse_inventory_path=inventory_path,
+                    dependency_licenses_path=license_path,
                     wheelhouse_root=wheelhouse,
                 )
 
@@ -1317,7 +1823,104 @@ class DependencyReadyTests(unittest.TestCase):
             with self.assertRaisesRegex(
                 ArtifactError, "protected namespace"
             ):
-                audit_wheel(wheel, expected_filename=wheel.name)
+                    audit_wheel(wheel, expected_filename=wheel.name)
+
+
+class RuntimeAdapterArtifactTests(unittest.TestCase):
+    def test_reviewed_overlay_passes_and_mutation_or_path_drift_fails(
+        self,
+    ) -> None:
+        worker = ROOT / "services/sam-worker"
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            profile = root / "adapter-profile.json"
+            loader = root / "model_loader.py"
+            loader.write_bytes(
+                (worker / "sam_worker/model_loader.py").read_bytes()
+            )
+            overlay = root / "overlay"
+            shutil.copytree(worker / "runtime-overlay", overlay)
+            source = root / "source"
+            hiera = source / "sam2/modeling/backbones/hieradet.py"
+            hiera.parent.mkdir(parents=True)
+            hiera.write_bytes(b"x" * 10_003)
+            reviewed = manifest()
+            profile_value = json.loads(
+                (worker / "adapter-profile.json").read_text("utf-8")
+            )
+            profile_value["loader"]["imagePath"] = str(loader)
+            profile_value["overlay"]["imageRoot"] = str(overlay)
+            profile_core = dict(profile_value)
+            del profile_core["profileSha256"]
+            profile_value["profileSha256"] = sha256(
+                canonical_json(profile_core).encode("utf-8")
+            )
+            profile_data = (
+                json.dumps(
+                    profile_value,
+                    ensure_ascii=False,
+                    indent=2,
+                    sort_keys=True,
+                    allow_nan=False,
+                )
+                + "\n"
+            ).encode("utf-8")
+            profile.write_bytes(profile_data)
+            reviewed["dependencies"]["adapterProfile"] = {
+                "byteSize": len(profile_data),
+                "sha256": sha256(profile_data),
+                "status": "reviewed",
+            }
+            with (
+                patch(
+                    "sam_worker.artifacts.IMAGE_MODEL_LOADER_PATH",
+                    loader,
+                ),
+                patch(
+                    "sam_worker.artifacts.IMAGE_OVERLAY_ROOT",
+                    overlay,
+                ),
+                patch(
+                    "sam_worker.artifacts.verify_file_identity"
+                ),
+            ):
+                parsed = verify_runtime_adapter(
+                    reviewed,
+                    adapter_profile_path=profile,
+                    overlay_root=overlay,
+                    model_loader_path=loader,
+                    source_root=source,
+                )
+                self.assertEqual(
+                    parsed["profileSha256"],
+                    profile_value["profileSha256"],
+                )
+                file_io = overlay / "iopath/common/file_io.py"
+                original = file_io.read_bytes()
+                file_io.write_bytes(original + b"\n# drift\n")
+                with self.assertRaisesRegex(
+                    ArtifactError, "overlay file identity"
+                ):
+                    verify_runtime_adapter(
+                        reviewed,
+                        adapter_profile_path=profile,
+                        overlay_root=overlay,
+                        model_loader_path=loader,
+                        source_root=source,
+                    )
+                file_io.write_bytes(original)
+                foreign = root / "foreign-overlay"
+                shutil.copytree(overlay, foreign)
+                with self.assertRaisesRegex(
+                    ArtifactError, "overlay path binding"
+                ):
+                    verify_runtime_adapter(
+                        reviewed,
+                        adapter_profile_path=profile,
+                        overlay_root=foreign,
+                        model_loader_path=loader,
+                        source_root=source,
+                    )
 
 
 class BaseMetadataAndBuildAuditTests(unittest.TestCase):
@@ -1551,6 +2154,9 @@ class BaseMetadataAndBuildAuditTests(unittest.TestCase):
                 "wheelhouse_inventory_path": (
                     root / "wheelhouse-inventory.json"
                 ),
+                "dependency_licenses_path": (
+                    root / "dependency-licenses.json"
+                ),
                 "wheelhouse_root": root / "wheelhouse",
                 "immutable_base_reference": reviewed["baseImage"][
                     "immutableReference"
@@ -1605,6 +2211,21 @@ class BaseMetadataAndBuildAuditTests(unittest.TestCase):
         self,
     ) -> None:
         reviewed = manifest()
+        reviewed["dependencies"]["acquisitionOccurred"] = False
+        reviewed["dependencies"]["buildStatus"] = (
+            "unresolved-deployment-time-blocking"
+        )
+        for field in (
+            "requirementsLock",
+            "wheelhouseInventory",
+            "dependencyLicenses",
+            "adapterProfile",
+        ):
+            reviewed["dependencies"][field] = {
+                "status": "unresolved",
+                "byteSize": None,
+                "sha256": None,
+            }
         with self.assertRaisesRegex(
             ArtifactError, "deployment-time blocking"
         ):
@@ -1612,6 +2233,7 @@ class BaseMetadataAndBuildAuditTests(unittest.TestCase):
                 reviewed,
                 requirements_lock_path=Path("/absent-lock"),
                 wheelhouse_inventory_path=Path("/absent-inventory"),
+                dependency_licenses_path=Path("/absent-licenses"),
                 wheelhouse_root=Path("/absent-wheelhouse"),
             )
         with tempfile.TemporaryDirectory() as temporary:
@@ -1640,6 +2262,7 @@ class BaseMetadataAndBuildAuditTests(unittest.TestCase):
                         base_config_json_path=root / "absent-base-config",
                         requirements_lock_path=root / "absent-lock",
                         wheelhouse_inventory_path=root / "absent-inventory",
+                        dependency_licenses_path=root / "absent-licenses",
                         wheelhouse_root=root / "absent-wheelhouse",
                         immutable_base_reference="foreign",
                         platform="foreign",

@@ -1,72 +1,39 @@
-FROM --platform=linux/amd64 pytorch/pytorch:2.5.1-cuda12.4-cudnn9-runtime@sha256:c8268a92a69bd500f8be0e665b2630ee006dadaf7bfbc24249141b15ff622755 AS artifact-audit
+FROM --platform=linux/amd64 pytorch/pytorch:2.5.1-cuda12.4-cudnn9-runtime@sha256:c8268a92a69bd500f8be0e665b2630ee006dadaf7bfbc24249141b15ff622755 AS acquisition
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
     PIP_CONFIG_FILE=/dev/null \
-    PIP_NO_INDEX=1 \
     HF_HUB_OFFLINE=1 \
     TRANSFORMERS_OFFLINE=1 \
     PYTHONPATH=/opt/fabrica/worker
 
-RUN python -c "import sys; assert sys.version_info[:2] == (3, 11), sys.version" \
-    && mkdir -p /opt/fabrica/worker /opt/fabrica/sam/checkpoints /opt/fabrica/staged
+RUN --network=none python -c "import sys; assert sys.version_info[:2] == (3, 11), sys.version" \
+    && mkdir -p \
+        /opt/fabrica/build \
+        /opt/fabrica/worker \
+        /opt/fabrica/sam \
+        /opt/fabrica/sam2-overlay
 
 COPY services/sam-worker/sam_worker /opt/fabrica/worker/sam_worker
+COPY services/sam-worker/runtime-overlay /opt/fabrica/sam2-overlay
 COPY services/sam-worker/artifact-manifest.json /opt/fabrica/sam/artifact-manifest.json
+COPY services/sam-worker/adapter-profile.json /opt/fabrica/sam/adapter-profile.json
+COPY services/sam-worker/dependency-licenses.json /opt/fabrica/sam/dependency-licenses.json
+COPY services/sam-worker/requirements.lock /opt/fabrica/build/requirements.lock
+COPY services/sam-worker/wheelhouse-manifest.json /opt/fabrica/build/wheelhouse-manifest.json
+COPY services/sam-worker/acquire_build.py /opt/fabrica/build/acquire.py
 
-# Every broad or executable artifact below is an ignored, controlled-build input.
-# The verifier audits it before extraction, installation, or model-library import.
-COPY .local-data/banner-ai/sam-worker-build/requirements.lock /opt/fabrica/staged/requirements.lock
-COPY .local-data/banner-ai/sam-worker-build/wheelhouse-inventory.json /opt/fabrica/staged/wheelhouse-inventory.json
-COPY .local-data/banner-ai/sam-worker-build/wheelhouse /opt/fabrica/staged/wheelhouse
-COPY .local-data/banner-ai/sam-worker-build/sam2-source.tar.gz /opt/fabrica/staged/sam2-source.tar.gz
-COPY .local-data/banner-ai/sam-worker-build/sam2.1_hiera_b+.yaml /opt/fabrica/staged/sam2.1_hiera_b+.yaml
-COPY .local-data/banner-ai/sam-worker-build/sam2.1_hiera_base_plus.pt /opt/fabrica/staged/sam2.1_hiera_base_plus.pt
-COPY .local-data/banner-ai/sam-worker-build/LICENSE /opt/fabrica/staged/LICENSE
-COPY .local-data/banner-ai/sam-worker-build/LICENSE_cctorch /opt/fabrica/staged/LICENSE_cctorch
-COPY .local-data/banner-ai/sam-worker-build/pytorch-base-manifest.json /opt/fabrica/staged/pytorch-base-manifest.json
-COPY .local-data/banner-ai/sam-worker-build/pytorch-base-config.json /opt/fabrica/staged/pytorch-base-config.json
-
-RUN cd /opt/fabrica/staged \
-    && python -m sam_worker.artifacts audit-build \
-        --manifest /opt/fabrica/sam/artifact-manifest.json \
-        --archive /opt/fabrica/staged/sam2-source.tar.gz \
-        --config /opt/fabrica/staged/sam2.1_hiera_b+.yaml \
-        --checkpoint /opt/fabrica/staged/sam2.1_hiera_base_plus.pt \
-        --license /opt/fabrica/staged/LICENSE \
-        --license /opt/fabrica/staged/LICENSE_cctorch \
-        --base-manifest /opt/fabrica/staged/pytorch-base-manifest.json \
-        --base-config /opt/fabrica/staged/pytorch-base-config.json \
-        --requirements-lock /opt/fabrica/staged/requirements.lock \
-        --wheelhouse-inventory /opt/fabrica/staged/wheelhouse-inventory.json \
-        --wheelhouse /opt/fabrica/staged/wheelhouse \
-        --base-image pytorch/pytorch:2.5.1-cuda12.4-cudnn9-runtime@sha256:c8268a92a69bd500f8be0e665b2630ee006dadaf7bfbc24249141b15ff622755 \
-        --platform linux/amd64 \
-    && python -m pip install \
-        --no-cache-dir \
-        --no-index \
-        --only-binary=:all: \
-        --no-deps \
-        --find-links=file:///opt/fabrica/staged/wheelhouse \
-        --require-hashes \
-        --target=/opt/fabrica/runtime-deps \
-        -r /opt/fabrica/staged/requirements.lock \
-    && python -m sam_worker.artifacts extract-runtime \
-        --manifest /opt/fabrica/sam/artifact-manifest.json \
-        --archive /opt/fabrica/staged/sam2-source.tar.gz \
-        --source-root /opt/fabrica/sam2-source \
-        --licenses-root /opt/fabrica/sam/licenses \
-    && install -m 0444 \
-        /opt/fabrica/staged/sam2.1_hiera_base_plus.pt \
-        /opt/fabrica/sam/checkpoints/sam2.1_hiera_base_plus.pt \
-    && python -m sam_worker.artifacts verify-runtime \
-        --manifest /opt/fabrica/sam/artifact-manifest.json \
-        --source-root /opt/fabrica/sam2-source \
-        --checkpoint /opt/fabrica/sam/checkpoints/sam2.1_hiera_base_plus.pt \
-        --licenses-root /opt/fabrica/sam/licenses
+RUN --network=default python /opt/fabrica/build/acquire.py \
+        --closed /opt/fabrica/closed \
+        --scratch /tmp/fabrica-acquisition \
+        --requirements-lock /opt/fabrica/build/requirements.lock \
+        --wheelhouse-manifest /opt/fabrica/build/wheelhouse-manifest.json \
+        --worker-root /opt/fabrica/worker/sam_worker
 
 FROM --platform=linux/amd64 pytorch/pytorch:2.5.1-cuda12.4-cudnn9-runtime@sha256:c8268a92a69bd500f8be0e665b2630ee006dadaf7bfbc24249141b15ff622755 AS runtime
+
+ARG FABRICA_GIT_SHA=unavailable
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
@@ -75,21 +42,77 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PIP_NO_INDEX=1 \
     HF_HUB_OFFLINE=1 \
     TRANSFORMERS_OFFLINE=1 \
-    PYTHONPATH=/opt/fabrica/runtime-deps:/opt/fabrica/worker:/opt/fabrica/sam2-source
+    PYTHONPATH=/opt/fabrica/sam2-overlay:/opt/fabrica/runtime-deps:/opt/fabrica/worker:/opt/fabrica/sam2-source
 
-RUN python -c "import sys; assert sys.version_info[:2] == (3, 11), sys.version" \
+RUN --network=none python -c "import re,sys; value=sys.argv[1]; assert value == 'unavailable' or (re.fullmatch(r'[0-9a-f]{40}', value) and value != '0' * 40)" "${FABRICA_GIT_SHA}" \
+    && python -c "import sys; assert sys.version_info[:2] == (3, 11), sys.version" \
+    && python -c "import importlib.metadata as m; assert m.version('torch') == '2.5.1'; assert m.version('torchvision') == '0.20.1'" \
     && groupadd --gid 10001 fabrica \
     && useradd --uid 10001 --gid fabrica --create-home --shell /usr/sbin/nologin fabrica
 
-COPY --from=artifact-audit /opt/fabrica/runtime-deps /opt/fabrica/runtime-deps
-COPY --from=artifact-audit /opt/fabrica/worker /opt/fabrica/worker
-COPY --from=artifact-audit /opt/fabrica/sam2-source /opt/fabrica/sam2-source
-COPY --from=artifact-audit /opt/fabrica/sam /opt/fabrica/sam
+LABEL org.opencontainers.image.source="https://github.com/moodworks/fabrica-kit" \
+      org.opencontainers.image.revision="${FABRICA_GIT_SHA}" \
+      io.fabrica.source-revision-contract="git-sha40-or-unavailable-v1" \
+      io.fabrica.image-use="health-only-non-promotable-v1" \
+      io.fabrica.build-contract.version="fabrica-sam-runpod-github-v1" \
+      io.fabrica.sam.repository-commit="05d9e57fb3945b10c861046c1e6749e2bfc258e3" \
+      io.fabrica.sam.model-id="sam2.1_hiera_base_plus" \
+      io.fabrica.sam.config="configs/sam2.1/sam2.1_hiera_b+.yaml" \
+      io.fabrica.sam.config-sha256="e73f9e9547b305040552ee943ebd3a34cee5727a76fc2ab88b87f7b28b430754" \
+      io.fabrica.sam.checkpoint-sha256="a2345aede8715ab1d5d31b4a509fb160c5a4af1970f199d9054ccfb746c004c5" \
+      io.fabrica.sam.artifact-manifest-sha256="a2211fc5f29892678669a86d197ae5215ecfde2c1ad3a85ad9c39093e20f516b" \
+      io.fabrica.sam.hosting-profile-sha256="1687de7e1936944b0f8b8a14ed4500a988f92558fe3c1680cfe3acc7bc8b8f3d" \
+      io.fabrica.sam.direct-adapter-profile-sha256="62809b35b0ccf2d28f1bcd086857718a7c909b247adeccdddd587305066449a4" \
+      io.fabrica.sam.runtime-adapter-profile-sha256="82a110c9739c2990d663a86f848bc9a0218391c6f21565b16dcda24baf8f1826"
 
-RUN python -m sam_worker.health \
+COPY --from=acquisition /opt/fabrica/closed/worker /opt/fabrica/worker
+COPY --from=acquisition /opt/fabrica/closed/sam2-overlay /opt/fabrica/sam2-overlay
+COPY --from=acquisition /opt/fabrica/closed/sam2-source /opt/fabrica/sam2-source
+COPY --from=acquisition /opt/fabrica/closed/sam /opt/fabrica/sam
+COPY --from=acquisition /opt/fabrica/closed/requirements.lock /opt/fabrica/sam/requirements.lock
+COPY --from=acquisition /opt/fabrica/closed/wheelhouse-manifest.json /opt/fabrica/sam/wheelhouse-manifest.json
+
+RUN --mount=from=acquisition,source=/opt/fabrica/closed/wheelhouse,target=/opt/fabrica/wheelhouse,ro \
+    --network=none \
+    python -m sam_worker.artifacts verify-dependencies \
+        --manifest /opt/fabrica/sam/artifact-manifest.json \
+        --requirements-lock /opt/fabrica/sam/requirements.lock \
+        --wheelhouse-manifest /opt/fabrica/sam/wheelhouse-manifest.json \
+        --dependency-licenses /opt/fabrica/sam/dependency-licenses.json \
+        --wheelhouse /opt/fabrica/wheelhouse \
+    && python -m pip install \
+        --no-cache-dir \
+        --no-compile \
+        --no-index \
+        --only-binary=:all: \
+        --no-deps \
+        --find-links=file:///opt/fabrica/wheelhouse \
+        --require-hashes \
+        --target=/opt/fabrica/runtime-deps \
+        -r /opt/fabrica/sam/requirements.lock \
+    && rm -rf /opt/fabrica/runtime-deps/bin \
+    && test ! -e /opt/fabrica/runtime-deps/bin \
+    && find /opt/fabrica/runtime-deps -type f -name '*.pyc' -delete \
+    && find /opt/fabrica/runtime-deps -type d -name __pycache__ -empty -delete \
+    && python -c "from pathlib import Path; root=Path('/opt/fabrica/runtime-deps'); assert not any(path.suffix == '.pyc' or path.name == '__pycache__' for path in root.rglob('*'))" \
+    && python -m sam_worker.artifacts verify-installed \
+        --manifest /opt/fabrica/sam/artifact-manifest.json \
+        --requirements-lock /opt/fabrica/sam/requirements.lock \
+        --runtime-deps /opt/fabrica/runtime-deps
+
+RUN --network=none python -m sam_worker.artifacts verify-runtime \
+        --manifest /opt/fabrica/sam/artifact-manifest.json \
+        --source-root /opt/fabrica/sam2-source \
+        --checkpoint /opt/fabrica/sam/checkpoints/sam2.1_hiera_base_plus.pt \
+        --licenses-root /opt/fabrica/sam/licenses \
+        --requirements-lock /opt/fabrica/sam/requirements.lock \
+        --wheelhouse-manifest /opt/fabrica/sam/wheelhouse-manifest.json \
+        --dependency-licenses /opt/fabrica/sam/dependency-licenses.json \
+        --runtime-deps /opt/fabrica/runtime-deps \
     && chown -R root:root /opt/fabrica \
     && chmod -R a-w /opt/fabrica
 
+EXPOSE 80/tcp
 USER 10001:10001
 WORKDIR /opt/fabrica/worker
 HEALTHCHECK NONE

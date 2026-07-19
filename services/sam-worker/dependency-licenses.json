@@ -1,0 +1,161 @@
+{
+  "baseOwned": [
+    {
+      "assertion": "importlib.metadata.version",
+      "license": "BSD-3-Clause",
+      "name": "torch",
+      "source": "immutable-pytorch-base",
+      "version": "2.5.1"
+    },
+    {
+      "assertion": "importlib.metadata.version",
+      "compatibility": "torch==2.5.1",
+      "license": "BSD-3-Clause",
+      "name": "torchvision",
+      "source": "immutable-pytorch-base",
+      "version": "0.20.1"
+    }
+  ],
+  "inventoryKind": "fabrica-runtime-dependency-licenses-v1",
+  "inventoryVersion": 1,
+  "packages": [
+    {
+      "evidence": "wheel-METADATA-classifier-and-LICENSE",
+      "filename": "annotated_types-0.7.0-py3-none-any.whl",
+      "license": "MIT",
+      "name": "annotated-types",
+      "runtimeDependencies": [],
+      "version": "0.7.0"
+    },
+    {
+      "evidence": "wheel-METADATA-License-Expression-and-LICENSE",
+      "filename": "anyio-4.14.2-py3-none-any.whl",
+      "license": "MIT",
+      "name": "anyio",
+      "runtimeDependencies": ["idna", "typing-extensions"],
+      "version": "4.14.2"
+    },
+    {
+      "evidence": "wheel-METADATA-License-Expression-and-LICENSE.txt",
+      "filename": "click-8.4.2-py3-none-any.whl",
+      "license": "BSD-3-Clause",
+      "name": "click",
+      "runtimeDependencies": [],
+      "version": "8.4.2"
+    },
+    {
+      "evidence": "wheel-METADATA-classifier",
+      "filename": "fastapi-0.115.12-py3-none-any.whl",
+      "license": "MIT",
+      "name": "fastapi",
+      "runtimeDependencies": ["pydantic", "starlette", "typing-extensions"],
+      "version": "0.115.12"
+    },
+    {
+      "evidence": "wheel-METADATA-License-and-LICENSE.txt",
+      "filename": "h11-0.16.0-py3-none-any.whl",
+      "license": "MIT",
+      "name": "h11",
+      "runtimeDependencies": [],
+      "version": "0.16.0"
+    },
+    {
+      "evidence": "wheel-METADATA-License-Expression-and-LICENSE.md",
+      "filename": "idna-3.18-py3-none-any.whl",
+      "license": "BSD-3-Clause",
+      "name": "idna",
+      "runtimeDependencies": [],
+      "version": "3.18"
+    },
+    {
+      "evidence": "wheel-METADATA-classifier-and-dist-info-LICENSE-with-bundled-notices",
+      "filename": "numpy-1.26.4-cp311-cp311-manylinux_2_17_x86_64.manylinux2014_x86_64.whl",
+      "license": "BSD-3-Clause",
+      "name": "numpy",
+      "runtimeDependencies": [],
+      "version": "1.26.4"
+    },
+    {
+      "evidence": "wheel-METADATA-License-and-dist-info-LICENSE-with-third-party-notices",
+      "filename": "pillow-11.0.0-cp311-cp311-manylinux_2_17_x86_64.manylinux2014_x86_64.whl",
+      "license": "MIT-CMU",
+      "name": "pillow",
+      "runtimeDependencies": [],
+      "version": "11.0.0"
+    },
+    {
+      "evidence": "wheel-METADATA-License-Expression-and-LICENSE",
+      "filename": "pydantic-2.13.4-py3-none-any.whl",
+      "license": "MIT",
+      "name": "pydantic",
+      "runtimeDependencies": [
+        "annotated-types",
+        "pydantic-core",
+        "typing-extensions",
+        "typing-inspection"
+      ],
+      "version": "2.13.4"
+    },
+    {
+      "evidence": "wheel-METADATA-License-Expression-and-LICENSE",
+      "filename": "pydantic_core-2.46.4-cp311-cp311-manylinux_2_17_x86_64.manylinux2014_x86_64.whl",
+      "license": "MIT",
+      "name": "pydantic-core",
+      "runtimeDependencies": ["typing-extensions"],
+      "version": "2.46.4"
+    },
+    {
+      "evidence": "wheel-METADATA-License-and-LICENSE",
+      "filename": "PyYAML-6.0.2-cp311-cp311-manylinux_2_17_x86_64.manylinux2014_x86_64.whl",
+      "license": "MIT",
+      "name": "pyyaml",
+      "runtimeDependencies": [],
+      "version": "6.0.2"
+    },
+    {
+      "evidence": "wheel-METADATA-License-Expression-and-LICENSE.md",
+      "filename": "starlette-0.46.2-py3-none-any.whl",
+      "license": "BSD-3-Clause",
+      "name": "starlette",
+      "runtimeDependencies": ["anyio"],
+      "version": "0.46.2"
+    },
+    {
+      "evidence": "wheel-METADATA-License-and-LICENCE",
+      "filename": "tqdm-4.67.1-py3-none-any.whl",
+      "license": "MPL-2.0 AND MIT",
+      "name": "tqdm",
+      "runtimeDependencies": [],
+      "version": "4.67.1"
+    },
+    {
+      "evidence": "wheel-METADATA-License-Expression-and-LICENSE",
+      "filename": "typing_extensions-4.16.0-py3-none-any.whl",
+      "license": "PSF-2.0",
+      "name": "typing-extensions",
+      "runtimeDependencies": [],
+      "version": "4.16.0"
+    },
+    {
+      "evidence": "wheel-METADATA-License-Expression-and-LICENSE",
+      "filename": "typing_inspection-0.4.2-py3-none-any.whl",
+      "license": "MIT",
+      "name": "typing-inspection",
+      "runtimeDependencies": ["typing-extensions"],
+      "version": "0.4.2"
+    },
+    {
+      "evidence": "wheel-METADATA-License-Expression-and-LICENSE.md",
+      "filename": "uvicorn-0.34.2-py3-none-any.whl",
+      "license": "BSD-3-Clause",
+      "name": "uvicorn",
+      "runtimeDependencies": ["click", "h11"],
+      "version": "0.34.2"
+    }
+  ],
+  "target": {
+    "implementation": "CPython",
+    "platform": "linux/amd64",
+    "python": "3.11"
+  }
+}

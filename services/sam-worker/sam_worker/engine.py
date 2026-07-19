@@ -9,11 +9,18 @@ from array import array
 from typing import Any, Callable, Dict, List, Mapping, Sequence, Tuple
 
 from .artifacts import (
+    IMAGE_ADAPTER_PROFILE_PATH,
     IMAGE_CHECKPOINT_PATH,
     IMAGE_CONFIG_PATH,
+    IMAGE_DEPENDENCY_LICENSES_PATH,
     IMAGE_LICENSE_ROOT,
     IMAGE_MANIFEST_PATH,
+    IMAGE_MODEL_LOADER_PATH,
+    IMAGE_OVERLAY_ROOT,
+    IMAGE_REQUIREMENTS_LOCK_PATH,
+    IMAGE_RUNTIME_DEPENDENCIES_ROOT,
     IMAGE_SOURCE_ROOT,
+    IMAGE_WHEELHOUSE_MANIFEST_PATH,
     preflight_runtime_artifacts,
     verify_runtime_artifacts,
 )
@@ -38,6 +45,13 @@ SOURCE_ROOT = IMAGE_SOURCE_ROOT
 CONFIG_PATH = IMAGE_CONFIG_PATH
 CHECKPOINT_PATH = IMAGE_CHECKPOINT_PATH
 LICENSE_ROOT = IMAGE_LICENSE_ROOT
+ADAPTER_PROFILE_PATH = IMAGE_ADAPTER_PROFILE_PATH
+OVERLAY_ROOT = IMAGE_OVERLAY_ROOT
+MODEL_LOADER_PATH = IMAGE_MODEL_LOADER_PATH
+REQUIREMENTS_LOCK_PATH = IMAGE_REQUIREMENTS_LOCK_PATH
+WHEELHOUSE_MANIFEST_PATH = IMAGE_WHEELHOUSE_MANIFEST_PATH
+DEPENDENCY_LICENSES_PATH = IMAGE_DEPENDENCY_LICENSES_PATH
+RUNTIME_DEPENDENCIES_ROOT = IMAGE_RUNTIME_DEPENDENCIES_ROOT
 
 AUTOMATIC_MULTIMASK_OUTPUTS = 3
 AUTOMATIC_LOW_RESOLUTION_SIDE = 256
@@ -383,12 +397,26 @@ def validate_model_artifacts(
             source_root=SOURCE_ROOT,
             checkpoint_path=CHECKPOINT_PATH,
             licenses_root=LICENSE_ROOT,
+            adapter_profile_path=ADAPTER_PROFILE_PATH,
+            overlay_root=OVERLAY_ROOT,
+            model_loader_path=MODEL_LOADER_PATH,
+            requirements_lock_path=REQUIREMENTS_LOCK_PATH,
+            wheelhouse_inventory_path=WHEELHOUSE_MANIFEST_PATH,
+            dependency_licenses_path=DEPENDENCY_LICENSES_PATH,
+            runtime_dependencies_root=RUNTIME_DEPENDENCIES_ROOT,
         )
     return preflight_runtime_artifacts(
         manifest_path=MANIFEST_PATH,
         source_root=SOURCE_ROOT,
         checkpoint_path=CHECKPOINT_PATH,
         licenses_root=LICENSE_ROOT,
+        adapter_profile_path=ADAPTER_PROFILE_PATH,
+        overlay_root=OVERLAY_ROOT,
+        model_loader_path=MODEL_LOADER_PATH,
+        requirements_lock_path=REQUIREMENTS_LOCK_PATH,
+        wheelhouse_inventory_path=WHEELHOUSE_MANIFEST_PATH,
+        dependency_licenses_path=DEPENDENCY_LICENSES_PATH,
+        runtime_dependencies_root=RUNTIME_DEPENDENCIES_ROOT,
     )
 
 
@@ -475,22 +503,18 @@ class ProductionSamEngine:
             try:
                 import numpy
                 import torch
-                import sam2.automatic_mask_generator as automatic_generator_module
-                from sam2.automatic_mask_generator import (
-                    SAM2AutomaticMaskGenerator,
-                )
-                from sam2.build_sam import build_sam2
-                from sam2.utils.amg import rle_to_mask
+                from .model_loader import build_reviewed_model
 
                 self._device = (
                     "cuda" if torch.cuda.is_available() else "cpu"
                 )
-                model = build_sam2(
-                    CONFIG_IDENTITY,
-                    ckpt_path=None,
-                    device=self._device,
-                    mode="eval",
+                model = build_reviewed_model(self._device)
+                import sam2.automatic_mask_generator as automatic_generator_module
+                from sam2.automatic_mask_generator import (
+                    SAM2AutomaticMaskGenerator,
                 )
+                from sam2.utils.amg import rle_to_mask
+
                 load_reviewed_checkpoint(torch, model)
                 automatic_generator = SAM2AutomaticMaskGenerator(
                     model, **AUTOMATIC_GENERATOR_PROFILE

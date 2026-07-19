@@ -48,10 +48,13 @@ def _json_response(status_code: int, code: str) -> JSONResponse:
 
 def _health_response(runtime: SamWorkerRuntime) -> Response:
     state = runtime.readiness_state()
-    if state == MODEL_STAGED_NOT_LOADED:
-        return Response(status_code=204, headers={"cache-control": "no-store"})
     status_code = 200 if state == MODEL_LOADED_READY else 503
-    if state not in (MODEL_NOT_STAGED, MODEL_LOADED_READY, STARTUP_BLOCKED):
+    if state not in (
+        MODEL_NOT_STAGED,
+        MODEL_STAGED_NOT_LOADED,
+        MODEL_LOADED_READY,
+        STARTUP_BLOCKED,
+    ):
         state = STARTUP_BLOCKED
         status_code = 503
     return JSONResponse(

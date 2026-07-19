@@ -1,0 +1,122 @@
+{
+  "config": {
+    "byteSize": 3650,
+    "parsedCanonicalSha256": "4c9b2a847cc3672fdc80cddf09bb5b4128e3b35d5ebbc732e3b1142d5de5f080",
+    "repositoryPath": "sam2/configs/sam2.1/sam2.1_hiera_b+.yaml",
+    "sha256": "e73f9e9547b305040552ee943ebd3a34cee5727a76fc2ab88b87f7b28b430754",
+    "targetInventory": [
+      {
+        "path": "model",
+        "target": "sam2.modeling.sam2_base.SAM2Base"
+      },
+      {
+        "path": "model.image_encoder",
+        "target": "sam2.modeling.backbones.image_encoder.ImageEncoder"
+      },
+      {
+        "path": "model.image_encoder.trunk",
+        "target": "sam2.modeling.backbones.hieradet.Hiera"
+      },
+      {
+        "path": "model.image_encoder.neck",
+        "target": "sam2.modeling.backbones.image_encoder.FpnNeck"
+      },
+      {
+        "path": "model.image_encoder.neck.position_encoding",
+        "target": "sam2.modeling.position_encoding.PositionEmbeddingSine"
+      },
+      {
+        "path": "model.memory_attention",
+        "target": "sam2.modeling.memory_attention.MemoryAttention"
+      },
+      {
+        "path": "model.memory_attention.layer",
+        "target": "sam2.modeling.memory_attention.MemoryAttentionLayer"
+      },
+      {
+        "path": "model.memory_attention.layer.self_attention",
+        "target": "sam2.modeling.sam.transformer.RoPEAttention"
+      },
+      {
+        "path": "model.memory_attention.layer.cross_attention",
+        "target": "sam2.modeling.sam.transformer.RoPEAttention"
+      },
+      {
+        "path": "model.memory_encoder",
+        "target": "sam2.modeling.memory_encoder.MemoryEncoder"
+      },
+      {
+        "path": "model.memory_encoder.position_encoding",
+        "target": "sam2.modeling.position_encoding.PositionEmbeddingSine"
+      },
+      {
+        "path": "model.memory_encoder.mask_downsampler",
+        "target": "sam2.modeling.memory_encoder.MaskDownSampler"
+      },
+      {
+        "path": "model.memory_encoder.fuser",
+        "target": "sam2.modeling.memory_encoder.Fuser"
+      },
+      {
+        "path": "model.memory_encoder.fuser.layer",
+        "target": "sam2.modeling.memory_encoder.CXBlock"
+      }
+    ],
+    "targetOccurrenceCount": 14,
+    "uniqueTargetCount": 12
+  },
+  "contractVersion": "fabrica-sam-selected-config-adapter-v1",
+  "iopathRefusal": {
+    "generalIopathCompatibilityClaim": false,
+    "hieraRepositoryPath": "sam2/modeling/backbones/hieradet.py",
+    "hieraSha256": "03785581ca304d0451ae0df7a08ee0bf1e1dbe66fad285066e6b9ffc0d88d64f",
+    "openBehavior": "immediate-fixed-redacted-refusal",
+    "selectedConfigContainsWeightsPath": false
+  },
+  "loader": {
+    "byteSize": 14829,
+    "imagePath": "/opt/fabrica/worker/sam_worker/model_loader.py",
+    "path": "services/sam-worker/sam_worker/model_loader.py",
+    "sha256": "f7989bd8ce534aca41d5bb7e00cc7ac209294f541f2adacae41bd6128389ba14"
+  },
+  "overlay": {
+    "digestAlgorithm": "fabrica-path-content-tree-v1",
+    "files": [
+      {
+        "byteSize": 81,
+        "path": "iopath/__init__.py",
+        "sha256": "9e3054fa384d5dac8b4c9d0bd8b4ef4f5f636199f6a753b03f8a973b19774a49"
+      },
+      {
+        "byteSize": 84,
+        "path": "iopath/common/__init__.py",
+        "sha256": "c8dc6eed8284b99baa822d243e1238456b1c34922b24b982c7babaf0a16bb6ec"
+      },
+      {
+        "byteSize": 276,
+        "path": "iopath/common/file_io.py",
+        "sha256": "244cfeee411cf6b9131d2990ee76a77e51cf6f6160a8108acbc53c007b65e0d4"
+      },
+      {
+        "byteSize": 976,
+        "path": "sam2/__init__.py",
+        "sha256": "64056d592e79eddb3605669848ee3dbc40f91d07511a20bb37a43f81ae49b80d"
+      }
+    ],
+    "regularFileBytes": 1417,
+    "regularFileCount": 4,
+    "imageRoot": "/opt/fabrica/sam2-overlay",
+    "root": "services/sam-worker/runtime-overlay",
+    "sha256": "efb3a4544e08f66c2dbce06cc633ccf80fab174bc18dc6a01ae1e5b7badb73ba"
+  },
+  "postprocessingOverrides": {
+    "dynamic_multimask_stability_delta": 0.05,
+    "dynamic_multimask_stability_thresh": 0.98,
+    "dynamic_multimask_via_stability": true
+  },
+  "profileSha256": "82a110c9739c2990d663a86f848bc9a0218391c6f21565b16dcda24baf8f1826",
+  "semanticCompatibilityStatus": "deferred-no-torch-or-sam-execution",
+  "upstreamHydraBypassed": true,
+  "upstreamPackageInitializerExecuted": false,
+  "generalHydraCompatibilityClaim": false
+}
