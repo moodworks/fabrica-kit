@@ -36,8 +36,8 @@ export const SAM_RUNPOD_DIRECT_HOSTING_PROFILE = Object.freeze({
         inferenceReady: false,
       },
       'model-staged-not-loaded': {
-        status: 503,
-        body: 'strict-redacted-json',
+        status: 204,
+        body: 'empty',
         inferenceReady: false,
       },
       'model-loaded-ready': {
@@ -100,7 +100,7 @@ export const SAM_RUNPOD_DIRECT_HOSTING_PROFILE = Object.freeze({
 } as const);
 
 export const SAM_RUNPOD_DIRECT_HOSTING_PROFILE_SHA256 =
-  '1687de7e1936944b0f8b8a14ed4500a988f92558fe3c1680cfe3acc7bc8b8f3d' as const;
+  '2e5d64b6741802f7963fa678d174fca92a367a32672764fae5831c3131702f3a' as const;
 
 export const SAM_RUNPOD_DIRECT_ADAPTER_PROFILE_V2 = Object.freeze({
   profileVersion: 'sam-runpod-direct-adapter-v2',
@@ -168,7 +168,7 @@ export const SAM_RUNPOD_DIRECT_ADAPTER_PROFILE_V2 = Object.freeze({
 } as const);
 
 export const SAM_RUNPOD_DIRECT_ADAPTER_PROFILE_V2_SHA256 =
-  '62809b35b0ccf2d28f1bcd086857718a7c909b247adeccdddd587305066449a4' as const;
+  'c114b8b0bc3030ef2d7df524c88bd1710c9e6bc264d186c6b9e8ee7845718747' as const;
 
 export const SAM_RUNPOD_DIRECT_AUTHORIZATION_PROFILE_V2 = Object.freeze({
   profileVersion: 'sam-runpod-direct-authorization-v2',
@@ -215,7 +215,7 @@ export const SAM_RUNPOD_DIRECT_AUTHORIZATION_PROFILE_V2 = Object.freeze({
 } as const);
 
 export const SAM_RUNPOD_DIRECT_AUTHORIZATION_PROFILE_V2_SHA256 =
-  '7fa4110fce04f5e87d4a95a669b6d30c4085bc6eb078e2adaa763334f292f139' as const;
+  'c1ab605534b23b8aa6be2433b333696eeed9f13e1f87be76a49e60a26bc7509e' as const;
 
 const profileDigest = (profile: unknown): string =>
   sha256Hex(Buffer.from(canonicalizeJson(profile), 'utf8'));

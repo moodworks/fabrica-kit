@@ -222,6 +222,21 @@ describe('SAM mask protocol', () => {
     expect(vectors.vectorVersion).toBe(2);
     expect(vectors.directHosting.profile).toEqual(SAM_RUNPOD_DIRECT_HOSTING_PROFILE);
     expect(vectors.directHosting.sha256).toBe(SAM_RUNPOD_DIRECT_HOSTING_PROFILE_SHA256);
+    expect(SAM_RUNPOD_DIRECT_HOSTING_PROFILE.profileVersion).toBe('sam-runpod-direct-hosting-v1');
+    expect(SAM_RUNPOD_DIRECT_HOSTING_PROFILE.health.states['model-staged-not-loaded']).toEqual({
+      status: 204,
+      body: 'empty',
+      inferenceReady: false,
+    });
+    expect(SAM_RUNPOD_DIRECT_HOSTING_PROFILE_SHA256).toBe(
+      '2e5d64b6741802f7963fa678d174fca92a367a32672764fae5831c3131702f3a',
+    );
+    expect(SAM_RUNPOD_DIRECT_ADAPTER_PROFILE_V2_SHA256).toBe(
+      'c114b8b0bc3030ef2d7df524c88bd1710c9e6bc264d186c6b9e8ee7845718747',
+    );
+    expect(SAM_RUNPOD_DIRECT_AUTHORIZATION_PROFILE_V2_SHA256).toBe(
+      'c1ab605534b23b8aa6be2433b333696eeed9f13e1f87be76a49e60a26bc7509e',
+    );
     expect(sha256Hex(Buffer.from(canonicalizeJson(vectors.directHosting.profile), 'utf8'))).toBe(
       SAM_RUNPOD_DIRECT_HOSTING_PROFILE_SHA256,
     );

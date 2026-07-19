@@ -41,6 +41,25 @@ at the first archive's pre-stream length-header gate. It also produced no final 
 or worker, and no endpoint, GPU, model-health, fixture, inference, or other follow-on
 provider operation occurred.
 
+## Later health-only operational evidence
+
+Later authorized operational evidence is distinct from both failed builds above. The
+user-supplied registry/container lifecycle excerpt records that commit `63f3ad7`
+produced registry tag
+`registry.runpod.net/moodworks-fabrica-kit-runpod-sam-build-002-services-sam-worker-dockerfile:63f3ad7b4`.
+Two health-triggered containers were created and started, then stopped and removed; a
+third container creation subsequently appeared. Root-observed authorized authenticated
+`GET /ping` probes timed out after exactly 180006 ms and 30006 ms with zero response
+bytes and HTTP `000`. A separately approved diagnostic established that DNS resolution
+and TLS negotiation worked.
+
+No `POST /v1/masks` or inference request occurred. The supplied lifecycle excerpt
+included neither application stderr nor a process exit reason and did not provide an
+immutable image digest. It therefore establishes neither successful model load nor an
+exact termination cause; the registry tag is not treated as a digest. The readiness
+repair documented below remains uncommitted and unpushed and performed no provider
+operation.
+
 ## Pinned model evidence
 
 The selected implementation is Meta's official
@@ -127,8 +146,9 @@ They were retrieved at exactly `2026-07-18T13:15:50Z`. The reviewed facts are:
 - the application port defaults to `PORT=80`; `PORT_HEALTH` defaults to the same port
   and the default health path is `/ping`;
 - RunPod treats `/ping` status `200` as healthy. The active worker deliberately uses
-  `503` for every not-ready state and returns `200` only after its one model is fully
-  loaded and inference-ready;
+  bodyless `204` only for exact staged/loading state, redacted `503` for every other
+  not-ready state, and `200` only after its one model is fully loaded and
+  inference-ready;
 - the provider documents a two-minute no-worker request timeout, a 5.5-minute
   per-request processing timeout, and a 30 MB request and response payload limit; the
   Fabrica boundary below is deliberately stricter;
@@ -387,19 +407,30 @@ Readiness is a cached four-state process contract:
 | Cached state              | `/ping` | Body                 | Inference |
 | ------------------------- | ------: | -------------------- | --------- |
 | `model-not-staged`        |     503 | strict redacted JSON | refused   |
-| `model-staged-not-loaded` |     503 | strict redacted JSON | refused   |
+| `model-staged-not-loaded` |     204 | empty                | refused   |
 | `model-loaded-ready`      |     200 | strict redacted JSON | eligible  |
 | `startup-blocked`         |     503 | strict redacted JSON | refused   |
 
-All health responses use `Cache-Control: no-store` and omit `Retry-After`. The staged
-presence set is the manifest, runtime source root, checkpoint, adapter profile,
-overlay, model loader, requirements lock, wheel manifest, dependency-license
-inventory, installed runtime-dependency root, Apache license, and BSD license. Only
-the full set plus a successful light preflight permits the FastAPI lifespan to start
-one background model-load attempt. Partial or invalid staging is blocked; no
-identities means not staged. One process owns one warm model. `/ping` stays `503` and
-responsive while full hashing/load runs in a thread, and becomes `200` only after
-successful model load and execution-identity verification.
+All health responses use `Cache-Control: no-store` and omit `Retry-After`. Only the
+exact staged-not-loaded state returns a bodyless `204`; it carries neither
+`Content-Type` nor `Content-Length`. The official provider mapping is `204` =
+initializing, `200` = healthy, and every other status = unhealthy and removed from
+routing. The staged presence set is the manifest, runtime source root, checkpoint,
+adapter profile, overlay, model loader, requirements lock, wheel manifest,
+dependency-license inventory, installed runtime-dependency root, Apache license, and
+BSD license. Only the full set plus a successful light preflight permits the FastAPI
+lifespan to start one background `asyncio.to_thread` model-load task. Partial or
+invalid staging is blocked; no identities means not staged. One process owns one warm
+model. `/ping` remains responsive with `204` while full hashing/load runs, becomes
+`200` only after successful model load and execution-identity verification, and
+becomes redacted JSON `503` if startup blocks. `POST /v1/masks` remains redacted `503`
+unless the cached state is exactly `model-loaded-ready`.
+
+The `uvicorn.error` logger receives an initial fixed code for the production
+classification and one terminal fixed ready or blocked code after the background
+attempt. The mapping contains only literal messages for the four closed states; it
+does not interpolate an exception, path, state value, or observed detail and does not
+attach `exc_info`.
 
 After readiness, `/v1/masks` acquires its one nonblocking admission permit before
 buffering the body. A second request receives `429` immediately; there is no application
@@ -550,11 +581,11 @@ Live construction and dispatch require all of:
   `fabrica-binary-rle-v1` output identity;
 - the exact documentation retrieval/expiry tuple and all three reviewed profiles:
   - direct hosting SHA-256
-    `1687de7e1936944b0f8b8a14ed4500a988f92558fe3c1680cfe3acc7bc8b8f3d`;
+    `2e5d64b6741802f7963fa678d174fca92a367a32672764fae5831c3131702f3a`;
   - direct adapter V2 SHA-256
-    `62809b35b0ccf2d28f1bcd086857718a7c909b247adeccdddd587305066449a4`;
+    `c114b8b0bc3030ef2d7df524c88bd1710c9e6bc264d186c6b9e8ee7845718747`;
   - direct authorization V2 SHA-256
-    `7fa4110fce04f5e87d4a95a669b6d30c4085bc6eb078e2adaa763334f292f139`.
+    `c1ab605534b23b8aa6be2433b333696eeed9f13e1f87be76a49e60a26bc7509e`.
 
 The authorization says `clientDispatchMaximum=1`,
 `applicationInferenceMaximum=1`, `clientRetryCount=0`, and `pollCount=0`. It explicitly
@@ -721,10 +752,12 @@ and push to `main` makes every repaired build input available to the remote
 repository-root context. The first authorized attempt stopped at the base-package gate
 before final image completion. Build
 `ddad2cf2-5b79-490a-8646-669ae6649d05` and its automatic retry later stopped at the
-first archive's pre-stream length-header gate. Neither produced a final image, so no
-final image digest exists.
+first archive's pre-stream length-header gate. Neither produced a final image. The
+later `63f3ad7b4` registry tag exists, but the supplied lifecycle evidence contains no
+immutable image digest, so none is claimed.
 
-The exact first future console configuration is health-only:
+The exact next console configuration after a reviewed commit of this repair remains
+health-only:
 
 | Setting                          | Value                            |
 | -------------------------------- | -------------------------------- |
@@ -745,10 +778,11 @@ The exact first future console configuration is health-only:
 That configuration uses no queue endpoint, automatic/client retry, fixture upload, or
 inference POST. It injects no build secret or provider key. The first separately
 authorized exercise may inspect the built image inventory and perform bounded
-authenticated GET-only health checks. `/ping` must remain `503` until the exact model
-is loaded and inference-ready and may return `200` only afterward. If health does not
-reach `200` within the explicit cost/time authorization, stop and scale back to zero
-without inference.
+authenticated GET-only health checks. `/ping` must remain non-`200` until the exact
+model is loaded and inference-ready: `204` is the bodyless staged/loading signal and
+redacted `503` covers every other not-ready state. It may return `200` only afterward.
+If health does not reach `200` within the explicit cost/time authorization, stop and
+scale back to zero without inference.
 
 The image remains labeled
 `io.fabrica.image-use=health-only-non-promotable-v1`. Supplying a real
@@ -765,12 +799,16 @@ model/config/checkpoint, exact fixture bytes/dimensions/digest, limits, cost cap
 dispatch, and zero retry/poll. No health-only configuration grants POST, inference,
 production admission, billing, or web-route authority.
 
-No local Docker build or base pull, endpoint creation, provider health probe, fixture
-upload, torch/SAM execution, checkpoint load, or GPU inference was performed by this
-milestone. The separately authorized first RunPod GitHub build attempt failed at the
-base-package gate. Subsequent authorized build
+No local Docker build or base pull, fixture upload, torch/SAM execution, checkpoint
+load, or GPU inference was performed by this repair. The separately authorized first
+RunPod GitHub build attempt failed at the base-package gate. Subsequent authorized build
 `ddad2cf2-5b79-490a-8646-669ae6649d05` passed those repaired checks, then failed
 identically on its automatic retry at the first archive's pre-stream length-header
-gate. Neither produced a final image, worker, or model-health result, and this repair
-performed no provider operation. Matching reviewed hashes establish artifact identity
-only; they do not prove artifact safety, semantic compatibility, or model correctness.
+gate. Neither produced a final image, worker, or model-health result. The later
+authorized `63f3ad7` health-only evidence combines the user-supplied container
+lifecycle excerpt with root-observed GET probes and a separately approved DNS/TLS
+diagnostic. It records two timed-out GETs but no POST, inference, application stderr,
+exit reason, immutable image digest, successful model load, or exact termination
+cause. This current repair performed no provider operation. Matching reviewed hashes
+establish artifact identity only; they do not prove artifact safety, semantic
+compatibility, or model correctness.

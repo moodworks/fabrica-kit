@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import threading
 from pathlib import Path
 from typing import Any
@@ -33,6 +34,19 @@ READINESS_STATES = {
     MODEL_LOADED_READY,
     STARTUP_BLOCKED,
 }
+STARTUP_STATE_LOG_MESSAGES = {
+    MODEL_NOT_STAGED: "fabrica-sam-startup-state: model-not-staged",
+    MODEL_STAGED_NOT_LOADED: (
+        "fabrica-sam-startup-state: model-staged-not-loaded"
+    ),
+    MODEL_LOADED_READY: "fabrica-sam-startup-state: model-loaded-ready",
+    STARTUP_BLOCKED: "fabrica-sam-startup-state: startup-blocked",
+}
+_STARTUP_LOGGER = logging.getLogger("uvicorn.error")
+
+
+def _log_startup_state(state: str) -> None:
+    _STARTUP_LOGGER.info(STARTUP_STATE_LOG_MESSAGES[state])
 
 
 class SamWorkerRuntime:
@@ -64,9 +78,11 @@ class SamWorkerRuntime:
         except Exception:
             with self._state_lock:
                 self._state = STARTUP_BLOCKED
+            _log_startup_state(STARTUP_BLOCKED)
             return
         with self._state_lock:
             self._state = MODEL_LOADED_READY
+        _log_startup_state(MODEL_LOADED_READY)
 
     def try_admit(self) -> bool:
         return self._inference_permit.acquire(blocking=False)
@@ -125,10 +141,12 @@ def create_production_runtime() -> SamWorkerRuntime:
             state = STARTUP_BLOCKED
         else:
             state = MODEL_STAGED_NOT_LOADED
-    return SamWorkerRuntime(
+    runtime = SamWorkerRuntime(
         ProductionSamEngine(),
         state,
     )
+    _log_startup_state(state)
+    return runtime
 
 
 def _artifact_path_exists(path: Path) -> bool:

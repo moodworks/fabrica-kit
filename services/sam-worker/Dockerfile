@@ -69,8 +69,8 @@ LABEL org.opencontainers.image.source="https://github.com/moodworks/fabrica-kit"
       io.fabrica.sam.config-sha256="e73f9e9547b305040552ee943ebd3a34cee5727a76fc2ab88b87f7b28b430754" \
       io.fabrica.sam.checkpoint-sha256="a2345aede8715ab1d5d31b4a509fb160c5a4af1970f199d9054ccfb746c004c5" \
       io.fabrica.sam.artifact-manifest-sha256="baab7246927ea22ac9f769cab60af2fc3c03fe3ef81aa9a660ab56441365647d" \
-      io.fabrica.sam.hosting-profile-sha256="1687de7e1936944b0f8b8a14ed4500a988f92558fe3c1680cfe3acc7bc8b8f3d" \
-      io.fabrica.sam.direct-adapter-profile-sha256="62809b35b0ccf2d28f1bcd086857718a7c909b247adeccdddd587305066449a4" \
+      io.fabrica.sam.hosting-profile-sha256="2e5d64b6741802f7963fa678d174fca92a367a32672764fae5831c3131702f3a" \
+      io.fabrica.sam.direct-adapter-profile-sha256="c114b8b0bc3030ef2d7df524c88bd1710c9e6bc264d186c6b9e8ee7845718747" \
       io.fabrica.sam.runtime-adapter-profile-sha256="82a110c9739c2990d663a86f848bc9a0218391c6f21565b16dcda24baf8f1826"
 
 COPY --from=acquisition /opt/fabrica/closed/worker /opt/fabrica/worker

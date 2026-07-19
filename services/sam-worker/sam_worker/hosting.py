@@ -26,8 +26,8 @@ DIRECT_HOSTING_PROFILE: Dict[str, Any] = {
                 "inferenceReady": False,
             },
             "model-staged-not-loaded": {
-                "status": 503,
-                "body": "strict-redacted-json",
+                "status": 204,
+                "body": "empty",
                 "inferenceReady": False,
             },
             "model-loaded-ready": {
@@ -90,7 +90,7 @@ DIRECT_HOSTING_PROFILE: Dict[str, Any] = {
 }
 
 DIRECT_HOSTING_PROFILE_SHA256 = (
-    "1687de7e1936944b0f8b8a14ed4500a988f92558fe3c1680cfe3acc7bc8b8f3d"
+    "2e5d64b6741802f7963fa678d174fca92a367a32672764fae5831c3131702f3a"
 )
 
 if (

@@ -15,10 +15,10 @@ authorized first GitHub build attempt reached the immutable-base package-metadat
 and stopped there. A subsequent authorized RunPod build
 `ddad2cf2-5b79-490a-8646-669ae6649d05` on `runpod-sam-build-002` passed the repaired
 base checks, but both its initial acquisition attempt and automatic retry failed
-identically at the first archive's pre-stream length-header gate. Neither build
+identically at the first archive's pre-stream length-header gate. Neither failed build
 produced a final image or worker, and no endpoint, GPU, model-health, fixture, or
-inference operation followed. This repair performs no provider operation and does not
-authorize another build.
+inference operation followed from those attempts. This repair performs no provider
+operation and does not authorize another build.
 
 ## Fixed GitHub build source
 
@@ -46,6 +46,24 @@ the repository-root context.
 
 `services/sam-worker/Dockerfile.dockerignore` is the Dockerfile-specific, allowlist
 context contract. Every `COPY` source is a repository file selected by that allowlist.
+
+## Later health-only operational evidence
+
+Later authorized operational evidence is distinct from those failed builds. The
+user-supplied registry/container lifecycle excerpt records that commit `63f3ad7`
+produced registry tag
+`registry.runpod.net/moodworks-fabrica-kit-runpod-sam-build-002-services-sam-worker-dockerfile:63f3ad7b4`.
+Two health-triggered containers were created and started, then stopped and removed; a
+third container creation subsequently appeared. Root-observed authorized authenticated
+`GET /ping` probes timed out after exactly 180006 ms and 30006 ms with zero response
+bytes and HTTP `000`. A separately approved diagnostic established that DNS resolution
+and TLS negotiation worked.
+
+No `POST /v1/masks` or inference request occurred. The supplied lifecycle excerpt
+contained no application stderr, process exit reason, or immutable image digest, so it
+does not establish successful model load or an exact container termination cause. The
+registry tag is not represented as an immutable digest. The readiness repair in this
+working tree remains uncommitted and unpushed and was not exercised against RunPod.
 
 ## Reviewed artifact identities
 
@@ -206,24 +224,35 @@ Startup verifies all staged artifact, dependency, overlay, loader, config, sourc
 checkpoint identities before importing torch or SAM. It then constructs and loads
 exactly one model instance. Readiness becomes green only after load succeeds.
 
-| State                     | `GET /ping` | `inferenceReady` |
-| ------------------------- | ----------: | ---------------- |
-| `model-not-staged`        |         503 | `false`          |
-| `model-staged-not-loaded` |         503 | `false`          |
-| `startup-blocked`         |         503 | `false`          |
-| `model-loaded-ready`      |         200 | `true`           |
+| State                     | `GET /ping` | Body                 | `inferenceReady` |
+| ------------------------- | ----------: | -------------------- | ---------------- |
+| `model-not-staged`        |         503 | strict redacted JSON | `false`          |
+| `model-staged-not-loaded` |         204 | empty                | `false`          |
+| `startup-blocked`         |         503 | strict redacted JSON | `false`          |
+| `model-loaded-ready`      |         200 | strict redacted JSON | `true`           |
 
 Startup failures transition to `startup-blocked`. Responses expose only fixed state
-and contract fields; raw exceptions and filesystem paths are not returned. The
-previous staged-but-not-loaded success response is not part of the active hosting
-profile.
+and contract fields; raw exceptions and filesystem paths are not returned. The exact
+staged-but-not-loaded state returns a bodyless `204`; that response carries neither
+`Content-Type` nor `Content-Length`. The official provider mapping is `204` =
+initializing, `200` = healthy, and every other status = unhealthy and removed from
+routing. All health responses use `Cache-Control: no-store` and omit `Retry-After`.
+Inference remains refused with `503` unless the cached state is exactly
+`model-loaded-ready`.
+
+The `uvicorn.error` logger receives one fixed initial classification code and, when a
+background load attempt runs, one fixed terminal ready or blocked code. The four
+literal codes contain only the closed state; startup exceptions, paths, and observed
+values are never interpolated and no exception trace is attached.
 
 The active profile digests are:
 
 - hosting:
-  `1687de7e1936944b0f8b8a14ed4500a988f92558fe3c1680cfe3acc7bc8b8f3d`
+  `2e5d64b6741802f7963fa678d174fca92a367a32672764fae5831c3131702f3a`
 - direct transport adapter:
-  `62809b35b0ccf2d28f1bcd086857718a7c909b247adeccdddd587305066449a4`
+  `c114b8b0bc3030ef2d7df524c88bd1710c9e6bc264d186c6b9e8ee7845718747`
+- direct authorization:
+  `c1ab605534b23b8aa6be2433b333696eeed9f13e1f87be76a49e60a26bc7509e`
 - runtime selected-config adapter:
   `82a110c9739c2990d663a86f848bc9a0218391c6f21565b16dcda24baf8f1826`
 
@@ -245,9 +274,10 @@ health-only console configuration injects none.
 
 Any completed image from this source is health-only and non-promotable even when a real
 SHA is supplied. A real SHA improves provenance but does not satisfy the later image
-inventory, model-load, GPU-health, or inference promotion gates. The first authorized
-build and build `ddad2cf2-5b79-490a-8646-669ae6649d05` both stopped before final image
-completion, so no final image digest exists.
+inventory, model-load, GPU-health, or inference promotion gates. The first two
+authorized builds stopped before image completion. The later `63f3ad7b4` registry tag
+is recorded only as a tag because the supplied evidence did not include its immutable
+image digest.
 
 ## Provider-free verification
 
@@ -295,4 +325,5 @@ separately authorized reviewed commit and push, enter exactly:
 | Total health-only deployment cap | `$2.00`                          |
 
 Use no queue endpoint and no automatic or client retry. Upload no fixture and do not
-send `POST /v1/masks`. The first separately authorized exercise is health-only.
+send `POST /v1/masks`. Any next separately authorized exercise after this repair is
+health-only.

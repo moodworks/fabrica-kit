@@ -74,6 +74,7 @@ from sam_worker.runtime import (
     MODEL_NOT_STAGED,
     MODEL_STAGED_NOT_LOADED,
     STARTUP_BLOCKED,
+    STARTUP_STATE_LOG_MESSAGES,
     SamWorkerRuntime,
     create_production_runtime,
 )
@@ -213,6 +214,20 @@ class ProtocolTests(unittest.TestCase):
                 canonical_json(DIRECT_HOSTING_PROFILE).encode("utf-8")
             ).hexdigest(),
             DIRECT_HOSTING_PROFILE_SHA256,
+        )
+        self.assertEqual(
+            DIRECT_HOSTING_PROFILE["health"]["states"][
+                MODEL_STAGED_NOT_LOADED
+            ],
+            {
+                "status": 204,
+                "body": "empty",
+                "inferenceReady": False,
+            },
+        )
+        self.assertEqual(
+            DIRECT_HOSTING_PROFILE_SHA256,
+            "2e5d64b6741802f7963fa678d174fca92a367a32672764fae5831c3131702f3a",
         )
         self.assertEqual(
             MAX_RAW_MASK_WORKING_BYTES,
@@ -789,6 +804,68 @@ class DirectRuntimeTests(unittest.TestCase):
         self.assertEqual(absent.readiness_state(), MODEL_NOT_STAGED)
         self.assertEqual(absent_engine.loads, 0)
 
+    def test_startup_state_logs_are_fixed_and_redacted(self) -> None:
+        self.assertEqual(
+            STARTUP_STATE_LOG_MESSAGES,
+            {
+                MODEL_NOT_STAGED: (
+                    "fabrica-sam-startup-state: model-not-staged"
+                ),
+                MODEL_STAGED_NOT_LOADED: (
+                    "fabrica-sam-startup-state: model-staged-not-loaded"
+                ),
+                MODEL_LOADED_READY: (
+                    "fabrica-sam-startup-state: model-loaded-ready"
+                ),
+                STARTUP_BLOCKED: (
+                    "fabrica-sam-startup-state: startup-blocked"
+                ),
+            },
+        )
+
+        class ReadyEngine(FakeEngine):
+            def load(self) -> None:
+                return None
+
+        with patch(
+            "sam_worker.runtime._STARTUP_LOGGER.info"
+        ) as startup_log:
+            ready = SamWorkerRuntime(
+                ReadyEngine([]),
+                MODEL_STAGED_NOT_LOADED,
+            )
+            ready.load_model_once()
+            ready.load_model_once()
+            startup_log.assert_called_once_with(
+                "fabrica-sam-startup-state: model-loaded-ready"
+            )
+
+        exception_rendered = False
+
+        class HostileStartupError(Exception):
+            def __str__(self) -> str:
+                nonlocal exception_rendered
+                exception_rendered = True
+                return "/private/checkpoint CUDA raw startup value"
+
+        class BlockedEngine(FakeEngine):
+            def load(self) -> None:
+                raise HostileStartupError()
+
+        with patch(
+            "sam_worker.runtime._STARTUP_LOGGER.info"
+        ) as startup_log:
+            blocked = SamWorkerRuntime(
+                BlockedEngine([]),
+                MODEL_STAGED_NOT_LOADED,
+            )
+            blocked.load_model_once()
+            blocked.load_model_once()
+            startup_log.assert_called_once_with(
+                "fabrica-sam-startup-state: startup-blocked"
+            )
+        self.assertFalse(exception_rendered)
+
     def test_production_staging_classification_rejects_partial_artifacts(self) -> None:
         def state_for(
             staged: tuple[
@@ -821,10 +898,16 @@ class DirectRuntimeTests(unittest.TestCase):
                     "sam_worker.runtime.ProductionSamEngine",
                     return_value=FakeEngine([]),
                 ),
+                patch(
+                    "sam_worker.runtime._STARTUP_LOGGER.info"
+                ) as startup_log,
             ):
                 state = create_production_runtime().readiness_state()
                 self.assertEqual(
                     preflight.call_count, 1 if all(staged) else 0
+                )
+                startup_log.assert_called_once_with(
+                    STARTUP_STATE_LOG_MESSAGES[state]
                 )
                 return state
 
@@ -1334,7 +1417,7 @@ except ModuleNotFoundError:
     "pinned FastAPI/httpx test intentions are not installed on this bare host",
 )
 class DirectHttpTests(unittest.TestCase):
-    def test_health_is_redacted_and_503_until_model_is_ready(self) -> None:
+    def test_health_is_redacted_and_nonready_until_model_is_ready(self) -> None:
         ready = SamWorkerRuntime(FakeEngine([]), MODEL_LOADED_READY)
         with TestClient(create_app(ready)) as client:
             response = client.get("/ping")
@@ -1351,6 +1434,10 @@ class DirectHttpTests(unittest.TestCase):
                 },
             )
             self.assertEqual(response.headers["cache-control"], "no-store")
+            self.assertEqual(
+                response.headers["content-type"],
+                "application/json",
+            )
             self.assertNotIn("retry-after", response.headers)
 
         for state in (MODEL_NOT_STAGED, STARTUP_BLOCKED):
@@ -1359,8 +1446,43 @@ class DirectHttpTests(unittest.TestCase):
                 self.assertEqual(response.status_code, 503)
                 self.assertEqual(response.json()["state"], state)
                 self.assertFalse(response.json()["inferenceReady"])
+                self.assertEqual(
+                    response.headers["cache-control"],
+                    "no-store",
+                )
+                self.assertNotIn("retry-after", response.headers)
                 self.assertNotIn("path", response.text.lower())
                 self.assertNotIn("exception", response.text.lower())
+                refused = client.post("/v1/masks")
+                self.assertEqual(refused.status_code, 503)
+                self.assertEqual(
+                    refused.json()["error"]["code"],
+                    "WORKER_NOT_READY",
+                )
+
+        unknown = SamWorkerRuntime(FakeEngine([]), MODEL_NOT_STAGED)
+        with unknown._state_lock:
+            unknown._state = "/private/unknown-startup-value"
+        with TestClient(create_app(unknown)) as client:
+            response = client.get("/ping")
+            self.assertEqual(response.status_code, 503)
+            self.assertEqual(
+                response.json()["state"],
+                STARTUP_BLOCKED,
+            )
+            self.assertNotIn("private", response.text.lower())
+            self.assertNotIn("unknown", response.text.lower())
+            self.assertEqual(
+                response.headers["cache-control"],
+                "no-store",
+            )
+            self.assertNotIn("retry-after", response.headers)
+            refused = client.post("/v1/masks")
+            self.assertEqual(refused.status_code, 503)
+            self.assertEqual(
+                refused.json()["error"]["code"],
+                "WORKER_NOT_READY",
+            )
 
         loading_started = threading.Event()
         finish_loading = threading.Event()
@@ -1375,13 +1497,19 @@ class DirectHttpTests(unittest.TestCase):
         with TestClient(create_app(loading)) as client:
             self.assertTrue(loading_started.wait(1))
             response = client.get("/ping")
-            self.assertEqual(response.status_code, 503)
-            self.assertEqual(
-                response.json()["state"], MODEL_STAGED_NOT_LOADED
-            )
-            self.assertFalse(response.json()["inferenceReady"])
+            self.assertEqual(response.status_code, 204)
+            self.assertEqual(response.content, b"")
+            self.assertNotIn("content-type", response.headers)
+            self.assertNotIn("content-length", response.headers)
             self.assertEqual(response.headers["cache-control"], "no-store")
             self.assertNotIn("retry-after", response.headers)
+            self.assertFalse(finish_loading.is_set())
+            refused = client.post("/v1/masks")
+            self.assertEqual(refused.status_code, 503)
+            self.assertEqual(
+                refused.json()["error"]["code"],
+                "WORKER_NOT_READY",
+            )
             finish_loading.set()
             for _attempt in range(100):
                 response = client.get("/ping")
@@ -1390,14 +1518,35 @@ class DirectHttpTests(unittest.TestCase):
                 time.sleep(0.005)
             self.assertEqual(response.status_code, 200)
 
+        blocked_loading_started = threading.Event()
+        finish_blocked_loading = threading.Event()
+
         class BlockedEngine(FakeEngine):
             def load(self) -> None:
+                blocked_loading_started.set()
+                if not finish_blocked_loading.wait(2):
+                    raise RuntimeError("test blocked loader timed out")
                 raise RuntimeError(
                     "/private/model/checkpoint.pt CUDA startup exception"
                 )
 
         blocked = SamWorkerRuntime(BlockedEngine([]), MODEL_STAGED_NOT_LOADED)
         with TestClient(create_app(blocked)) as client:
+            self.assertTrue(blocked_loading_started.wait(1))
+            response = client.get("/ping")
+            self.assertEqual(response.status_code, 204)
+            self.assertEqual(response.content, b"")
+            self.assertNotIn("content-type", response.headers)
+            self.assertNotIn("content-length", response.headers)
+            self.assertEqual(response.headers["cache-control"], "no-store")
+            self.assertNotIn("retry-after", response.headers)
+            refused = client.post("/v1/masks")
+            self.assertEqual(refused.status_code, 503)
+            self.assertEqual(
+                refused.json()["error"]["code"],
+                "WORKER_NOT_READY",
+            )
+            finish_blocked_loading.set()
             for _attempt in range(100):
                 response = client.get("/ping")
                 if response.status_code == 503:
@@ -1405,6 +1554,8 @@ class DirectHttpTests(unittest.TestCase):
                 time.sleep(0.005)
             self.assertEqual(response.status_code, 503)
             self.assertEqual(response.json()["state"], STARTUP_BLOCKED)
+            self.assertEqual(response.headers["cache-control"], "no-store")
+            self.assertNotIn("retry-after", response.headers)
             self.assertNotIn("checkpoint", response.text.lower())
             self.assertNotIn("cuda", response.text.lower())
 
@@ -1660,6 +1811,20 @@ class StaticSourceTests(unittest.TestCase):
         self.assertIn("docs_url=None", app_source)
         self.assertIn("redoc_url=None", app_source)
         self.assertIn("openapi_url=None", app_source)
+        self.assertEqual(
+            app_source.count(
+                "asyncio.to_thread(runtime.load_model_once)"
+            ),
+            1,
+        )
+        self.assertIn(
+            'logging.getLogger("uvicorn.error")',
+            runtime_source,
+        )
+        self.assertNotIn("exc_info", runtime_source)
+        self.assertNotIn(".exception(", runtime_source)
+        for message in STARTUP_STATE_LOG_MESSAGES.values():
+            self.assertIn(message, runtime_source)
         self.assertIn("access_log=False", server_source)
         self.assertIn("workers=1", server_source)
         load_body = engine_source[engine_source.index("    def load(self)") :]
@@ -1775,7 +1940,7 @@ class StaticSourceTests(unittest.TestCase):
                     DIRECT_HOSTING_PROFILE_SHA256
                 ),
                 "io.fabrica.sam.direct-adapter-profile-sha256": (
-                    "62809b35b0ccf2d28f1bcd086857718a7c909b247adeccdddd587305066449a4"
+                    "c114b8b0bc3030ef2d7df524c88bd1710c9e6bc264d186c6b9e8ee7845718747"
                 ),
                 "io.fabrica.sam.runtime-adapter-profile-sha256": (
                     adapter_profile["profileSha256"]
