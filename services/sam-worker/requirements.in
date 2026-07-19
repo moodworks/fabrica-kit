@@ -1,9 +1,11 @@
 # Exact runtime package intentions. This is not the build lock.
 # A reviewed --require-hashes lock and local wheelhouse are mandatory controlled build inputs.
+# Intended base ownership: torch==2.5.1 and torchvision==0.20.1 are owned by the immutable base image.
+# Retained OCI evidence proves PyTorch 2.5.1, not installed torchvision 0.20.1.
+# Exact torchvision 0.20.1 is a future-build runtime assertion required for final image acceptance.
+# They are forbidden in runtime-deps, the future lock, and the wheelhouse.
 fastapi==0.115.12
 uvicorn==0.34.2
-torch==2.5.1
-torchvision==0.20.1
 numpy==1.26.4
 pillow==11.0.0
 hydra-core==1.3.2

@@ -24,8 +24,13 @@ This first slice generates automatic candidates independently. Point and box mod
 only for future trusted user interaction or a server-validated detector. The closed
 authority enum excludes Qwen. A candidate has no semantic label and is not a scene layer.
 
-No real model ran, no checkpoint was downloaded, no image was built or published, no
-RunPod endpoint was created, and no external inference call was made in this milestone.
+No real model ran. An authorized evidence-acquisition step downloaded two copies of
+the official archive, config, and checkpoint, compared them independently, retained
+one canonical copy and paired retrieval evidence under ignored `.local-data`, and
+discarded duplicate bodies only after comparison. It also retained exact OCI
+manifest/config metadata without pulling a base layer. No dependency lock or wheel was
+acquired. No Docker build, base pull, artifact/model execution, image publication,
+RunPod endpoint, provider health call, or external inference occurred.
 
 ## Pinned model evidence
 
@@ -39,20 +44,64 @@ The selected implementation is Meta's official
 | Model                              | `sam2.1_hiera_base_plus`                                                             |
 | Runtime config identity            | `configs/sam2.1/sam2.1_hiera_b+.yaml`                                                |
 | Checkpoint URL                     | `https://dl.fbaipublicfiles.com/segment_anything_2/092824/sam2.1_hiera_base_plus.pt` |
-| Checkpoint SHA-256                 | **Unknown: deployment-time blocking value**                                          |
-| Primary license                    | Apache-2.0                                                                           |
-| Optional bundled `cc_torch` notice | BSD-3-Clause, if included in the staged source                                       |
-| Meta evidence retrieved            | `2026-07-18`                                                                         |
-| Meta evidence expires              | `2026-08-18T00:00:00Z`, or earlier official-source change/conflict                   |
+| Checkpoint byte size               | 323,606,802                                                                          |
+| Checkpoint SHA-256                 | `a2345aede8715ab1d5d31b4a509fb160c5a4af1970f199d9054ccfb746c004c5`                   |
+| Primary/runtime license            | Apache-2.0 `LICENSE`                                                                 |
+| Bundled `cc_torch` runtime license | BSD-3-Clause `LICENSE_cctorch`, required because `sam2/csrc` is retained             |
+| Artifact evidence finalized        | `2026-07-18T19:31:18Z`                                                               |
+| Artifact evidence expires          | `2026-08-18T19:31:18Z`, or earlier official-source change/conflict                   |
 
-The commit is a pinned official repository commit, not a tagged release. No
-authoritative checkpoint digest was published in the reviewed official evidence. This
-document does not invent one. Retrieval, independent digest review, and a second
-authorization are prerequisites for any build.
+The commit and URLs are official identities. Meta did not publish an authoritative
+checkpoint checksum in the reviewed source. The checkpoint, archive, and config
+digests below are therefore explicitly local evidence with the exact provenance
+`Fabrica-observed SHA-256 from two byte-identical official-source downloads`; they are
+not represented as publisher checksums. During this milestone, both copies were hashed
+with `shasum -a 256` and `openssl dgst -sha256`, checked for exact size and byte
+equality, and kept separate until comparison completed. One canonical body was
+retained; the duplicate body was then discarded. Nothing in the ignored acquisition
+directory is Git-tracked.
 
-Meta evidence must be rechecked against official Meta sources before controlled
-artifact retrieval and at or before its expiry above. Stale, missing, or conflicting
-evidence blocks build and execution.
+The current canonical acquisition evidence is separate from future Docker staging and
+has this exact ignored repository-relative layout:
+
+```text
+.local-data/banner-ai/sam2-build-inputs/
+  sam2-05d9e57fb3945b10c861046c1e6749e2bfc258e3.archive.tar.gz
+  sam2-05d9e57fb3945b10c861046c1e6749e2bfc258e3.download-1.headers
+  sam2-05d9e57fb3945b10c861046c1e6749e2bfc258e3.download-2.headers
+  sam2.1_hiera_b_plus-05d9e57fb3945b10c861046c1e6749e2bfc258e3.config.yaml
+  sam2.1_hiera_b_plus-05d9e57fb3945b10c861046c1e6749e2bfc258e3.download-1.headers
+  sam2.1_hiera_b_plus-05d9e57fb3945b10c861046c1e6749e2bfc258e3.download-2.headers
+  sam2.1_hiera_base_plus-092824.checkpoint.pt
+  sam2.1_hiera_base_plus-092824.download-1.headers
+  sam2.1_hiera_base_plus-092824.download-2.headers
+  pytorch-2.5.1-cuda12.4-cudnn9-runtime.linux-amd64.manifest.json
+  pytorch-2.5.1-cuda12.4-cudnn9-runtime.linux-amd64.config.json
+  pytorch-2.5.1-cuda12.4-cudnn9-runtime.manifest-1.headers
+  pytorch-2.5.1-cuda12.4-cudnn9-runtime.manifest-2.headers
+  pytorch-2.5.1-cuda12.4-cudnn9-runtime.config-3.headers
+  pytorch-2.5.1-cuda12.4-cudnn9-runtime.config-4.headers
+  verified-members/
+    LICENSE.apache-2.0-05d9e57fb3945b10c861046c1e6749e2bfc258e3
+    LICENSE_cctorch.bsd-3-clause-05d9e57fb3945b10c861046c1e6749e2bfc258e3
+    sav_dataset-LICENSE-05d9e57fb3945b10c861046c1e6749e2bfc258e3
+    sav_dataset-LICENSE_DAVIS-05d9e57fb3945b10c861046c1e6749e2bfc258e3
+    sav_dataset-LICENSE_VOS_BENCHMARK-05d9e57fb3945b10c861046c1e6749e2bfc258e3
+```
+
+The paired `.headers` files are retrieval evidence, not trusted identity sidecars or
+Docker inputs. The five `verified-members` files are exact audited archive members.
+No artifact/model code was executed, imported, or installed, and no checkpoint pickle
+or tensor was deserialized.
+
+A matching SHA-256 and size establishes byte identity with those observations. It does
+not establish checkpoint safety, correctness, model semantics, tensor compatibility,
+or freedom from malicious data. The checkpoint evidence is ZIP-structure-only and made
+no semantic/tensor safety claim. Production still verifies every artifact and uses
+`weights_only=True`; neither step turns a hash into a safety proof.
+
+Meta and artifact evidence must be rechecked before controlled acquisition and at or
+before expiry. Stale, missing, or conflicting evidence blocks build and execution.
 
 The direct-hosting decision is based only on the official RunPod
 [load-balancing overview](https://docs.runpod.io/serverless/load-balancing/overview),
@@ -80,6 +129,75 @@ Native construction and execution fail closed at or after
 `2026-08-18T13:15:50Z`. An earlier material change, removal, or conflict in any reviewed
 official page also requires evidence renewal before native use. The deterministic fake
 does not depend on live provider evidence and remains available after expiry.
+
+## Reviewed artifact and container boundary
+
+The tracked `services/sam-worker/artifact-manifest.json` is a closed,
+self-digesting contract with reviewed SHA-256
+`84d7743701a0f9aa9d76716e771155fc6de6a0b6c5bc84746f55a8725f6a5529`.
+It records `artifactExecutionOccurred=false` and `modelInferenceOccurred=false`.
+
+| Artifact                   | Exact observed identity                                                                                                                                                                                                                                                                                            |
+| -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Official commit archive    | 55,631,013 bytes; SHA-256 `92c9e7ca3102fb8ef5953b0e80063a9ae77eb3d80fc54c498c1c6e2f71903dd6`                                                                                                                                                                                                                       |
+| Archive inventory          | 652 entries: 561 regular, 87 directories, 4 symlinks; 64,496,345 regular-file bytes                                                                                                                                                                                                                                |
+| Largest archive member     | `notebooks/video_predictor_example.ipynb`; 10,091,428 bytes; enforced ceiling 10,500,000                                                                                                                                                                                                                           |
+| Runtime `sam2/**` tree     | 33 regular, 4 exact symlinks, 312,959 bytes; `fabrica-path-content-tree-v1` SHA-256 `66821e0f05bd53a04cee682c0e0b131f47fcea3b427522b1ff0ecc69c8be862a`                                                                                                                                                             |
+| Config                     | 3,650 bytes; SHA-256 `e73f9e9547b305040552ee943ebd3a34cee5727a76fc2ab88b87f7b28b430754`; raw official URL bytes equal the archive member                                                                                                                                                                           |
+| Upstream loader            | 4,934 bytes; SHA-256 `6df1b93a16c3eaf49334f74e831db91c67a0cf413b946d102333081722f20520`                                                                                                                                                                                                                            |
+| Checkpoint                 | 323,606,802 bytes; SHA-256 `a2345aede8715ab1d5d31b4a509fb160c5a4af1970f199d9054ccfb746c004c5`                                                                                                                                                                                                                      |
+| Checkpoint ZIP observation | root `sam2_hiera_b+_new`; 619 stored regular entries; 323,483,230 payload bytes; `data.pkl` 81,446 bytes                                                                                                                                                                                                           |
+| Runtime Apache license     | `LICENSE`; 11,357 bytes; SHA-256 `c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4`                                                                                                                                                                                                                |
+| Runtime BSD license        | `LICENSE_cctorch`; 1,566 bytes; SHA-256 `687d4f65ffe399358b170e22572564a16689e496f85a79dc5385fccf6bbc9558`                                                                                                                                                                                                         |
+| Archive-only licenses      | `sav_dataset/LICENSE`: 1,514 bytes, `28b6f4b85d4f6867c99bcba442d3e0bffc4e6f1a6e04e210a4bb9c9a3b56306a`; `LICENSE_DAVIS`: 1,550 bytes, `a727bc2b6f26a1f1c76d0511502da6ba208212708c04a65230159331906354f1`; `LICENSE_VOS_BENCHMARK`: 1,048 bytes, `104f011f1cd91268d54a9fab1ff769ef01081410cd622e0f723c03d146d02482` |
+
+The path/content tree digest begins with
+`fabrica-path-content-tree-v1\0`, sorts UTF-8 paths bytewise, omits directories,
+and domain-separates regular-file path/size/content-hash records from symlink
+path/target records. The four exact symlinks are the base-plus, large, small, and tiny
+root YAML aliases into `sam2/configs/sam2/`; any other link or target fails.
+
+Archive verification happens after exact whole-file size/SHA verification. It requires
+one exact top-level commit directory, canonical collision-free paths, regular files,
+zero-payload directories, four allowlisted non-escaping symlinks to regular members,
+the exact five case-sensitive `LICENSE*` family paths, and zero case-sensitive
+`NOTICE*` family paths. Hard links, devices, FIFOs, absolute/traversal paths, duplicate,
+case-colliding, and NFC-colliding paths fail.
+
+Checkpoint review uses only `zipfile` metadata and CRC reads. Every member must be
+`ZIP_STORED`, regular, unencrypted, under the one exact root, and one of
+`data.pkl`, `byteorder`, `version`, `.data/serialization_id`, or `data/0` through
+`data/614`. No pickle or tensor is deserialized during structural audit.
+
+Safe extraction never uses `tar --extract`. It accepts only empty real destination
+directories, writes only verified `sam2/**` regular files and the two runtime licenses
+with `O_EXCL` and `O_NOFOLLOW`, then creates only the allowlisted links and re-verifies
+the complete runtime tree. The final stage receives no archive, broad source snapshot,
+base metadata, acquisition scratch, or archive-only license.
+
+The immutable base is exactly
+`pytorch/pytorch:2.5.1-cuda12.4-cudnn9-runtime@sha256:c8268a92a69bd500f8be0e665b2630ee006dadaf7bfbc24249141b15ff622755`
+for `linux/amd64`. Its raw manifest is 1,366 bytes with that same digest; its exact
+4,665-byte config has SHA-256
+`946241f40f56c5ac17b12be451a9ff6bf7163acaac37d1f15bbc7404f4394e57`.
+The verifier binds the config descriptor and platform without pulling layers.
+The retained OCI config records `PYTORCH_VERSION=2.5.1` in final `Env`,
+`CUDA_VERSION=12.4.1` and `TARGETPLATFORM` in build history, Ubuntu 22.04 in OCI
+labels, and `amd64`/`linux` in platform fields. CUDA is not a final environment
+observation. cuDNN 9 is only the reviewed `cudnn9` tag identity. No runtime version
+assertion occurred.
+
+CPython 3.11.x is a required future build compatibility assertion. The retained OCI
+metadata does not expose the exact Python patch, and no base image/layer was pulled or
+executed, so the manifest stores `patch=null`. It does not bind an unacquired upstream
+Dockerfile or claim OCI evidence proved Python. Both Docker stages assert 3.11
+major/minor; a separately authorized build must record the exact patch. Health performs
+artifact verification only and does not eagerly import torch or load the engine.
+PyTorch 2.5.1 is observed in retained OCI config. The `torchvision` distribution and
+import namespace remain reserved to the immutable base and forbidden in the future
+lock/wheelhouse, but retained OCI evidence does not prove installed torchvision
+0.20.1. A future build must assert and record that exact runtime version before final
+image acceptance.
 
 The production automatic generator profile is frozen explicitly:
 
@@ -223,13 +341,22 @@ Before inference, the worker validates:
 - bounded streaming decompression and all PNG filters 0 through 4;
 - side, pixel, decoded allocation, prompt, request, and output limits.
 
-Production startup verifies the staged repository/config/checkpoint manifest and hashes
-before importing torch or SAM. The exact model loads once per warm worker. Requests are
-serialized through one process admission permit and execute under inference mode, with
-CUDA selected when available and CPU as the supported fallback. Only request-specific
-predictor and CPU/GPU cache objects are cleared in `finally`; the warm model remains. No
-code or model download occurs at container startup or request time, and inference source
-has no network client.
+Production startup first performs a light, stdlib-only preflight over the reviewed
+manifest, runtime source directory, checkpoint, and two exact runtime license paths.
+It checks the evidence window, strict manifest identity, types, sizes, and license
+inventory without importing torch or hashing the checkpoint. The background attempt
+then verifies the entire runtime source tree, config, upstream loader, checkpoint
+size/SHA/ZIP structure, and license hashes before any torch, NumPy, or SAM import.
+
+Only after full verification does it call
+`build_sam2("configs/sam2.1/sam2.1_hiera_b+.yaml", ckpt_path=None, ...)`, followed by
+exactly `torch.load(checkpoint, map_location="cpu", weights_only=True)`. The checkpoint
+top level must be exactly `{model}`, the state must be nonempty with string keys, and
+explicit missing or unexpected state keys fail startup. The exact model loads once per
+warm worker. Requests execute in inference mode with CUDA when available and CPU as
+the supported fallback. Request-specific predictor and CPU/GPU objects are cleared in
+`finally`; the verified warm model remains. No download occurs at container startup or
+request time, and inference source has no network client.
 
 Readiness is a cached four-state process contract:
 
@@ -240,12 +367,12 @@ Readiness is a cached four-state process contract:
 | `model-loaded-ready`      |     200 | strict redacted JSON | eligible  |
 | `startup-blocked`         |     503 | strict redacted JSON | refused   |
 
-All health responses use `Cache-Control: no-store` and omit `Retry-After`. If all three
-required runtime artifacts are present, the FastAPI lifespan starts exactly one
-background model-load attempt and reports `204` until it reaches the terminal ready or
-blocked state. No artifacts means not staged; a partial artifact set is startup blocked.
-One process owns one warm model. `/ping` remains responsive while blocking inference
-runs in a thread.
+All health responses use `Cache-Control: no-store` and omit `Retry-After`. The five
+presence identities are the manifest, runtime source root, checkpoint, Apache license,
+and BSD license. Only all five plus a successful light preflight permit the FastAPI
+lifespan to start one background model-load attempt and report `204`; partial or
+invalid staging is blocked. No identities means not staged. One process owns one warm
+model. `/ping` remains responsive while blocking full hashing/load runs in a thread.
 
 After readiness, `/v1/masks` acquires its one nonblocking admission permit before
 buffering the body. A second request receives `429` immediately; there is no application
@@ -253,13 +380,75 @@ backlog. The permit is released only after blocking inference and response const
 finish. If the client disconnects after inference begins, the engine may finish while
 the permit remains held; neither worker nor adapter claims GPU cancellation.
 
-The controlled build uses a canonical pinned repository archive and its independently
-reviewed archive SHA-256, not a mutable source directory or incomplete path list.
-`build-input-manifest.example.json` is only the build review ledger.
-`model-manifest.example.json` is the distinct exact eight-key runtime template:
-`manifestVersion`, `repositoryUrl`, `repositoryCommit`, `modelId`, `configIdentity`,
-`configSha256`, `checkpointUrl`, and `checkpointSha256`. The runtime rejects missing or
-extra keys, placeholders, zero digests, and artifact digest drift.
+The two legacy example manifests were removed. The one tracked artifact manifest binds
+repository/archive/tree/config/loader/model/checkpoint/license/base identities, exact
+absolute image paths, evidence state, and the dependency build gate. Missing or extra
+keys, re-signed foreign identities, unresolved required digests, expiry, and runtime
+drift fail closed.
+
+### Dependency and Docker build gate
+
+No dependency lock, wheel, or inventory was acquired or reviewed. The manifest records
+`buildStatus=unresolved-deployment-time-blocking`,
+`acquisitionOccurred=false`, and null lock/inventory sizes and hashes. The stdlib
+`audit-build` command rejects this reviewed status before touching archive, base, or
+dependency paths. The Dockerfile chains `audit-build` before root `pip`, making the
+current source deliberately non-buildable. Matching self-authored sidecars cannot
+bypass the trust boundary because sidecars are not accepted.
+
+The ready-state verifier is already implemented and synthetic-tested. A future
+separately reviewed manifest revision must bind exact raw `requirements.lock` size/SHA
+and exact raw `wheelhouse-inventory.json` size/SHA. The canonical closed inventory
+lists every exact `.whl` filename, size, and SHA-256; the verifier requires an exact
+regular non-symlink directory inventory, collision-free names, CRC-valid wheel ZIPs,
+one matching `METADATA`/`WHEEL`/`RECORD`, compatible CPython 3.11 tags, and either
+pure-`any`, `linux_x86_64`, or `manylinux*_x86_64` platform identity. `musllinux` is
+rejected for the Ubuntu/glibc base. Every `.dist-info` top-level entry must use the one
+exact filename-bound root. Protected top-level `sam_worker`, `sam2`, `torch`,
+`torchvision`, `nvidia`, and `triton` namespaces are rejected for directory entries as
+well as files. Lock and wheelhouse must remain an exact one-wheel-per-locked-package
+bijection.
+
+The deterministic lock grammar is one sorted unique
+`canonical-name==version --hash=sha256:<64-lowercase-hex>` record per line with a final
+newline. URLs, VCS, editables, local paths, includes/options, markers, extras,
+index/find-links directives, sdists, and base-owned packages fail. PyTorch 2.5.1 is
+OCI-config-observed and immutable-base-owned. `torchvision` remains a base-owned
+distribution/namespace and is absent from runtime dependency intentions; its intended
+exact 0.20.1 version remains a future-build runtime assertion. Only exact version/hash
+records and inventory-bound wheels may reach offline pip with
+`PIP_CONFIG_FILE=/dev/null`, `--only-binary=:all:`, `--no-deps`, `--no-index`, and
+`--require-hashes`.
+
+The future ignored input layout is exactly:
+
+```text
+.local-data/banner-ai/sam-worker-build/
+  sam2-source.tar.gz
+  sam2.1_hiera_b+.yaml
+  sam2.1_hiera_base_plus.pt
+  LICENSE
+  LICENSE_cctorch
+  pytorch-base-manifest.json
+  pytorch-base-config.json
+  requirements.lock
+  wheelhouse-inventory.json
+  wheelhouse/*.whl
+```
+
+The Docker context is default-deny and re-includes only the Dockerfile, reviewed
+manifest, flat worker `*.py` files, those exact named inputs, and wheels at that one
+level. Unexpected untracked files, `.env`, Git data, secrets, caches, nested worker
+files, sidecars, sdists, and other `.local-data` cannot enter. The multi-stage runtime
+copies only reviewed worker source, extracted `sam2/**`, two runtime licenses,
+checkpoint/manifest, and—after a future resolved gate—reviewed runtime dependencies.
+The broad archive, archive-only licenses, base metadata, and staging directory never
+enter the final stage. Upstream installation/setup hooks are never invoked.
+
+Downloaded archives, checkpoints, base metadata, locks, wheels, and every
+`.local-data` path remain outside Git. A bounded provider-free `git ls-files -z` test
+rejects model/checkpoint/archive/wheel suffixes and exact artifact basenames and checks
+that no downloaded binary reaches Banner AI package exports or web source.
 
 ### TypeScript server adapter
 
@@ -283,9 +472,11 @@ failure, and every HTTP status at least 500 are terminal non-retryable
 4xx response, including worker overload `429`, is `PROVIDER_FAILURE`. Unsupported
 2xx/3xx status, content type, body, schema, digest, identity, or any queue envelope is
 `RESPONSE_INVALID`. There is deliberately one client dispatch, zero client retry, zero
-poll, and no cancel route. Although the official cold-start guidance suggests client
-retry, this evidence slice refuses automatic retry: a cold-start/no-worker error is
-reported under these same failure semantics and requires an explicit later decision.
+poll, and no cancel route. This no-retry rule applies to `POST /v1/masks`. A separately
+authorized, bounded GET-only `/ping` readiness sequence may follow the official
+recommendation of at least three attempts 5–10 seconds apart. That health sequence
+creates no inference claim, dispatch, or retry authority; a cold-start/no-worker result
+on the one authorized POST remains terminal under the failure semantics above.
 
 The process claims a job/attempt immediately before dispatch and rejects duplicate
 dispatch. That guarantee is deliberately process-local. Production activation also
@@ -365,8 +556,9 @@ The strict response repeats request/workspace/job/attempt/source identity, exact
 identity, integer timings, exact filter accounting, count, ordered candidates, and a
 response digest. The fake execution union contains only fake engine identity,
 definition digest, and `NOT_SAM_OUTPUT`; it cannot claim Meta model/config/checkpoint
-identity. The live union contains only the exact reviewed Meta identity and is
-unconstructable while the checkpoint digest is unresolved.
+identity. The live union contains only the exact reviewed Meta identity. It remains
+unconstructable in this milestone because the dependency build gate is unresolved and
+no reviewed image/endpoint/execution authorization exists.
 
 ## Mask encoding and deterministic filtering
 
@@ -463,75 +655,88 @@ identity. The ignored output is:
 .local-data/banner-ai/sam-fake-vertical-slice/
 ```
 
-`report.html`, `manifest.json`, overlays, cutouts, mask PNGs, and reproduction manifests
-prominently say **DETERMINISTIC FAKE MASKS — NOT SAM OUTPUT**. The transport reports zero
-network calls. These masks are not represented as SAM output.
+Only `report.html` and the top-level `manifest.json` prominently carry
+**DETERMINISTIC FAKE MASKS — NOT SAM OUTPUT**. That labeled set references the source,
+overlay, cutout, binary-mask PNGs, and per-candidate reproduction JSON. The top-level
+manifest binds execution identity `kind=deterministic-fake` and
+`notice=NOT_SAM_OUTPUT`; the transport reports zero network calls. Individual PNGs and
+reproduction JSON do not each embed the banner, and none is represented as SAM output.
 
 ## Future controlled deployment
 
-Deployment remains blocked until every item below is reviewed:
+Deployment is blocked first by the unresolved dependency lock/wheelhouse contract. A
+future acquisition must follow this order:
 
-1. Before evidence expiry, or sooner if an official source changes, recheck the exact
-   Meta and RunPod sources. In a separately authorized controlled environment, retrieve
-   the canonical official repository archive for commit
-   `05d9e57fb3945b10c861046c1e6749e2bfc258e3`, its selected config, the exact
-   `sam2.1_hiera_base_plus` checkpoint, and the applicable license/notices. Resolve and
-   independently review the authoritative checkpoint SHA-256. The unresolved digest is
-   a hard blocker; do not invent it.
-2. Independently compute and record complete repository archive, config, checkpoint,
-   dependency-lock, and wheel hashes. Preserve Apache-2.0 and applicable BSD-3-Clause
-   notices. Stage only the verified canonical archive; the offline Docker build verifies
-   its digest and exact single top-level commit directory before installation.
-3. Produce and review a `pip --require-hashes` lock and local wheelhouse for the exact
-   runtime pins in `requirements.in`. Stage all controlled inputs under the ignored
-   build directory described by the worker README.
-4. Resolve and independently review the digest for the Python 3.11/PyTorch CUDA base
-   `pytorch/pytorch:2.5.1-cuda12.4-cudnn9-runtime`, then perform the separately
-   authorized network-disabled Docker build with the full `tag@sha256:digest`. This
-   build is not authorized now. Run unit, contract-vector, import/network, source, and
-   container scans; start the container locally and validate exact `/ping` transitions
-   and `/v1/masks` refusal/readiness behavior. Never use a floating base or `latest`.
-5. Push the reviewed image once to the approved registry and record its immutable
-   registry digest. This publication is not authorized now. RunPod's GitHub integration
-   is not used because it builds and deploys from the connected repository
-   automatically; this flow requires a separately reviewed controlled build and an
-   immutable image digest.
-6. As a separate external change, create exactly one endpoint of type **Load Balancer**,
-   not Queue. This endpoint creation is not authorized now. Its reviewed settings must
-   record:
-   - the immutable image digest and the exact repository/model/config/checkpoint
-     identities and digests;
-   - the chosen GPU type(s) and price, exactly one GPU per worker, minimum/active
-     workers `0`, and maximum workers `1`;
-   - application and health port `80`, health path `/ping`, and inference path
-     `/v1/masks`;
-   - the provider's fixed direct-request limits, a client wall timeout at most
-     330,000 ms, an idle/cold-start policy, and an exact cost cap;
-   - no provider queue or automatic retry, no client retry, no credentials in the image,
-     and only the server-side `RUNPOD_API_KEY` reference.
-7. Validate the deployed immutable image's authenticated `/ping` without inference:
-   `204` means staged and loading, `200` means ready, and every other status is unhealthy.
-   Confirm the exact derived inference URL and re-review redacted logs and secret
-   isolation. Do not submit the fixture until a new execution authorization exists.
-8. Create a new, unexpired, single-use
-   `single-fixture-sam-runpod-direct-v2` authorization bound to endpoint ID, immutable
-   image digest, all three profile digests, the exact evidence timestamps, and exact
-   repository/model/config/checkpoint identity and digest, and only this fixture:
-   738×255, 125,894 bytes,
-   `40f8a1c4312ec86cb4e38e16b9a423e85c2a9e3cf5f98a4bc510c23f3d4cf073`.
-   Authorize `automatic-candidates` only, the exact minimum mask area, maximum candidate
-   count and Fabrica binary RLE output, one client dispatch, one application inference
-   maximum, zero retry, zero poll, reviewed wall timeout and cost cap, and
-   `providerBillingGuarantee=false`. Grant no production admission, web route, or Qwen
-   geometry authority.
-9. Only after that explicit authorization, submit the bare request to `/v1/masks`
-   exactly once. Capture redacted telemetry and strict response evidence, inspect
-   candidate masks, and stop. Any timeout, cancellation, connection loss, response
-   truncation, or server/gateway 5xx is indeterminate and receives no adapter retry.
+1. Before `2026-08-18T19:31:18Z`, or sooner if an official source changes, recheck the
+   exact Meta artifact sources. Recheck RunPod evidence before its separate
+   `2026-08-18T13:15:50Z` expiry.
+2. In a separately authorized isolated environment, create a new empty acquisition
+   directory exclusively, either under the ignored `.local-data` boundary or in
+   isolated temporary storage. Create distinct destination files with
+   no-overwrite/exclusive semantics and download each exact official
+   archive/config/checkpoint URL twice. Never overwrite retained evidence. Do not
+   execute, import, or install artifact code or deserialize the checkpoint
+   pickle/tensors.
+3. On both copies run `shasum -a 256 <file>` and
+   `openssl dgst -sha256 <file>`. Require all four hashes, exact byte sizes, and a byte
+   comparison such as `cmp -s` to match the manifest. Retain one approved canonical
+   body and paired headers; discard the duplicate body only after every comparison
+   succeeds. Run the stdlib audits over that canonical archive,
+   source/config/tree/license bindings, checkpoint ZIP/CRC/member structure, and base
+   manifest/config descriptor. Acquire no base layer.
+4. Separately acquire a lock and wheelhouse for the exact runtime intentions. Produce a
+   closed wheel inventory. Review exact lock/inventory bytes and each wheel
+   name/size/SHA, run the URL/VCS/editable/directive/sdist/extra rejections, then update
+   and re-sign/review the manifest's ready-state fields. No current dependency hash is
+   known or implied by this milestone.
+5. In future CI, retrieve only into ephemeral storage and verify exact size/SHA before
+   any parser, installer, import, or execution. Run archive/checkpoint/base/license
+   audits, the strict dependency parser/inventory, Git binary/local-data scans, and the
+   exact final image inventory. CI must fail on extra or changed bytes.
+6. Stage only the exact ignored layout. Run the complete `audit-build` command from the
+   worker README on the host first. Only after it succeeds may the literal two-stage
+   `linux/amd64` Dockerfile run with `docker build --network=none`. Both stages use the
+   exact immutable base digest; no build arg or `latest` is accepted. The same resolved
+   audit runs inside the build before offline root `pip`. Record the exact CPython 3.11
+   patch, assert and record installed torchvision 0.20.1, record the
+   non-root/read-only file inventory, run full health verification and import/network
+   scans, and record the final image digest.
+7. Push the reviewed image once to an approved registry and retain its immutable
+   registry digest. RunPod GitHub integration remains excluded because it couples an
+   external build/deploy to repository state.
+8. Create exactly one RunPod endpoint of type **Load Balancer**, not Queue, pinned to
+   that digest. Record the chosen GPU and price, one GPU per worker, minimum/active
+   workers `0`, maximum `1`, port `80`, health `/ping`, inference `/v1/masks`, timeout,
+   cold-start/idle policy, and exact cost cap. No provider queue, retry, or image
+   credential is allowed.
+9. With active workers set to zero, do not assume the public endpoint will expose the
+   worker's internal `204` during cold start. Before inference authorization, either
+   confirm readiness in the RunPod console and then make one authenticated public
+   `GET /ping` that must return `200`, or obtain a separate bounded GET-only health
+   authorization with a fixed finite count of at least three attempts, 5–10 seconds
+   apart, stopping on `200`. The worker's internal `204` remains a container-health
+   state and is not public readiness evidence. Re-review redacted logs and secret
+   isolation. The GET-only sequence grants no POST, inference dispatch, inference
+   claim, or inference retry. If health does not reach `200`, stop without inference.
+10. Create a new, unexpired, single-use
+    `single-fixture-sam-runpod-direct-v2` authorization bound to the endpoint, immutable
+    image, all profile/evidence identities, exact model/config/checkpoint, and only the
+    738×255, 125,894-byte fixture with SHA-256
+    `40f8a1c4312ec86cb4e38e16b9a423e85c2a9e3cf5f98a4bc510c23f3d4cf073`.
+    Authorize `automatic-candidates`, exact limits/RLE, one dispatch, one application
+    inference, zero retry/poll, wall timeout/cost cap, and
+    `providerBillingGuarantee=false`; grant no production admission or web route.
+11. Only after that explicit execution authorization, use the server-only
+    `RUNPOD_API_KEY` reference to submit the bare request once. Capture redacted
+    telemetry/strict response evidence, inspect candidate masks, and stop. Timeout,
+    cancellation, connection loss, truncation, or 5xx is indeterminate and receives no
+    retry.
 
 That one-fixture run is evidence gathering only. It cannot activate production, change
 the canonical scene schema, or grant Qwen geometric authority.
 
-No checkpoint retrieval, dependency resolution, Docker build, registry push, endpoint
-creation, secret inspection, health probe, or provider inference is authorized or
-performed by this milestone.
+No dependency acquisition, Docker build or base pull, registry push, endpoint creation,
+secret inspection, provider health probe, torch/SAM execution, or provider inference
+was performed by this milestone. The retained archive/config/checkpoint and OCI
+metadata are acquisition evidence only. Matching observed hashes do not change that
+fact and do not prove artifact safety.

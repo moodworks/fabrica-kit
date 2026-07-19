@@ -1,0 +1,187 @@
+{
+  "manifestVersion": 1,
+  "manifestKind": "fabrica-sam-worker-reviewed-artifacts-v1",
+  "evidence": {
+    "finalizedAt": "2026-07-18T19:31:18Z",
+    "expiresAt": "2026-08-18T19:31:18Z",
+    "expiryPolicy": "fail-closed-at-expiry-or-earlier-source-change",
+    "artifactExecutionOccurred": false,
+    "modelInferenceOccurred": false
+  },
+  "imageLocations": {
+    "manifest": "/opt/fabrica/sam/artifact-manifest.json",
+    "runtimeSourceRoot": "/opt/fabrica/sam2-source",
+    "config": "/opt/fabrica/sam2-source/sam2/configs/sam2.1/sam2.1_hiera_b+.yaml",
+    "checkpoint": "/opt/fabrica/sam/checkpoints/sam2.1_hiera_base_plus.pt",
+    "licenseRoot": "/opt/fabrica/sam/licenses"
+  },
+  "repository": {
+    "url": "https://github.com/facebookresearch/sam2",
+    "commit": "05d9e57fb3945b10c861046c1e6749e2bfc258e3",
+    "archive": {
+      "url": "https://codeload.github.com/facebookresearch/sam2/tar.gz/05d9e57fb3945b10c861046c1e6749e2bfc258e3",
+      "byteSize": 55631013,
+      "sha256": "92c9e7ca3102fb8ef5953b0e80063a9ae77eb3d80fc54c498c1c6e2f71903dd6",
+      "sha256Provenance": "Fabrica-observed SHA-256 from two byte-identical official-source downloads",
+      "topLevel": "sam2-05d9e57fb3945b10c861046c1e6749e2bfc258e3",
+      "entryCount": 652,
+      "regularFileCount": 561,
+      "directoryCount": 87,
+      "symlinkCount": 4,
+      "regularFileBytes": 64496345,
+      "regularFileByteLimit": 10500000,
+      "largestRegularFile": {
+        "path": "notebooks/video_predictor_example.ipynb",
+        "byteSize": 10091428
+      }
+    },
+    "runtimeSourceTree": {
+      "root": "sam2",
+      "regularFileCount": 33,
+      "symlinkCount": 4,
+      "regularFileBytes": 312959,
+      "digestAlgorithm": "fabrica-path-content-tree-v1",
+      "sha256": "66821e0f05bd53a04cee682c0e0b131f47fcea3b427522b1ff0ecc69c8be862a",
+      "allowedSymlinks": [
+        {
+          "path": "sam2/sam2_hiera_b+.yaml",
+          "target": "configs/sam2/sam2_hiera_b+.yaml"
+        },
+        {
+          "path": "sam2/sam2_hiera_l.yaml",
+          "target": "configs/sam2/sam2_hiera_l.yaml"
+        },
+        {
+          "path": "sam2/sam2_hiera_s.yaml",
+          "target": "configs/sam2/sam2_hiera_s.yaml"
+        },
+        {
+          "path": "sam2/sam2_hiera_t.yaml",
+          "target": "configs/sam2/sam2_hiera_t.yaml"
+        }
+      ]
+    }
+  },
+  "config": {
+    "repositoryPath": "sam2/configs/sam2.1/sam2.1_hiera_b+.yaml",
+    "runtimeIdentity": "configs/sam2.1/sam2.1_hiera_b+.yaml",
+    "rawUrl": "https://raw.githubusercontent.com/facebookresearch/sam2/05d9e57fb3945b10c861046c1e6749e2bfc258e3/sam2/configs/sam2.1/sam2.1_hiera_b+.yaml",
+    "byteSize": 3650,
+    "sha256": "e73f9e9547b305040552ee943ebd3a34cee5727a76fc2ab88b87f7b28b430754",
+    "sha256Provenance": "Fabrica-observed SHA-256 from two byte-identical official-source downloads",
+    "rawMatchesArchiveMember": true
+  },
+  "upstreamLoader": {
+    "repositoryPath": "sam2/build_sam.py",
+    "byteSize": 4934,
+    "sha256": "6df1b93a16c3eaf49334f74e831db91c67a0cf413b946d102333081722f20520",
+    "observedCheckpointLoad": "torch.load-without-weights_only",
+    "productionPolicy": "verify-all-artifacts-then-weights_only-true"
+  },
+  "model": {
+    "modelId": "sam2.1_hiera_base_plus"
+  },
+  "checkpoint": {
+    "url": "https://dl.fbaipublicfiles.com/segment_anything_2/092824/sam2.1_hiera_base_plus.pt",
+    "byteSize": 323606802,
+    "sha256": "a2345aede8715ab1d5d31b4a509fb160c5a4af1970f199d9054ccfb746c004c5",
+    "sha256Provenance": "Fabrica-observed SHA-256 from two byte-identical official-source downloads",
+    "structuralObservation": {
+      "scope": "zip-structure-only",
+      "root": "sam2_hiera_b+_new",
+      "entryCount": 619,
+      "storedPayloadBytes": 323483230,
+      "dataPklByteSize": 81446,
+      "semanticOrTensorSafetyClaim": false
+    }
+  },
+  "licenses": {
+    "runtime": [
+      {
+        "repositoryPath": "LICENSE",
+        "imageName": "LICENSE",
+        "imagePath": "/opt/fabrica/sam/licenses/LICENSE",
+        "spdx": "Apache-2.0",
+        "byteSize": 11357,
+        "sha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4"
+      },
+      {
+        "repositoryPath": "LICENSE_cctorch",
+        "imageName": "LICENSE_cctorch",
+        "imagePath": "/opt/fabrica/sam/licenses/LICENSE_cctorch",
+        "spdx": "BSD-3-Clause",
+        "byteSize": 1566,
+        "sha256": "687d4f65ffe399358b170e22572564a16689e496f85a79dc5385fccf6bbc9558",
+        "requiredBecause": "sam2/csrc-included"
+      }
+    ],
+    "archiveOnly": [
+      {
+        "repositoryPath": "sav_dataset/LICENSE",
+        "byteSize": 1514,
+        "sha256": "28b6f4b85d4f6867c99bcba442d3e0bffc4e6f1a6e04e210a4bb9c9a3b56306a"
+      },
+      {
+        "repositoryPath": "sav_dataset/LICENSE_DAVIS",
+        "byteSize": 1550,
+        "sha256": "a727bc2b6f26a1f1c76d0511502da6ba208212708c04a65230159331906354f1"
+      },
+      {
+        "repositoryPath": "sav_dataset/LICENSE_VOS_BENCHMARK",
+        "byteSize": 1048,
+        "sha256": "104f011f1cd91268d54a9fab1ff769ef01081410cd622e0f723c03d146d02482"
+      }
+    ],
+    "noticeMemberCount": 0
+  },
+  "dependencies": {
+    "acquisitionOccurred": false,
+    "buildStatus": "unresolved-deployment-time-blocking",
+    "requirementsLock": {
+      "status": "unresolved",
+      "byteSize": null,
+      "sha256": null
+    },
+    "wheelhouseInventory": {
+      "status": "unresolved",
+      "byteSize": null,
+      "sha256": null
+    },
+    "policy": {
+      "lockFormat": "pip-require-hashes-no-directives-v1",
+      "wheelhouseFormat": "fabrica-wheel-only-inventory-v1",
+      "wheelFilesOnly": true,
+      "rejectDirectUrls": true,
+      "rejectVcs": true,
+      "rejectEditables": true,
+      "rejectIndexAndFindLinksDirectives": true,
+      "rejectSourceDistributions": true,
+      "rejectExtras": true,
+      "offlineRequireHashes": true
+    }
+  },
+  "baseImage": {
+    "registry": "docker.io",
+    "repository": "pytorch/pytorch",
+    "tag": "2.5.1-cuda12.4-cudnn9-runtime",
+    "immutableReference": "pytorch/pytorch:2.5.1-cuda12.4-cudnn9-runtime@sha256:c8268a92a69bd500f8be0e665b2630ee006dadaf7bfbc24249141b15ff622755",
+    "platform": "linux/amd64",
+    "manifestByteSize": 1366,
+    "manifestSha256": "c8268a92a69bd500f8be0e665b2630ee006dadaf7bfbc24249141b15ff622755",
+    "configByteSize": 4665,
+    "configSha256": "946241f40f56c5ac17b12be451a9ff6bf7163acaac37d1f15bbc7404f4394e57",
+    "pythonIdentity": {
+      "requiredCompatibility": "CPython 3.11.x",
+      "patch": null,
+      "evidenceStatus": "future-build-assertion-required",
+      "patchStatus": "retained-oci-metadata-does-not-expose-exact-patch",
+      "futureBuildAssertion": "assert-and-record-exact-patch-during-separately-authorized-build"
+    },
+    "pytorchConfigObservation": "2.5.1",
+    "cudaConfigObservation": "12.4.1",
+    "cudnnTagIdentity": 9,
+    "osConfigObservation": "Ubuntu 22.04",
+    "runtimeAssertionStatus": "deferred-no-image-layer-pull-or-execution"
+  },
+  "manifestSha256": "84d7743701a0f9aa9d76716e771155fc6de6a0b6c5bc84746f55a8725f6a5529"
+}

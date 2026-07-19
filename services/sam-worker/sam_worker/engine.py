@@ -3,14 +3,20 @@
 from __future__ import annotations
 
 import gc
-import hashlib
-import json
 import math
 import threading
 from array import array
-from pathlib import Path
 from typing import Any, Callable, Dict, List, Mapping, Sequence, Tuple
 
+from .artifacts import (
+    IMAGE_CHECKPOINT_PATH,
+    IMAGE_CONFIG_PATH,
+    IMAGE_LICENSE_ROOT,
+    IMAGE_MANIFEST_PATH,
+    IMAGE_SOURCE_ROOT,
+    preflight_runtime_artifacts,
+    verify_runtime_artifacts,
+)
 from .protocol import (
     MAX_RAW_CANDIDATES,
     MAX_RAW_MASK_WORKING_BYTES,
@@ -27,10 +33,11 @@ CONFIG_IDENTITY = "configs/sam2.1/sam2.1_hiera_b+.yaml"
 CHECKPOINT_URL = (
     "https://dl.fbaipublicfiles.com/segment_anything_2/092824/sam2.1_hiera_base_plus.pt"
 )
-MODEL_ROOT = Path("/opt/fabrica/sam")
-CHECKPOINT_PATH = MODEL_ROOT / "checkpoints/sam2.1_hiera_base_plus.pt"
-CONFIG_PATH = Path("/opt/fabrica/sam2-source/sam2/configs/sam2.1/sam2.1_hiera_b+.yaml")
-MANIFEST_PATH = MODEL_ROOT / "model-manifest.json"
+MANIFEST_PATH = IMAGE_MANIFEST_PATH
+SOURCE_ROOT = IMAGE_SOURCE_ROOT
+CONFIG_PATH = IMAGE_CONFIG_PATH
+CHECKPOINT_PATH = IMAGE_CHECKPOINT_PATH
+LICENSE_ROOT = IMAGE_LICENSE_ROOT
 
 AUTOMATIC_MULTIMASK_OUTPUTS = 3
 AUTOMATIC_LOW_RESOLUTION_SIDE = 256
@@ -367,62 +374,74 @@ def materialize_compact_automatic_candidates(
     return materialized
 
 
-def _file_sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as source:
-        while True:
-            block = source.read(1024 * 1024)
-            if not block:
-                return digest.hexdigest()
-            digest.update(block)
-
-
 def validate_model_artifacts(
-    manifest_path: Path = MANIFEST_PATH, verify_digests: bool = True
+    verify_digests: bool = True,
 ) -> Mapping[str, Any]:
-    try:
-        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as error:
-        raise RuntimeError("Pinned SAM model manifest is missing or invalid.") from error
-    required = {
-        "manifestVersion",
-        "repositoryUrl",
-        "repositoryCommit",
-        "modelId",
-        "configIdentity",
-        "configSha256",
-        "checkpointUrl",
-        "checkpointSha256",
-    }
-    if not isinstance(manifest, dict) or set(manifest) != required:
-        raise RuntimeError("Pinned SAM model manifest is not a strict closed object.")
-    exact = {
-        "manifestVersion": 1,
-        "repositoryUrl": REPOSITORY_URL,
-        "repositoryCommit": REPOSITORY_COMMIT,
-        "modelId": MODEL_ID,
-        "configIdentity": CONFIG_IDENTITY,
-        "checkpointUrl": CHECKPOINT_URL,
-    }
-    if any(manifest.get(key) != value for key, value in exact.items()):
-        raise RuntimeError("Pinned SAM model manifest identity drifted.")
-    for field in ("configSha256", "checkpointSha256"):
-        value = manifest.get(field)
-        if (
-            not isinstance(value, str)
-            or len(value) != 64
-            or any(character not in "0123456789abcdef" for character in value)
-            or value == "0" * 64
-        ):
-            raise RuntimeError("Pinned SAM artifact digest is unresolved or invalid.")
-    if not CONFIG_PATH.is_file() or not CHECKPOINT_PATH.is_file():
-        raise RuntimeError("Pinned SAM config/checkpoint is absent.")
     if verify_digests:
-        if _file_sha256(CONFIG_PATH) != manifest["configSha256"]:
-            raise RuntimeError("Pinned SAM config digest differs.")
-        if _file_sha256(CHECKPOINT_PATH) != manifest["checkpointSha256"]:
-            raise RuntimeError("Pinned SAM checkpoint digest differs.")
-    return manifest
+        return verify_runtime_artifacts(
+            manifest_path=MANIFEST_PATH,
+            source_root=SOURCE_ROOT,
+            checkpoint_path=CHECKPOINT_PATH,
+            licenses_root=LICENSE_ROOT,
+        )
+    return preflight_runtime_artifacts(
+        manifest_path=MANIFEST_PATH,
+        source_root=SOURCE_ROOT,
+        checkpoint_path=CHECKPOINT_PATH,
+        licenses_root=LICENSE_ROOT,
+    )
+
+
+def load_reviewed_checkpoint(
+    torch_module: Any,
+    model: Any,
+) -> None:
+    """Load only the reviewed state-dict shape after full artifact verification."""
+
+    payload = None
+    state = None
+    incompatible = None
+    try:
+        payload = torch_module.load(
+            str(CHECKPOINT_PATH),
+            map_location="cpu",
+            weights_only=True,
+        )
+        if not isinstance(payload, dict) or set(payload) != {"model"}:
+            raise RuntimeError(
+                "Reviewed checkpoint top-level state shape drifted."
+            )
+        state = payload["model"]
+        if (
+            not isinstance(state, Mapping)
+            or not state
+            or any(
+                not isinstance(key, str) or not key
+                for key in state
+            )
+        ):
+            raise RuntimeError("Reviewed checkpoint model state is invalid.")
+        incompatible = model.load_state_dict(state, strict=False)
+        missing = getattr(incompatible, "missing_keys", None)
+        unexpected = getattr(incompatible, "unexpected_keys", None)
+        if (
+            not isinstance(missing, (list, tuple))
+            or not isinstance(unexpected, (list, tuple))
+            or any(not isinstance(key, str) for key in missing)
+            or any(not isinstance(key, str) for key in unexpected)
+        ):
+            raise RuntimeError(
+                "Reviewed checkpoint load result shape drifted."
+            )
+        if missing or unexpected:
+            raise RuntimeError(
+                "Reviewed checkpoint keys do not exactly match the model."
+            )
+    finally:
+        incompatible = None
+        state = None
+        payload = None
+        gc.collect()
 
 
 class ProductionSamEngine:
@@ -451,35 +470,65 @@ class ProductionSamEngine:
                 return
             self._manifest = validate_model_artifacts()
             # Artifact validation intentionally happens before importing torch or SAM.
-            import numpy
-            import torch
-            import sam2.automatic_mask_generator as automatic_generator_module
-            from sam2.automatic_mask_generator import SAM2AutomaticMaskGenerator
-            from sam2.build_sam import build_sam2
-            from sam2.utils.amg import rle_to_mask
+            model = None
+            torch = None
+            try:
+                import numpy
+                import torch
+                import sam2.automatic_mask_generator as automatic_generator_module
+                from sam2.automatic_mask_generator import (
+                    SAM2AutomaticMaskGenerator,
+                )
+                from sam2.build_sam import build_sam2
+                from sam2.utils.amg import rle_to_mask
 
-            self._torch = torch
-            self._numpy = numpy
-            self._device = "cuda" if torch.cuda.is_available() else "cpu"
-            self._model = build_sam2(
-                CONFIG_IDENTITY,
-                str(CHECKPOINT_PATH),
-                device=self._device,
-                mode="eval",
-            )
-            self._automatic_generator = SAM2AutomaticMaskGenerator(
-                self._model, **AUTOMATIC_GENERATOR_PROFILE
-            )
-            self._automatic_generator_module = automatic_generator_module
-            self._official_process_batch = SAM2AutomaticMaskGenerator._process_batch
-            self._official_mask_to_rle_pytorch = (
-                automatic_generator_module.mask_to_rle_pytorch
-            )
-            self._predictor = getattr(self._automatic_generator, "predictor", None)
-            if self._predictor is None:
-                raise RuntimeError("Pinned automatic generator predictor is unavailable.")
-            self._official_rle_to_mask = rle_to_mask
-            self._loaded = True
+                self._device = (
+                    "cuda" if torch.cuda.is_available() else "cpu"
+                )
+                model = build_sam2(
+                    CONFIG_IDENTITY,
+                    ckpt_path=None,
+                    device=self._device,
+                    mode="eval",
+                )
+                load_reviewed_checkpoint(torch, model)
+                automatic_generator = SAM2AutomaticMaskGenerator(
+                    model, **AUTOMATIC_GENERATOR_PROFILE
+                )
+                predictor = getattr(automatic_generator, "predictor", None)
+                if predictor is None:
+                    raise RuntimeError(
+                        "Pinned automatic generator predictor is unavailable."
+                    )
+                self._torch = torch
+                self._numpy = numpy
+                self._model = model
+                self._automatic_generator = automatic_generator
+                self._automatic_generator_module = (
+                    automatic_generator_module
+                )
+                self._official_process_batch = (
+                    SAM2AutomaticMaskGenerator._process_batch
+                )
+                self._official_mask_to_rle_pytorch = (
+                    automatic_generator_module.mask_to_rle_pytorch
+                )
+                self._predictor = predictor
+                self._official_rle_to_mask = rle_to_mask
+                self._loaded = True
+            except Exception:
+                model = None
+                self._model = None
+                self._automatic_generator = None
+                self._predictor = None
+                gc.collect()
+                if (
+                    torch is not None
+                    and self._device == "cuda"
+                    and torch.cuda.is_available()
+                ):
+                    torch.cuda.empty_cache()
+                raise
 
     def execution_identity(self) -> Dict[str, str]:
         if not self._loaded:
@@ -491,7 +540,7 @@ class ProductionSamEngine:
             "modelId": MODEL_ID,
             "configIdentity": CONFIG_IDENTITY,
             "checkpointUrl": CHECKPOINT_URL,
-            "checkpointSha256": self._manifest["checkpointSha256"],
+            "checkpointSha256": self._manifest["checkpoint"]["sha256"],
         }
 
     def _stability(self, logits: Any) -> float:

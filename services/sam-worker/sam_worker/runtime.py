@@ -3,13 +3,16 @@
 from __future__ import annotations
 
 import threading
+from pathlib import Path
 from typing import Any
 
+from .artifacts import ArtifactError, preflight_runtime_artifacts
 from .engine import (
     CHECKPOINT_PATH,
-    CONFIG_PATH,
+    LICENSE_ROOT,
     MANIFEST_PATH,
     ProductionSamEngine,
+    SOURCE_ROOT,
 )
 from .protocol import ValidatedRequest, build_response
 
@@ -74,18 +77,42 @@ class SamWorkerRuntime:
 
 
 def create_production_runtime() -> SamWorkerRuntime:
-    staged = (
-        MANIFEST_PATH.is_file(),
-        CONFIG_PATH.is_file(),
-        CHECKPOINT_PATH.is_file(),
+    runtime_license_paths = (
+        LICENSE_ROOT / "LICENSE",
+        LICENSE_ROOT / "LICENSE_cctorch",
     )
-    if all(staged):
-        state = MODEL_STAGED_NOT_LOADED
-    elif any(staged):
+    staged_paths = (
+        MANIFEST_PATH,
+        SOURCE_ROOT,
+        CHECKPOINT_PATH,
+        *runtime_license_paths,
+    )
+    staged = tuple(_artifact_path_exists(path) for path in staged_paths)
+    if not any(staged):
+        state = MODEL_NOT_STAGED
+    elif not all(staged):
         state = STARTUP_BLOCKED
     else:
-        state = MODEL_NOT_STAGED
+        try:
+            preflight_runtime_artifacts(
+                manifest_path=MANIFEST_PATH,
+                source_root=SOURCE_ROOT,
+                checkpoint_path=CHECKPOINT_PATH,
+                licenses_root=LICENSE_ROOT,
+            )
+        except ArtifactError:
+            state = STARTUP_BLOCKED
+        else:
+            state = MODEL_STAGED_NOT_LOADED
     return SamWorkerRuntime(
         ProductionSamEngine(),
         state,
     )
+
+
+def _artifact_path_exists(path: Path) -> bool:
+    try:
+        path.lstat()
+    except OSError:
+        return False
+    return True

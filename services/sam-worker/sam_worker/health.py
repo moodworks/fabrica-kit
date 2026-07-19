@@ -1,11 +1,29 @@
 """Artifact-only probe; it never loads a second SAM model."""
 
 import sys
-from .engine import validate_model_artifacts
+
+from .artifacts import (
+    IMAGE_CHECKPOINT_PATH,
+    IMAGE_LICENSE_ROOT,
+    IMAGE_MANIFEST_PATH,
+    IMAGE_SOURCE_ROOT,
+    preflight_runtime_artifacts,
+    verify_runtime_artifacts,
+)
 
 
 def main() -> None:
-    validate_model_artifacts(verify_digests="--light" not in sys.argv)
+    verifier = (
+        preflight_runtime_artifacts
+        if "--light" in sys.argv
+        else verify_runtime_artifacts
+    )
+    verifier(
+        manifest_path=IMAGE_MANIFEST_PATH,
+        source_root=IMAGE_SOURCE_ROOT,
+        checkpoint_path=IMAGE_CHECKPOINT_PATH,
+        licenses_root=IMAGE_LICENSE_ROOT,
+    )
     print("sam-worker-artifacts-ok")
 
 
