@@ -63,6 +63,51 @@ EXPECTED_RUNTIME_ENVIRONMENT = {
     "PYTHONUNBUFFERED": "1",
     "TRANSFORMERS_OFFLINE": "1",
 }
+EXPECTED_IMAGE_LABELS = {
+    "io.fabrica.build-contract.version": (
+        "fabrica-sam-ghcr-linux-amd64-v1"
+    ),
+    "io.fabrica.image-use": (
+        "pinned-digest-deployment-only-v1"
+    ),
+    "io.fabrica.sam.artifact-manifest-sha256": (
+        "085ddd290b17b6931ea026c274610d9f6c49bad49a5fd372e846a2060b9ac5c4"
+    ),
+    "io.fabrica.sam.checkpoint-sha256": (
+        "a2345aede8715ab1d5d31b4a509fb160c5a4af1970f199d9054ccfb746c004c5"
+    ),
+    "io.fabrica.sam.config": (
+        "configs/sam2.1/sam2.1_hiera_b+.yaml"
+    ),
+    "io.fabrica.sam.config-sha256": (
+        "e73f9e9547b305040552ee943ebd3a34cee5727a76fc2ab88b87f7b28b430754"
+    ),
+    "io.fabrica.sam.direct-adapter-profile-sha256": (
+        "1e6795c970fcfa9443b850f27149e237daf63ffa668cd5094189936453467e28"
+    ),
+    "io.fabrica.sam.hosting-profile-sha256": (
+        "872054e82fc13e771fa65381e2db1f19dfb2dd609584574e8c532ed8eb82fa18"
+    ),
+    "io.fabrica.sam.model-id": "sam2.1_hiera_base_plus",
+    "io.fabrica.sam.repository-commit": (
+        "05d9e57fb3945b10c861046c1e6749e2bfc258e3"
+    ),
+    "io.fabrica.sam.runtime-adapter-profile-sha256": (
+        "f03c378caa5b9ba7979d67ffe958dfd9ca65cc823a10d728faed8c612937b7bf"
+    ),
+    "io.fabrica.sam.worker-image-digest-env": (
+        "SAM_WORKER_IMAGE_DIGEST"
+    ),
+    "io.fabrica.sam.worker-image-object": (
+        "linux-amd64-image-manifest-v1"
+    ),
+    "io.fabrica.source-revision-contract": (
+        "required-git-sha40-v1"
+    ),
+    "org.opencontainers.image.source": (
+        "https://github.com/moodworks/fabrica-kit"
+    ),
+}
 EXPECTED_RUNTIME_MATERIALIZED_HISTORY_SUFFIX = (
     "fabrica-build-gate: source-revision",
     "fabrica-build-gate: runtime-cpython-major-minor",
@@ -91,6 +136,7 @@ EXPECTED_RUNTIME_MATERIALIZED_HISTORY_SUFFIX = (
     "python -m sam_worker.artifacts verify-dependencies",
     "python -m sam_worker.artifacts verify-runtime",
     "fabrica-build-gate: selected-config-parse",
+    "workdir /opt/fabrica/worker",
 )
 
 
@@ -394,20 +440,13 @@ def verify_linux_amd64_config(
         if isinstance(image_config, dict)
         else None
     )
-    if (
-        not isinstance(labels, dict)
-        or labels.get("org.opencontainers.image.revision")
-        != source_commit
-        or labels.get("org.opencontainers.image.source")
-        != "https://github.com/moodworks/fabrica-kit"
-        or labels.get("io.fabrica.image-use")
-        != "pinned-digest-deployment-only-v1"
-        or labels.get("io.fabrica.build-contract.version")
-        != "fabrica-sam-ghcr-linux-amd64-v1"
-        or labels.get("io.fabrica.sam.worker-image-digest-env")
-        != "SAM_WORKER_IMAGE_DIGEST"
-        or labels.get("io.fabrica.sam.worker-image-object")
-        != "linux-amd64-image-manifest-v1"
+    expected_labels = {
+        **EXPECTED_IMAGE_LABELS,
+        "org.opencontainers.image.revision": source_commit,
+    }
+    if not isinstance(labels, dict) or any(
+        labels.get(name) != value
+        for name, value in expected_labels.items()
     ):
         raise ImageManifestError(
             "image config does not bind the exact source revision"

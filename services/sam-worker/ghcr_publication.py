@@ -5,6 +5,8 @@ from __future__ import annotations
 
 import argparse
 import base64
+import hashlib
+import http.client
 import json
 import os
 import re
@@ -42,8 +44,23 @@ MAX_TOKEN_ENVELOPE_BYTES = 64_000
 MAX_PACKAGE_METADATA_BYTES = 1_000_000
 MAX_REGISTRY_DOCUMENT_BYTES = 4_000_000
 MAX_AUTHENTICATE_HEADER_BYTES = 4_096
+MAX_CONFIG_BLOB_LOCATION_BYTES = 16_384
+MAX_CONFIG_BLOB_REDIRECTS = 1
+CONFIG_BLOB_REDIRECT_HOST = "pkg-containers.githubusercontent.com"
+CONFIG_BLOB_REDIRECT_STATUSES = {302, 307}
 ANONYMOUS_PULL_SCOPE = (
     "repository:moodworks/fabrica-sam-worker:pull"
+)
+ROOT_MANIFEST_ACCEPT = ", ".join(
+    (
+        "application/vnd.oci.image.manifest.v1+json",
+        "application/vnd.docker.distribution.manifest.v2+json",
+        "application/vnd.oci.image.index.v1+json",
+        "application/vnd.docker.distribution.manifest.list.v2+json",
+    )
+)
+PLATFORM_MANIFEST_ACCEPT = ", ".join(
+    sorted(IMAGE_MANIFEST_MEDIA_TYPES)
 )
 
 
@@ -182,7 +199,10 @@ def _read_bounded_response(
             raise PublicationError(error_code) from error
         if length < 0 or length > maximum_bytes:
             raise PublicationError(error_code)
-    data = response.read(maximum_bytes + 1)
+    try:
+        data = response.read(maximum_bytes + 1)
+    except (OSError, http.client.HTTPException) as error:
+        raise PublicationError(error_code) from error
     if (
         len(data) > maximum_bytes
         or (lengths and len(data) != length)
@@ -497,6 +517,130 @@ def _authenticated_registry_get(
     )
 
 
+def _config_blob_redirect_location(
+    response: HttpResponse,
+    registry_api_base_url: str,
+) -> str:
+    values = [
+        value
+        for name, value in response.headers
+        if name.lower() == "location"
+    ]
+    if (
+        response.status not in CONFIG_BLOB_REDIRECT_STATUSES
+        or len(values) != 1
+        or not values[0].isascii()
+        or not values[0]
+        or len(values[0].encode("ascii"))
+        > MAX_CONFIG_BLOB_LOCATION_BYTES
+        or any(
+            ord(character) < 0x21 or ord(character) > 0x7E
+            for character in values[0]
+        )
+    ):
+        raise PublicationError("registry-config-redirect-location")
+    location = values[0]
+    try:
+        target = urllib.parse.urlsplit(location)
+        target_port = target.port
+        registry = urllib.parse.urlsplit(registry_api_base_url)
+    except ValueError as error:
+        raise PublicationError(
+            "registry-config-redirect-location"
+        ) from error
+    if (
+        target.username is not None
+        or target.password is not None
+        or not target.hostname
+        or not target.path.startswith("/")
+        or target.path.startswith("//")
+        or not target.query
+        or target.fragment
+    ):
+        raise PublicationError("registry-config-redirect-location")
+    if registry_api_base_url == REGISTRY_API_BASE_URL:
+        if (
+            target.scheme != "https"
+            or target.hostname != CONFIG_BLOB_REDIRECT_HOST
+            or target_port not in (None, 443)
+        ):
+            raise PublicationError(
+                "registry-config-redirect-location"
+            )
+    elif (
+        registry.hostname not in ("127.0.0.1", "::1", "localhost")
+        or target.hostname
+        not in ("127.0.0.1", "::1", "localhost")
+        or target.scheme != registry.scheme
+    ):
+        raise PublicationError("registry-config-redirect-location")
+    return location
+
+
+def _validate_config_blob_response(response: HttpResponse) -> None:
+    content_types = [
+        value
+        for name, value in response.headers
+        if name.lower() == "content-type"
+    ]
+    if (
+        response.status != 200
+        or content_types != ["application/octet-stream"]
+    ):
+        raise PublicationError("registry-config-response")
+
+
+def _registry_config_blob_get(
+    registry_api_base_url: str,
+    path: str,
+    registry_token: str,
+    expected_size: int,
+) -> HttpResponse:
+    if (
+        isinstance(expected_size, bool)
+        or not isinstance(expected_size, int)
+        or expected_size < 1
+        or expected_size > MAX_REGISTRY_DOCUMENT_BYTES
+    ):
+        raise PublicationError("registry-config-size")
+    current_url = registry_api_base_url + path
+    visited = {current_url}
+    redirects = 0
+    headers = {
+        "Authorization": "Bearer " + registry_token,
+        "User-Agent": "fabrica-sam-ghcr-publication-verifier",
+    }
+    while True:
+        response = _http_get(
+            current_url,
+            headers=headers,
+            maximum_bytes=expected_size,
+            accepted_statuses={
+                200,
+                *CONFIG_BLOB_REDIRECT_STATUSES,
+            },
+            error_code="registry-config-http",
+        )
+        if response.status == 200:
+            _validate_config_blob_response(response)
+            return response
+        location = _config_blob_redirect_location(
+            response,
+            registry_api_base_url,
+        )
+        if location in visited:
+            raise PublicationError("registry-config-redirect-loop")
+        if redirects >= MAX_CONFIG_BLOB_REDIRECTS:
+            raise PublicationError("registry-config-redirect-limit")
+        visited.add(location)
+        redirects += 1
+        current_url = location
+        headers = {
+            "Accept": "application/octet-stream",
+            "User-Agent": "fabrica-sam-ghcr-publication-verifier",
+        }
+
+
 def _unauthenticated_registry_get(
     registry_api_base_url: str,
     path: str,
@@ -634,46 +778,25 @@ def _build_root_digest(metadata_path: str) -> str:
         raise PublicationError("build-metadata") from error
 
 
-def _verified_image_identity(
-    *,
-    build_metadata: str,
-    source_commit: str,
-    registry_api_base_url: str,
-    registry_token_url: str,
-) -> Mapping[str, str]:
+def _validated_source_commit(source_commit: str) -> str:
     if (
         COMMIT_PATTERN.fullmatch(source_commit) is None
         or source_commit == "0" * 40
     ):
         raise PublicationError("source-commit")
-    root_digest = _build_root_digest(build_metadata)
-    registry_token = _registry_token(registry_token_url)
-    manifest_accept = ", ".join(
-        (
-            "application/vnd.oci.image.manifest.v1+json",
-            "application/vnd.docker.distribution.manifest.v2+json",
-            "application/vnd.oci.image.index.v1+json",
-            (
-                "application/vnd.docker.distribution."
-                "manifest.list.v2+json"
-            ),
-        )
-    )
-    root_response = _authenticated_registry_get(
-        registry_api_base_url,
-        (
-            "/v2/moodworks/fabrica-sam-worker/manifests/"
-            + root_digest
-        ),
-        registry_token,
-        accept=manifest_accept,
-        error_code="registry-root-http",
-    )
-    root = resolve_root(
-        root_response.body,
-        _manifest_headers(root_response),
-        root_digest,
-    )
+    return source_commit
+
+
+def _verified_registry_identity(
+    *,
+    source_commit: str,
+    root_digest: str,
+    root_response: HttpResponse,
+    root: Mapping[str, str],
+    registry_api_base_url: str,
+    registry_token: str,
+    platform_error: str,
+) -> Mapping[str, str]:
     platform_manifest_digest = root["platformManifestDigest"]
     platform_manifest_size = int(root["platformManifestSize"], 10)
     if root["rootObjectType"] == "image-manifest":
@@ -686,8 +809,8 @@ def _verified_image_identity(
                 + platform_manifest_digest
             ),
             registry_token,
-            accept=", ".join(sorted(IMAGE_MANIFEST_MEDIA_TYPES)),
-            error_code="registry-platform-http",
+            accept=PLATFORM_MANIFEST_ACCEPT,
+            error_code=platform_error,
         )
     else:
         raise PublicationError("registry-root-type")
@@ -697,15 +820,14 @@ def _verified_image_identity(
         platform_manifest_digest,
         platform_manifest_size,
     )
-    config_response = _authenticated_registry_get(
+    config_response = _registry_config_blob_get(
         registry_api_base_url,
         (
             "/v2/moodworks/fabrica-sam-worker/blobs/"
             + platform["configDigest"]
         ),
         registry_token,
-        accept=None,
-        error_code="registry-config-http",
+        int(platform["configSize"], 10),
     )
     verify_linux_amd64_config(
         config_response.body,
@@ -750,25 +872,112 @@ def _verified_image_identity(
     }
 
 
-def _verify_anonymous_public_identity(
+def _verified_image_identity(
+    *,
+    build_metadata: str,
+    source_commit: str,
     registry_api_base_url: str,
     registry_token_url: str,
-    identity: Mapping[str, str],
-) -> None:
-    manifest_digest = identity["platformManifestDigest"]
+) -> Mapping[str, str]:
+    source_commit = _validated_source_commit(source_commit)
+    root_digest = _build_root_digest(build_metadata)
+    registry_token = _registry_token(registry_token_url)
+    root_response = _authenticated_registry_get(
+        registry_api_base_url,
+        (
+            "/v2/moodworks/fabrica-sam-worker/manifests/"
+            + root_digest
+        ),
+        registry_token,
+        accept=ROOT_MANIFEST_ACCEPT,
+        error_code="registry-root-http",
+    )
+    root = resolve_root(
+        root_response.body,
+        _manifest_headers(root_response),
+        root_digest,
+    )
+    return _verified_registry_identity(
+        source_commit=source_commit,
+        root_digest=root_digest,
+        root_response=root_response,
+        root=root,
+        registry_api_base_url=registry_api_base_url,
+        registry_token=registry_token,
+        platform_error="registry-platform-http",
+    )
+
+
+def _verified_anonymous_image_identity(
+    *,
+    source_commit: str,
+    registry_api_base_url: str,
+    registry_token_url: str,
+) -> Mapping[str, str]:
+    source_commit = _validated_source_commit(source_commit)
+    (
+        root_response,
+        anonymous_token,
+        direct_response,
+    ) = _anonymous_manifest_access(
+        registry_api_base_url,
+        registry_token_url,
+        source_commit,
+        ROOT_MANIFEST_ACCEPT,
+        initial_error="anonymous-tag-initial-http",
+        bearer_error="anonymous-tag-bearer-http",
+    )
+    root_digest = (
+        "sha256:"
+        + hashlib.sha256(root_response.body).hexdigest()
+    )
+    root = resolve_root(
+        root_response.body,
+        _manifest_headers(root_response),
+        root_digest,
+    )
+    if direct_response is not None:
+        direct_digest = (
+            "sha256:"
+            + hashlib.sha256(direct_response.body).hexdigest()
+        )
+        direct_root = resolve_root(
+            direct_response.body,
+            _manifest_headers(direct_response),
+            direct_digest,
+        )
+        if direct_digest != root_digest or direct_root != root:
+            raise PublicationError("anonymous-tag-identity")
+    return _verified_registry_identity(
+        source_commit=source_commit,
+        root_digest=root_digest,
+        root_response=root_response,
+        root=root,
+        registry_api_base_url=registry_api_base_url,
+        registry_token=anonymous_token,
+        platform_error="anonymous-platform-http",
+    )
+
+
+def _anonymous_manifest_access(
+    registry_api_base_url: str,
+    registry_token_url: str,
+    reference: str,
+    accept: str,
+    *,
+    initial_error: str,
+    bearer_error: str,
+) -> tuple[HttpResponse, str, HttpResponse | None]:
     manifest_path = (
         "/v2/moodworks/fabrica-sam-worker/manifests/"
-        + manifest_digest
-    )
-    manifest_accept = ", ".join(
-        sorted(IMAGE_MANIFEST_MEDIA_TYPES)
+        + reference
     )
     initial_response = _unauthenticated_registry_get(
         registry_api_base_url,
         manifest_path,
-        accept=manifest_accept,
+        accept=accept,
         accepted_statuses={200, 401},
-        error_code="anonymous-platform-initial-http",
+        error_code=initial_error,
     )
     if initial_response.status == 401:
         _parse_anonymous_bearer_challenge(
@@ -794,9 +1003,30 @@ def _verify_anonymous_public_identity(
         registry_api_base_url,
         manifest_path,
         anonymous_token,
-        accept=manifest_accept,
+        accept=accept,
         accepted_statuses={200},
-        error_code="anonymous-platform-bearer-http",
+        error_code=bearer_error,
+    )
+    return manifest_response, anonymous_token, direct_response
+
+
+def _verify_anonymous_public_identity(
+    registry_api_base_url: str,
+    registry_token_url: str,
+    identity: Mapping[str, str],
+) -> None:
+    manifest_digest = identity["platformManifestDigest"]
+    (
+        manifest_response,
+        anonymous_token,
+        direct_response,
+    ) = _anonymous_manifest_access(
+        registry_api_base_url,
+        registry_token_url,
+        manifest_digest,
+        PLATFORM_MANIFEST_ACCEPT,
+        initial_error="anonymous-platform-initial-http",
+        bearer_error="anonymous-platform-bearer-http",
     )
     for response in (
         (direct_response, manifest_response)
@@ -821,7 +1051,7 @@ def _verify_anonymous_public_identity(
         registry_api_base_url,
         "/v2/moodworks/fabrica-sam-worker/manifests/latest",
         anonymous_token,
-        accept=", ".join(sorted(IMAGE_MANIFEST_MEDIA_TYPES)),
+        accept=PLATFORM_MANIFEST_ACCEPT,
         accepted_statuses={404},
         error_code="anonymous-latest-bearer-http",
     )
@@ -849,6 +1079,43 @@ def _write_step_summary(
         "- BuildKit SBOM: disabled\n"
         "- Proof scope: closed pre-build input graph plus post-push "
         "manifest/config/rootfs/history structure; no layer-tar byte claim\n"
+        % (
+            identity["sourceCommit"],
+            identity["imageReference"],
+            identity["platformManifestMediaType"],
+            identity["platformManifestDigest"],
+        )
+    )
+    try:
+        with Path(path).open(
+            "a",
+            encoding="utf-8",
+            newline="\n",
+        ) as output:
+            output.write(summary)
+    except OSError as error:
+        raise PublicationError("step-summary") from error
+
+
+def _write_anonymous_step_summary(
+    path: str,
+    identity: Mapping[str, str],
+) -> None:
+    summary = (
+        "### Verified anonymous SAM worker registry identity\n\n"
+        "- Package API ownership/linkage: not evaluated by this "
+        "registry-only command\n"
+        "- Exact commit tag: treated only as an untrusted locator\n"
+        "- Registry V2 anonymous exact-manifest access: verified\n"
+        "- Same-token anonymous `latest` lookup: verified HTTP 404\n"
+        "- Source commit: `%s`\n"
+        "- Platform: `linux/amd64`\n"
+        "- Image: `%s`\n"
+        "- Manifest media type: `%s`\n"
+        "- Future worker configuration: "
+        "`SAM_WORKER_IMAGE_DIGEST=%s`\n"
+        "- Proof scope: raw root/manifest/config bytes, strict immutable "
+        "labels and runtime metadata; no layer-tar byte claim\n"
         % (
             identity["sourceCommit"],
             identity["imageReference"],
@@ -919,6 +1186,51 @@ def verify_image(
     _write_step_summary(step_summary, identity)
 
 
+def verify_anonymous_image(
+    *,
+    source_commit: str,
+    registry_api_base_url: str,
+    registry_token_url: str,
+    github_output: str,
+    step_summary: str,
+) -> None:
+    identity = _verified_anonymous_image_identity(
+        source_commit=source_commit,
+        registry_api_base_url=registry_api_base_url,
+        registry_token_url=registry_token_url,
+    )
+    _verify_anonymous_public_identity(
+        registry_api_base_url,
+        registry_token_url,
+        identity,
+    )
+    _append_github_output(
+        github_output,
+        {
+            "image_reference": identity["imageReference"],
+            "platform_manifest_digest": identity[
+                "platformManifestDigest"
+            ],
+            "platform_manifest_media_type": identity[
+                "platformManifestMediaType"
+            ],
+            "source_commit": identity["sourceCommit"],
+            "config_digest": identity["configDigest"],
+            "build_root_digest": identity["buildRootDigest"],
+            "build_root_object_type": identity[
+                "buildRootObjectType"
+            ],
+            "anonymous_manifest_proof": (
+                "registry-v2-anonymous-exact-digest-http-200"
+            ),
+            "anonymous_latest_proof": (
+                "registry-v2-anonymous-bearer-http-404"
+            ),
+        },
+    )
+    _write_anonymous_step_summary(step_summary, identity)
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser()
     parser.add_argument(
@@ -944,16 +1256,16 @@ def _parser() -> argparse.ArgumentParser:
     image.add_argument("--source-commit", required=True)
     image.add_argument("--github-output", required=True)
     image.add_argument("--step-summary", required=True)
+
+    anonymous = commands.add_parser("verify-anonymous-image")
+    anonymous.add_argument("--source-commit", required=True)
+    anonymous.add_argument("--github-output", required=True)
+    anonymous.add_argument("--step-summary", required=True)
     return parser
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     arguments = _parser().parse_args(argv)
-    github_api_base_url = _validated_endpoint(
-        arguments.github_api_base_url,
-        GITHUB_API_BASE_URL,
-        arguments.allow_loopback_test_endpoints,
-    )
     registry_api_base_url = _validated_endpoint(
         arguments.registry_api_base_url,
         REGISTRY_API_BASE_URL,
@@ -962,6 +1274,20 @@ def main(argv: Sequence[str] | None = None) -> int:
     registry_token_url = _validated_endpoint(
         arguments.registry_token_url,
         REGISTRY_TOKEN_URL,
+        arguments.allow_loopback_test_endpoints,
+    )
+    if arguments.command == "verify-anonymous-image":
+        verify_anonymous_image(
+            source_commit=arguments.source_commit,
+            registry_api_base_url=registry_api_base_url,
+            registry_token_url=registry_token_url,
+            github_output=arguments.github_output,
+            step_summary=arguments.step_summary,
+        )
+        return 0
+    github_api_base_url = _validated_endpoint(
+        arguments.github_api_base_url,
+        GITHUB_API_BASE_URL,
         arguments.allow_loopback_test_endpoints,
     )
     verify_image(
