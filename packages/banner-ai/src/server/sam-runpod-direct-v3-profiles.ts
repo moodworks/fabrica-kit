@@ -1,6 +1,10 @@
 import { z } from 'zod';
 
-import { SAM_LIMITS, SamLiveExecutionIdentitySchema } from '../sam/sam-mask-contracts.js';
+import {
+  SAM_LIMITS,
+  SamLiveExecutionIdentitySchema,
+  SamWorkerImageDigestSchema,
+} from '../sam/sam-mask-contracts.js';
 import { canonicalizeJson, sha256Hex } from '../scene/canonical-scene-json.js';
 
 export const RUNPOD_API_KEY_REFERENCE = 'RUNPOD_API_KEY' as const;
@@ -18,10 +22,10 @@ export const RUNPOD_DIRECT_DOCUMENTATION_EXPIRES_AT_MS = Date.parse(
 export const RUNPOD_DIRECT_TIMEOUT_MAXIMUM_MS = 330_000;
 
 export const SAM_RUNPOD_DIRECT_HOSTING_PROFILE = Object.freeze({
-  profileVersion: 'sam-runpod-direct-hosting-v1',
-  workerHostingVersion: 'sam-worker-fastapi-direct-v1',
+  profileVersion: 'sam-runpod-direct-hosting-v2',
+  workerHostingVersion: 'sam-worker-fastapi-direct-v2',
   provider: 'runpod-serverless-load-balancer',
-  protocolContractVersion: 'sam-mask-v1',
+  protocolContractVersion: 'sam-mask-v2',
   routes: {
     health: { method: 'GET', path: RUNPOD_DIRECT_HEALTH_PATH },
     inference: { method: RUNPOD_DIRECT_METHOD, path: RUNPOD_DIRECT_MASK_PATH },
@@ -36,8 +40,8 @@ export const SAM_RUNPOD_DIRECT_HOSTING_PROFILE = Object.freeze({
         inferenceReady: false,
       },
       'model-staged-not-loaded': {
-        status: 503,
-        body: 'strict-redacted-json',
+        status: 204,
+        body: 'empty',
         inferenceReady: false,
       },
       'model-loaded-ready': {
@@ -52,8 +56,8 @@ export const SAM_RUNPOD_DIRECT_HOSTING_PROFILE = Object.freeze({
       },
     },
   },
-  requestEnvelope: 'bare-sam-mask-v1',
-  responseEnvelope: 'bare-sam-mask-v1',
+  requestEnvelope: 'bare-sam-mask-v2',
+  responseEnvelope: 'bare-sam-mask-v2',
   endpointHostTemplate: 'https://{endpointId}.api.runpod.ai/v1/masks',
   endpointIdSyntax: 'dns-label-lowercase-v1',
   requestLifecycle: {
@@ -87,6 +91,15 @@ export const SAM_RUNPOD_DIRECT_HOSTING_PROFILE = Object.freeze({
     providerProcessingMaximumMs: RUNPOD_DIRECT_TIMEOUT_MAXIMUM_MS,
     clientSemantics: 'single-wall-timeout-indeterminate-after-dispatch',
   },
+  workerImageIdentity: {
+    platform: 'linux/amd64',
+    objectType: 'oci-or-docker-v2-image-manifest',
+    trustedConfiguration: 'SAM_WORKER_IMAGE_DIGEST',
+    authorizationRequestField: 'workerImageDigest',
+    responseField: 'executionIdentity.workerImageDigest',
+    mismatchBehavior: 'fail-before-inference-or-result-acceptance',
+    trustStrength: 'environment-bound-not-hardware-backed',
+  },
   documentationEvidence: {
     retrievedAt: RUNPOD_DIRECT_DOCUMENTATION_RETRIEVED_AT,
     expiresAt: RUNPOD_DIRECT_DOCUMENTATION_EXPIRES_AT,
@@ -100,10 +113,10 @@ export const SAM_RUNPOD_DIRECT_HOSTING_PROFILE = Object.freeze({
 } as const);
 
 export const SAM_RUNPOD_DIRECT_HOSTING_PROFILE_SHA256 =
-  '1687de7e1936944b0f8b8a14ed4500a988f92558fe3c1680cfe3acc7bc8b8f3d' as const;
+  '872054e82fc13e771fa65381e2db1f19dfb2dd609584574e8c532ed8eb82fa18' as const;
 
-export const SAM_RUNPOD_DIRECT_ADAPTER_PROFILE_V2 = Object.freeze({
-  profileVersion: 'sam-runpod-direct-adapter-v2',
+export const SAM_RUNPOD_DIRECT_ADAPTER_PROFILE_V3 = Object.freeze({
+  profileVersion: 'sam-runpod-direct-adapter-v3',
   hostingProfileSha256: SAM_RUNPOD_DIRECT_HOSTING_PROFILE_SHA256,
   endpoint: {
     idSyntax: 'dns-label-lowercase-v1',
@@ -112,14 +125,14 @@ export const SAM_RUNPOD_DIRECT_ADAPTER_PROFILE_V2 = Object.freeze({
     redirects: 'error',
   },
   request: {
-    contractVersion: 'sam-mask-v1',
+    contractVersion: 'sam-mask-v2',
     envelope: 'bare',
     mediaType: 'application/json',
     maximumBytes: SAM_LIMITS.requestJsonBytes,
     dispatchCount: 1,
   },
   response: {
-    contractVersion: 'sam-mask-v1',
+    contractVersion: 'sam-mask-v2',
     envelope: 'bare',
     status: 200,
     mediaTypes: ['application/json'],
@@ -127,11 +140,18 @@ export const SAM_RUNPOD_DIRECT_ADAPTER_PROFILE_V2 = Object.freeze({
     validation: [
       'closed-schema',
       'request-identity',
+      'worker-image-digest',
       'source-digest',
       'mask-digests',
       'response-digest',
       'model-identity',
     ],
+  },
+  workerImageIdentity: {
+    configuredExpectation: 'server-owned-image-manifest-digest',
+    authorizationBinding: 'exact-equality',
+    workerRequestBinding: 'exact-equality-before-inference',
+    strictResponseBinding: 'exact-equality-before-result-acceptance',
   },
   clientExecution: {
     attemptClaim: 'process-local-single-dispatch',
@@ -167,14 +187,14 @@ export const SAM_RUNPOD_DIRECT_ADAPTER_PROFILE_V2 = Object.freeze({
   },
 } as const);
 
-export const SAM_RUNPOD_DIRECT_ADAPTER_PROFILE_V2_SHA256 =
-  '62809b35b0ccf2d28f1bcd086857718a7c909b247adeccdddd587305066449a4' as const;
+export const SAM_RUNPOD_DIRECT_ADAPTER_PROFILE_V3_SHA256 =
+  '1e6795c970fcfa9443b850f27149e237daf63ffa668cd5094189936453467e28' as const;
 
-export const SAM_RUNPOD_DIRECT_AUTHORIZATION_PROFILE_V2 = Object.freeze({
-  profileVersion: 'sam-runpod-direct-authorization-v2',
-  authorizationKind: 'single-fixture-sam-runpod-direct-v2',
+export const SAM_RUNPOD_DIRECT_AUTHORIZATION_PROFILE_V3 = Object.freeze({
+  profileVersion: 'sam-runpod-direct-authorization-v3',
+  authorizationKind: 'single-fixture-sam-runpod-direct-v3',
   hostingProfileSha256: SAM_RUNPOD_DIRECT_HOSTING_PROFILE_SHA256,
-  adapterProfileSha256: SAM_RUNPOD_DIRECT_ADAPTER_PROFILE_V2_SHA256,
+  adapterProfileSha256: SAM_RUNPOD_DIRECT_ADAPTER_PROFILE_V3_SHA256,
   bindings: [
     'authorization-id',
     'endpoint-id',
@@ -214,18 +234,18 @@ export const SAM_RUNPOD_DIRECT_AUTHORIZATION_PROFILE_V2 = Object.freeze({
   secretReference: RUNPOD_API_KEY_REFERENCE,
 } as const);
 
-export const SAM_RUNPOD_DIRECT_AUTHORIZATION_PROFILE_V2_SHA256 =
-  '7fa4110fce04f5e87d4a95a669b6d30c4085bc6eb078e2adaa763334f292f139' as const;
+export const SAM_RUNPOD_DIRECT_AUTHORIZATION_PROFILE_V3_SHA256 =
+  '194272140ae7e717a69f122f6a3e7b1083c80a5f3022f12ffd73ca0016183492' as const;
 
 const profileDigest = (profile: unknown): string =>
   sha256Hex(Buffer.from(canonicalizeJson(profile), 'utf8'));
 
 if (
   profileDigest(SAM_RUNPOD_DIRECT_HOSTING_PROFILE) !== SAM_RUNPOD_DIRECT_HOSTING_PROFILE_SHA256 ||
-  profileDigest(SAM_RUNPOD_DIRECT_ADAPTER_PROFILE_V2) !==
-    SAM_RUNPOD_DIRECT_ADAPTER_PROFILE_V2_SHA256 ||
-  profileDigest(SAM_RUNPOD_DIRECT_AUTHORIZATION_PROFILE_V2) !==
-    SAM_RUNPOD_DIRECT_AUTHORIZATION_PROFILE_V2_SHA256
+  profileDigest(SAM_RUNPOD_DIRECT_ADAPTER_PROFILE_V3) !==
+    SAM_RUNPOD_DIRECT_ADAPTER_PROFILE_V3_SHA256 ||
+  profileDigest(SAM_RUNPOD_DIRECT_AUTHORIZATION_PROFILE_V3) !==
+    SAM_RUNPOD_DIRECT_AUTHORIZATION_PROFILE_V3_SHA256
 ) {
   throw new TypeError('SAM RunPod direct profile digest drifted.');
 }
@@ -233,11 +253,6 @@ if (
 export const SamRunPodDirectEndpointIdSchema = z
   .string()
   .regex(/^(?=.{1,63}$)[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/u);
-
-const ImageDigestSchema = z
-  .string()
-  .regex(/^sha256:[0-9a-f]{64}$/u)
-  .refine((value) => value !== `sha256:${'0'.repeat(64)}`, 'Image digest must be resolved.');
 
 const DocumentationEvidenceSchema = z
   .strictObject({
@@ -247,19 +262,19 @@ const DocumentationEvidenceSchema = z
   })
   .readonly();
 
-export const SamRunPodDirectV2AuthorizationSchema = z
+export const SamRunPodDirectV3AuthorizationSchema = z
   .strictObject({
-    kind: z.literal('single-fixture-sam-runpod-direct-v2'),
+    kind: z.literal('single-fixture-sam-runpod-direct-v3'),
     authorizationId: z
       .string()
       .regex(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u),
     endpointId: SamRunPodDirectEndpointIdSchema,
-    imageDigest: ImageDigestSchema,
+    imageDigest: SamWorkerImageDigestSchema,
     secretReferenceName: z.literal(RUNPOD_API_KEY_REFERENCE),
     executionIdentity: SamLiveExecutionIdentitySchema,
     hostingProfileSha256: z.literal(SAM_RUNPOD_DIRECT_HOSTING_PROFILE_SHA256),
-    adapterProfileSha256: z.literal(SAM_RUNPOD_DIRECT_ADAPTER_PROFILE_V2_SHA256),
-    authorizationProfileSha256: z.literal(SAM_RUNPOD_DIRECT_AUTHORIZATION_PROFILE_V2_SHA256),
+    adapterProfileSha256: z.literal(SAM_RUNPOD_DIRECT_ADAPTER_PROFILE_V3_SHA256),
+    authorizationProfileSha256: z.literal(SAM_RUNPOD_DIRECT_AUTHORIZATION_PROFILE_V3_SHA256),
     documentationEvidence: DocumentationEvidenceSchema,
     fixture: z
       .strictObject({
@@ -294,6 +309,14 @@ export const SamRunPodDirectV2AuthorizationSchema = z
     productionAdmissionAuthority: z.literal(false),
     webRouteActivated: z.literal(false),
   })
+  .superRefine((authorization, context) => {
+    if (authorization.executionIdentity.workerImageDigest !== authorization.imageDigest) {
+      context.addIssue({
+        code: 'custom',
+        message: 'Authorized worker image identities must agree.',
+      });
+    }
+  })
   .readonly();
 
-export type SamRunPodDirectV2Authorization = z.infer<typeof SamRunPodDirectV2AuthorizationSchema>;
+export type SamRunPodDirectV3Authorization = z.infer<typeof SamRunPodDirectV3AuthorizationSchema>;

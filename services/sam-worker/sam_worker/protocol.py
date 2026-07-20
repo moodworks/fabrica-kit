@@ -14,7 +14,7 @@ import zlib
 from dataclasses import dataclass
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
-CONTRACT_VERSION = "sam-mask-v1"
+CONTRACT_VERSION = "sam-mask-v2"
 MASK_ENCODING = "fabrica-binary-rle-v1"
 MAX_SOURCE_BYTES = 12_000_000
 MAX_BASE64_CHARS = 16_000_000
@@ -42,6 +42,8 @@ LIVE_IDENTITY = {
     "configIdentity": "configs/sam2.1/sam2.1_hiera_b+.yaml",
     "checkpointUrl": "https://dl.fbaipublicfiles.com/segment_anything_2/092824/sam2.1_hiera_base_plus.pt",
 }
+WORKER_IMAGE_DIGEST_PATTERN = re.compile(r"sha256:[0-9a-f]{64}")
+ZERO_WORKER_IMAGE_DIGEST = "sha256:" + "0" * 64
 
 
 class ContractError(ValueError):
@@ -67,6 +69,21 @@ def _sha256(value: Any, path: str) -> str:
         or any(character not in "0123456789abcdef" for character in value)
     ):
         raise ContractError("%s must be a lowercase SHA-256" % path)
+    return value
+
+
+def worker_image_digest(value: Any, path: str = "worker image digest") -> str:
+    """Validate an independently supplied OCI platform image-manifest digest."""
+
+    if (
+        not isinstance(value, str)
+        or WORKER_IMAGE_DIGEST_PATTERN.fullmatch(value) is None
+        or value == ZERO_WORKER_IMAGE_DIGEST
+    ):
+        raise ContractError(
+            "%s must be a resolved lowercase sha256 OCI image-manifest digest"
+            % path
+        )
     return value
 
 
@@ -250,6 +267,7 @@ def parse_request(value: Any) -> ValidatedRequest:
             "workspaceId",
             "jobId",
             "attemptId",
+            "workerImageDigest",
             "source",
             "segmentation",
             "limits",
@@ -261,6 +279,9 @@ def parse_request(value: Any) -> ValidatedRequest:
         raise ContractError("request contract version is unsupported")
     for key in ("requestId", "workspaceId", "jobId", "attemptId"):
         _uuid(request[key], "request." + key)
+    worker_image_digest(
+        request["workerImageDigest"], "request.workerImageDigest"
+    )
     try:
         request_json_size = len(canonical_json(request).encode("utf-8"))
     except (TypeError, ValueError) as error:
@@ -662,7 +683,18 @@ def postprocess(
     return returned, counts
 
 
-def build_response(validated: ValidatedRequest, engine: Any) -> Dict[str, Any]:
+def build_response(
+    validated: ValidatedRequest,
+    engine: Any,
+    trusted_worker_image_digest: str,
+) -> Dict[str, Any]:
+    trusted_digest = worker_image_digest(
+        trusted_worker_image_digest, "trusted worker image digest"
+    )
+    if validated.request["workerImageDigest"] != trusted_digest:
+        raise ContractError(
+            "request worker image identity differs from trusted runtime configuration"
+        )
     started = time.monotonic()
     inference_started = time.monotonic()
     raw_candidates = engine.segment(validated)
@@ -682,6 +714,10 @@ def build_response(validated: ValidatedRequest, engine: Any) -> Dict[str, Any]:
         ):
             raise ContractError("fake engine identity is not honestly labelled")
     else:
+        identity = {
+            **identity,
+            "workerImageDigest": trusted_digest,
+        }
         _closed(
             identity,
             (
@@ -692,10 +728,14 @@ def build_response(validated: ValidatedRequest, engine: Any) -> Dict[str, Any]:
                 "configIdentity",
                 "checkpointUrl",
                 "checkpointSha256",
+                "workerImageDigest",
             ),
             "live identity",
         )
         checkpoint_sha = _sha256(identity["checkpointSha256"], "checkpoint digest")
+        worker_image_digest(
+            identity["workerImageDigest"], "live identity worker image digest"
+        )
         if checkpoint_sha == "0" * 64 or any(
             identity[key] != value for key, value in LIVE_IDENTITY.items()
         ):

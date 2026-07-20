@@ -1,0 +1,247 @@
+name: Publish pinned SAM worker to private GHCR
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_commit:
+        description: Exact reviewed 40-character lowercase source commit
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: publish-sam-worker-${{ inputs.source_commit }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-24.04
+    env:
+      IMAGE_REPOSITORY: ghcr.io/moodworks/fabrica-sam-worker
+      SOURCE_COMMIT: ${{ inputs.source_commit }}
+    steps:
+      - name: Validate immutable source input
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ ! "${SOURCE_COMMIT}" =~ ^[0-9a-f]{40}$ ]] || [[ "${SOURCE_COMMIT}" == "0000000000000000000000000000000000000000" ]]; then
+            echo "source commit must be a resolved lowercase SHA-1" >&2
+            exit 1
+          fi
+
+      # actions/checkout v4.2.2, reviewed 2026-07-20.
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+          ref: ${{ inputs.source_commit }}
+
+      - name: Verify immutable source checkout
+        shell: bash
+        run: |
+          set -euo pipefail
+          OBSERVED_COMMIT="$(git rev-parse HEAD)"
+          if [[ "${OBSERVED_COMMIT}" != "${SOURCE_COMMIT}" ]]; then
+            echo "checked out commit differs from the authorized commit" >&2
+            exit 1
+          fi
+          if [[ -n "$(git status --porcelain=v1 --untracked-files=all)" ]]; then
+            echo "checked out tracked or untracked source is not clean" >&2
+            exit 1
+          fi
+          if [[ -n "$(git clean -ndx)" ]]; then
+            echo "checked out source contains untracked or ignored files" >&2
+            exit 1
+          fi
+
+      # docker/setup-buildx-action v3.11.1, reviewed 2026-07-20.
+      - uses: docker/setup-buildx-action@e468171a9de216ec08956ac3ada2f0791b6bd435
+        with:
+          install: true
+          version: v0.25.0
+
+      - name: Authenticate only to GHCR
+        shell: bash
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          printf '%s' "${GHCR_TOKEN}" | docker login ghcr.io --username "${GITHUB_ACTOR}" --password-stdin
+
+      - name: Build and publish one Linux AMD64 image
+        shell: bash
+        run: |
+          set -euo pipefail
+          OBSERVED_COMMIT="$(git rev-parse HEAD)"
+          if [[ "${OBSERVED_COMMIT}" != "${SOURCE_COMMIT}" ]]; then
+            echo "build context commit differs from the authorized commit" >&2
+            exit 1
+          fi
+          if [[ -n "$(git status --porcelain=v1 --untracked-files=all)" ]]; then
+            echo "build context has tracked or untracked drift" >&2
+            exit 1
+          fi
+          if [[ -n "$(git clean -ndx)" ]]; then
+            echo "build context has untracked or ignored drift" >&2
+            exit 1
+          fi
+          docker buildx build \
+            --platform linux/amd64 \
+            --file services/sam-worker/Dockerfile \
+            --build-arg "FABRICA_GIT_SHA=${SOURCE_COMMIT}" \
+            --provenance=false \
+            --sbom=false \
+            --tag "${IMAGE_REPOSITORY}:${SOURCE_COMMIT}" \
+            --push \
+            --metadata-file "${RUNNER_TEMP}/sam-worker-build-metadata.json" \
+            .
+
+      - name: Read unclassified build root digest
+        id: build
+        shell: bash
+        run: |
+          set -euo pipefail
+          BUILD_ROOT_DIGEST="$(
+            python -c 'import json,sys; value=json.load(open(sys.argv[1], encoding="utf-8")).get("containerimage.digest"); print(value if isinstance(value, str) else "")' \
+              "${RUNNER_TEMP}/sam-worker-build-metadata.json"
+          )"
+          if [[ ! "${BUILD_ROOT_DIGEST}" =~ ^sha256:[0-9a-f]{64}$ ]] || [[ "${BUILD_ROOT_DIGEST}" == "sha256:0000000000000000000000000000000000000000000000000000000000000000" ]]; then
+            echo "BuildKit did not return a resolved image digest" >&2
+            exit 1
+          fi
+          echo "root_digest=${BUILD_ROOT_DIGEST}" >> "${GITHUB_OUTPUT}"
+
+      - name: Obtain scoped read token without emitting credentials
+        id: registry
+        shell: bash
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          REGISTRY_TOKEN="$(
+            curl --fail --silent --show-error \
+              --proto '=https' \
+              --user "${GITHUB_ACTOR}:${GHCR_TOKEN}" \
+              "https://ghcr.io/token?service=ghcr.io&scope=repository:moodworks/fabrica-sam-worker:pull" |
+              python -c 'import json,sys; value=json.load(sys.stdin); token=value.get("token") or value.get("access_token"); raise SystemExit("registry token missing") if not isinstance(token, str) or not token else print(token)'
+          )"
+          echo "::add-mask::${REGISTRY_TOKEN}"
+          printf '%s' "${REGISTRY_TOKEN}" > "${RUNNER_TEMP}/sam-worker-registry-token"
+          chmod 600 "${RUNNER_TEMP}/sam-worker-registry-token"
+
+      - name: Fetch and classify the registry-returned root object
+        id: root
+        shell: bash
+        env:
+          BUILD_ROOT_DIGEST: ${{ steps.build.outputs.root_digest }}
+        run: |
+          set -euo pipefail
+          REGISTRY_TOKEN="$(<"${RUNNER_TEMP}/sam-worker-registry-token")"
+          curl --fail --silent --show-error \
+            --proto '=https' \
+            --max-redirs 0 \
+            --header "Authorization: Bearer ${REGISTRY_TOKEN}" \
+            --header "Accept: application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.v2+json, application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.list.v2+json" \
+            --dump-header "${RUNNER_TEMP}/root.headers" \
+            --output "${RUNNER_TEMP}/root.json" \
+            "https://ghcr.io/v2/moodworks/fabrica-sam-worker/manifests/${BUILD_ROOT_DIGEST}"
+          # The offline validator requires exact Docker-Content-Digest and Content-Type headers.
+          python services/sam-worker/image_manifest.py resolve-root \
+            --document "${RUNNER_TEMP}/root.json" \
+            --headers "${RUNNER_TEMP}/root.headers" \
+            --digest "${BUILD_ROOT_DIGEST}" \
+            --output "${RUNNER_TEMP}/root-identity.json" \
+            --github-output "${GITHUB_OUTPUT}"
+
+      - name: Fetch the proven Linux AMD64 platform manifest
+        id: manifest
+        shell: bash
+        env:
+          BUILD_ROOT_DIGEST: ${{ steps.root.outputs.root_digest }}
+          PLATFORM_MANIFEST_DIGEST: ${{ steps.root.outputs.platform_manifest_digest }}
+          PLATFORM_MANIFEST_SIZE: ${{ steps.root.outputs.platform_manifest_size }}
+          ROOT_OBJECT_TYPE: ${{ steps.root.outputs.root_object_type }}
+        run: |
+          set -euo pipefail
+          if [[ "${ROOT_OBJECT_TYPE}" == "image-manifest" ]]; then
+            if [[ "${PLATFORM_MANIFEST_DIGEST}" != "${BUILD_ROOT_DIGEST}" ]]; then
+              echo "single-manifest root identity disagrees" >&2
+              exit 1
+            fi
+            cp "${RUNNER_TEMP}/root.json" "${RUNNER_TEMP}/platform-manifest.json"
+            cp "${RUNNER_TEMP}/root.headers" "${RUNNER_TEMP}/platform-manifest.headers"
+          elif [[ "${ROOT_OBJECT_TYPE}" == "image-index" ]]; then
+            REGISTRY_TOKEN="$(<"${RUNNER_TEMP}/sam-worker-registry-token")"
+            curl --fail --silent --show-error \
+              --proto '=https' \
+              --max-redirs 0 \
+              --header "Authorization: Bearer ${REGISTRY_TOKEN}" \
+              --header "Accept: application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.v2+json" \
+              --dump-header "${RUNNER_TEMP}/platform-manifest.headers" \
+              --output "${RUNNER_TEMP}/platform-manifest.json" \
+              "https://ghcr.io/v2/moodworks/fabrica-sam-worker/manifests/${PLATFORM_MANIFEST_DIGEST}"
+          else
+            echo "root object type is unsupported" >&2
+            exit 1
+          fi
+          python services/sam-worker/image_manifest.py inspect-platform \
+            --document "${RUNNER_TEMP}/platform-manifest.json" \
+            --headers "${RUNNER_TEMP}/platform-manifest.headers" \
+            --digest "${PLATFORM_MANIFEST_DIGEST}" \
+            --expected-size "${PLATFORM_MANIFEST_SIZE}" \
+            --output "${RUNNER_TEMP}/platform-manifest-identity.json" \
+            --github-output "${GITHUB_OUTPUT}"
+
+      - name: Prove config digest and Linux AMD64 platform
+        id: identity
+        shell: bash
+        env:
+          BUILD_ROOT_DIGEST: ${{ steps.root.outputs.root_digest }}
+          CONFIG_DIGEST: ${{ steps.manifest.outputs.config_digest }}
+          CONFIG_SIZE: ${{ steps.manifest.outputs.config_size }}
+          PLATFORM_MANIFEST_DIGEST: ${{ steps.manifest.outputs.platform_manifest_digest }}
+          PLATFORM_MANIFEST_MEDIA_TYPE: ${{ steps.manifest.outputs.platform_manifest_media_type }}
+          ROOT_OBJECT_TYPE: ${{ steps.root.outputs.root_object_type }}
+        run: |
+          set -euo pipefail
+          REGISTRY_TOKEN="$(<"${RUNNER_TEMP}/sam-worker-registry-token")"
+          curl --fail --silent --show-error \
+            --proto '=https' \
+            --max-redirs 0 \
+            --header "Authorization: Bearer ${REGISTRY_TOKEN}" \
+            --output "${RUNNER_TEMP}/image-config.json" \
+            "https://ghcr.io/v2/moodworks/fabrica-sam-worker/blobs/${CONFIG_DIGEST}"
+          python services/sam-worker/image_manifest.py verify-config \
+            --document "${RUNNER_TEMP}/image-config.json" \
+            --digest "${CONFIG_DIGEST}" \
+            --manifest-digest "${PLATFORM_MANIFEST_DIGEST}" \
+            --expected-size "${CONFIG_SIZE}" \
+            --root-digest "${BUILD_ROOT_DIGEST}" \
+            --root-object-type "${ROOT_OBJECT_TYPE}" \
+            --manifest-media-type "${PLATFORM_MANIFEST_MEDIA_TYPE}" \
+            --repository "${IMAGE_REPOSITORY}" \
+            --source-commit "${SOURCE_COMMIT}" \
+            --output "${RUNNER_TEMP}/sam-worker-image-identity.json" \
+            --github-output "${GITHUB_OUTPUT}"
+          {
+            echo "### Verified SAM worker image identity"
+            echo
+            echo "- Source commit: \`${SOURCE_COMMIT}\`"
+            echo "- Platform: \`linux/amd64\`"
+            echo "- Image: \`${IMAGE_REPOSITORY}@${PLATFORM_MANIFEST_DIGEST}\`"
+            echo "- Manifest media type: \`${PLATFORM_MANIFEST_MEDIA_TYPE}\`"
+            echo "- Future worker configuration: \`SAM_WORKER_IMAGE_DIGEST=${PLATFORM_MANIFEST_DIGEST}\`"
+            echo "- BuildKit provenance: disabled"
+            echo "- BuildKit SBOM: disabled"
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+      - name: Remove transient registry credentials
+        if: always()
+        shell: bash
+        run: |
+          set +e
+          docker logout ghcr.io
+          rm -f "${RUNNER_TEMP}/sam-worker-registry-token"

@@ -3,6 +3,7 @@ import { z } from 'zod';
 import {
   SAM_LIMITS,
   SamExecutionIdentitySchema,
+  SamWorkerImageDigestSchema,
   type SamExecutionIdentity,
   type SamMaskResponse,
 } from '../sam/sam-mask-contracts.js';
@@ -16,23 +17,18 @@ import {
   RUNPOD_DIRECT_DOCUMENTATION_EXPIRES_AT_MS,
   RUNPOD_DIRECT_DOCUMENTATION_RETRIEVED_AT_MS,
   RUNPOD_DIRECT_METHOD,
-  SAM_RUNPOD_DIRECT_ADAPTER_PROFILE_V2_SHA256,
-  SAM_RUNPOD_DIRECT_AUTHORIZATION_PROFILE_V2_SHA256,
+  SAM_RUNPOD_DIRECT_ADAPTER_PROFILE_V3_SHA256,
+  SAM_RUNPOD_DIRECT_AUTHORIZATION_PROFILE_V3_SHA256,
   SAM_RUNPOD_DIRECT_HOSTING_PROFILE_SHA256,
   SamRunPodDirectEndpointIdSchema,
-  SamRunPodDirectV2AuthorizationSchema,
-  type SamRunPodDirectV2Authorization,
-} from './sam-runpod-direct-v2-profiles.js';
+  SamRunPodDirectV3AuthorizationSchema,
+  type SamRunPodDirectV3Authorization,
+} from './sam-runpod-direct-v3-profiles.js';
 
-const ImageDigestSchema = z
-  .string()
-  .regex(/^sha256:[0-9a-f]{64}$/u)
-  .refine((value) => value !== `sha256:${'0'.repeat(64)}`, 'Image digest must be resolved.');
-
-export const deriveSamRunPodDirectV2Endpoint = (endpointIdInput: string): string =>
+export const deriveSamRunPodDirectV3Endpoint = (endpointIdInput: string): string =>
   `https://${SamRunPodDirectEndpointIdSchema.parse(endpointIdInput)}.api.runpod.ai/v1/masks`;
 
-export interface SamRunPodDirectV2TransportRequest {
+export interface SamRunPodDirectV3TransportRequest {
   readonly endpoint: string;
   readonly method: typeof RUNPOD_DIRECT_METHOD;
   readonly requestBodyText: string;
@@ -41,26 +37,26 @@ export interface SamRunPodDirectV2TransportRequest {
   readonly dispatchCapability: object;
 }
 
-export interface SamRunPodDirectV2TransportResponse {
+export interface SamRunPodDirectV3TransportResponse {
   readonly status: number;
   readonly contentType: string | null;
   readonly bodyText: string;
 }
 
-export interface SamRunPodDirectV2TransportPort {
-  readonly transportKind: 'deterministic-fake-direct-v2' | 'native-fetch-direct-v2';
+export interface SamRunPodDirectV3TransportPort {
+  readonly transportKind: 'deterministic-fake-direct-v3' | 'native-fetch-direct-v3';
   readonly secretReferenceName: typeof RUNPOD_API_KEY_REFERENCE | null;
   readonly dispatch: (
-    request: SamRunPodDirectV2TransportRequest,
-  ) => Promise<SamRunPodDirectV2TransportResponse>;
+    request: SamRunPodDirectV3TransportRequest,
+  ) => Promise<SamRunPodDirectV3TransportResponse>;
 }
 
-const issuedCapabilities = new WeakMap<object, SamRunPodDirectV2TransportPort['transportKind']>();
+const issuedCapabilities = new WeakMap<object, SamRunPodDirectV3TransportPort['transportKind']>();
 const consumedCapabilities = new WeakSet<object>();
 
-export const consumeSamRunPodDirectV2DispatchCapability = (
-  request: SamRunPodDirectV2TransportRequest,
-  expectedKind: SamRunPodDirectV2TransportPort['transportKind'],
+export const consumeSamRunPodDirectV3DispatchCapability = (
+  request: SamRunPodDirectV3TransportRequest,
+  expectedKind: SamRunPodDirectV3TransportPort['transportKind'],
 ): void => {
   if (
     issuedCapabilities.get(request.dispatchCapability) !== expectedKind ||
@@ -71,7 +67,7 @@ export const consumeSamRunPodDirectV2DispatchCapability = (
   consumedCapabilities.add(request.dispatchCapability);
 };
 
-export class SamRunPodDirectV2Error extends Error {
+export class SamRunPodDirectV3Error extends Error {
   readonly reason:
     | 'DUPLICATE_DISPATCH'
     | 'INDETERMINATE'
@@ -81,21 +77,21 @@ export class SamRunPodDirectV2Error extends Error {
     | 'UNAUTHORIZED';
   readonly retryable = false;
 
-  constructor(reason: SamRunPodDirectV2Error['reason'], message: string, options?: ErrorOptions) {
+  constructor(reason: SamRunPodDirectV3Error['reason'], message: string, options?: ErrorOptions) {
     super(message, options);
-    this.name = 'SamRunPodDirectV2Error';
+    this.name = 'SamRunPodDirectV3Error';
     this.reason = reason;
   }
 }
 
-export interface SamRunPodDirectV2Telemetry {
+export interface SamRunPodDirectV3Telemetry {
   readonly event: 'sam-runpod-direct-failed' | 'sam-runpod-direct-succeeded';
   readonly requestId: string;
   readonly attemptId: string;
   readonly endpointId: string;
   readonly status: number | null;
   readonly candidateCount: number | null;
-  readonly failureReason: SamRunPodDirectV2Error['reason'] | null;
+  readonly failureReason: SamRunPodDirectV3Error['reason'] | null;
 }
 
 const claims = new Set<string>();
@@ -106,7 +102,7 @@ const identitiesMatch = (left: SamExecutionIdentity, right: SamExecutionIdentity
   canonicalizeJson(left) === canonicalizeJson(right);
 
 const assertEvidenceAndAuthorizationWindow = (
-  authorization: SamRunPodDirectV2Authorization,
+  authorization: SamRunPodDirectV3Authorization,
   currentTime: number,
 ): void => {
   if (
@@ -119,29 +115,29 @@ const assertEvidenceAndAuthorizationWindow = (
     authorization.issuedAtMs > currentTime ||
     currentTime >= authorization.expiresAtMs
   ) {
-    throw new SamRunPodDirectV2Error(
+    throw new SamRunPodDirectV3Error(
       'UNAUTHORIZED',
       'SAM direct execution evidence or authorization is absent, stale, or not yet valid.',
     );
   }
 };
 
-export const createSamRunPodDirectV2Adapter = (input: {
+export const createSamRunPodDirectV3Adapter = (input: {
   readonly endpointId: string;
   readonly expectedExecutionIdentity: SamExecutionIdentity;
-  readonly transport: SamRunPodDirectV2TransportPort;
+  readonly transport: SamRunPodDirectV3TransportPort;
   readonly authorization?: unknown;
   readonly configuredImageDigest?: string;
   readonly fakeTimeoutMs?: number;
   readonly nowMs?: () => number;
-  readonly telemetry?: (event: SamRunPodDirectV2Telemetry) => void;
+  readonly telemetry?: (event: SamRunPodDirectV3Telemetry) => void;
 }) => {
   const endpointId = SamRunPodDirectEndpointIdSchema.parse(input.endpointId);
-  const endpoint = deriveSamRunPodDirectV2Endpoint(endpointId);
+  const endpoint = deriveSamRunPodDirectV3Endpoint(endpointId);
   const expectedExecutionIdentity = SamExecutionIdentitySchema.parse(
     input.expectedExecutionIdentity,
   );
-  const native = input.transport.transportKind === 'native-fetch-direct-v2';
+  const native = input.transport.transportKind === 'native-fetch-direct-v3';
   const expectedKind = native ? 'meta-sam2.1' : 'deterministic-fake';
   if (
     expectedExecutionIdentity.kind !== expectedKind ||
@@ -150,19 +146,21 @@ export const createSamRunPodDirectV2Adapter = (input: {
     throw new TypeError('SAM direct execution identity and transport configuration disagree.');
   }
   const nowMs = input.nowMs ?? Date.now;
-  let liveAuthorization: SamRunPodDirectV2Authorization | undefined;
+  let liveAuthorization: SamRunPodDirectV3Authorization | undefined;
   let configuredImageDigest: string | undefined;
   if (native) {
-    liveAuthorization = SamRunPodDirectV2AuthorizationSchema.parse(input.authorization);
-    configuredImageDigest = ImageDigestSchema.parse(input.configuredImageDigest);
+    liveAuthorization = SamRunPodDirectV3AuthorizationSchema.parse(input.authorization);
+    configuredImageDigest = SamWorkerImageDigestSchema.parse(input.configuredImageDigest);
     assertEvidenceAndAuthorizationWindow(liveAuthorization, nowMs());
     if (
       liveAuthorization.endpointId !== endpointId ||
       liveAuthorization.imageDigest !== configuredImageDigest ||
+      expectedExecutionIdentity.kind !== 'meta-sam2.1' ||
+      expectedExecutionIdentity.workerImageDigest !== configuredImageDigest ||
       liveAuthorization.hostingProfileSha256 !== SAM_RUNPOD_DIRECT_HOSTING_PROFILE_SHA256 ||
-      liveAuthorization.adapterProfileSha256 !== SAM_RUNPOD_DIRECT_ADAPTER_PROFILE_V2_SHA256 ||
+      liveAuthorization.adapterProfileSha256 !== SAM_RUNPOD_DIRECT_ADAPTER_PROFILE_V3_SHA256 ||
       liveAuthorization.authorizationProfileSha256 !==
-        SAM_RUNPOD_DIRECT_AUTHORIZATION_PROFILE_V2_SHA256 ||
+        SAM_RUNPOD_DIRECT_AUTHORIZATION_PROFILE_V3_SHA256 ||
       !identitiesMatch(liveAuthorization.executionIdentity, expectedExecutionIdentity)
     ) {
       throw new TypeError('Native SAM direct construction requires exact reviewed authorization.');
@@ -183,13 +181,13 @@ export const createSamRunPodDirectV2Adapter = (input: {
       const { request } = parseAndVerifySamMaskRequest(requestInput);
       const claim = `${request.workspaceId}:${request.jobId}:${request.attemptId}`;
       if (claims.has(claim)) {
-        throw new SamRunPodDirectV2Error(
+        throw new SamRunPodDirectV3Error(
           'DUPLICATE_DISPATCH',
           'This process has already claimed the SAM job attempt.',
         );
       }
       if (signalIsAborted(options?.signal)) {
-        throw new SamRunPodDirectV2Error(
+        throw new SamRunPodDirectV3Error(
           'PRE_DISPATCH_CANCELLED',
           'SAM direct request was cancelled before dispatch.',
         );
@@ -212,20 +210,27 @@ export const createSamRunPodDirectV2Adapter = (input: {
           consumedLiveAuthorizationObjects.has(input.authorization) ||
           consumedLiveAuthorizationIds.has(authorization.authorizationId)
         ) {
-          throw new SamRunPodDirectV2Error(
+          throw new SamRunPodDirectV3Error(
             'UNAUTHORIZED',
             'SAM direct execution authorization is absent, consumed, or request-inexact.',
           );
         }
       }
 
-      const requestBodyText = canonicalizeJson(request);
+      const requestBodyText = canonicalizeJson(
+        native
+          ? {
+              ...request,
+              workerImageDigest: configuredImageDigest!,
+            }
+          : request,
+      );
       if (
         Buffer.byteLength(requestBodyText, 'utf8') > SAM_LIMITS.requestJsonBytes ||
         Object.hasOwn(request, 'endpoint') ||
         Object.hasOwn(request, 'input')
       ) {
-        throw new SamRunPodDirectV2Error(
+        throw new SamRunPodDirectV3Error(
           'UNAUTHORIZED',
           'SAM direct request contains foreign transport authority.',
         );
@@ -240,7 +245,7 @@ export const createSamRunPodDirectV2Adapter = (input: {
       options?.signal?.addEventListener('abort', forwardAbort, { once: true });
       if (signalIsAborted(options?.signal)) {
         options?.signal?.removeEventListener('abort', forwardAbort);
-        throw new SamRunPodDirectV2Error(
+        throw new SamRunPodDirectV3Error(
           'PRE_DISPATCH_CANCELLED',
           'SAM direct request was cancelled before dispatch.',
         );
@@ -259,7 +264,7 @@ export const createSamRunPodDirectV2Adapter = (input: {
       }
 
       try {
-        let transportResponse: SamRunPodDirectV2TransportResponse;
+        let transportResponse: SamRunPodDirectV3TransportResponse;
         try {
           transportResponse = await input.transport.dispatch({
             endpoint,
@@ -270,14 +275,14 @@ export const createSamRunPodDirectV2Adapter = (input: {
             dispatchCapability: capability,
           });
         } catch (error) {
-          throw new SamRunPodDirectV2Error(
+          throw new SamRunPodDirectV3Error(
             'INDETERMINATE',
             'SAM direct dispatch failed after claim; remote completion is unknown.',
             { cause: error },
           );
         }
         if (controller.signal.aborted) {
-          throw new SamRunPodDirectV2Error(
+          throw new SamRunPodDirectV3Error(
             'INDETERMINATE',
             'SAM direct dispatch ended after timeout or cancellation.',
           );
@@ -287,13 +292,13 @@ export const createSamRunPodDirectV2Adapter = (input: {
           throw new TypeError('SAM direct transport returned an invalid HTTP status.');
         }
         if (status >= 500) {
-          throw new SamRunPodDirectV2Error(
+          throw new SamRunPodDirectV3Error(
             'INDETERMINATE',
             'SAM direct gateway/server failure leaves completion unknown.',
           );
         }
         if (status >= 400) {
-          throw new SamRunPodDirectV2Error(
+          throw new SamRunPodDirectV3Error(
             'PROVIDER_FAILURE',
             'SAM direct worker rejected the request.',
           );
@@ -314,7 +319,12 @@ export const createSamRunPodDirectV2Adapter = (input: {
           request,
           expectedExecutionKind: expectedKind,
         });
-        if (!identitiesMatch(response.executionIdentity, expectedExecutionIdentity)) {
+        if (
+          !identitiesMatch(response.executionIdentity, expectedExecutionIdentity) ||
+          (native &&
+            (response.executionIdentity.kind !== 'meta-sam2.1' ||
+              response.executionIdentity.workerImageDigest !== configuredImageDigest))
+        ) {
           throw new TypeError('SAM direct response model identity differs from configuration.');
         }
         input.telemetry?.({
@@ -329,16 +339,16 @@ export const createSamRunPodDirectV2Adapter = (input: {
         return response;
       } catch (error) {
         const mapped =
-          error instanceof SamRunPodDirectV2Error
+          error instanceof SamRunPodDirectV3Error
             ? error
             : controller.signal.aborted ||
                 (error instanceof DOMException && error.name === 'AbortError')
-              ? new SamRunPodDirectV2Error(
+              ? new SamRunPodDirectV3Error(
                   'INDETERMINATE',
                   'SAM direct dispatch was interrupted after claim.',
                   { cause: error },
                 )
-              : new SamRunPodDirectV2Error(
+              : new SamRunPodDirectV3Error(
                   'RESPONSE_INVALID',
                   'SAM direct response failed closed validation.',
                   { cause: error },

@@ -260,6 +260,7 @@ class ReviewedManifestTests(unittest.TestCase):
                 "licenses",
                 "dependencies",
                 "baseImage",
+                "deploymentImage",
                 "manifestSha256",
             },
         )
@@ -1055,6 +1056,27 @@ class CheckpointStructureTests(unittest.TestCase):
 
 
 class AcquisitionDownloadTests(unittest.TestCase):
+    _ARTIFACTS = (
+        (
+            "archive",
+            "https://codeload.github.com/reviewed/archive.tar.gz",
+            "codeload.github.com",
+        ),
+        (
+            "checkpoint",
+            "https://dl.fbaipublicfiles.com/reviewed/checkpoint.pt",
+            "dl.fbaipublicfiles.com",
+        ),
+        (
+            "wheel",
+            (
+                "https://files.pythonhosted.org/packages/reviewed/"
+                "demo-1.0-py3-none-any.whl"
+            ),
+            "files.pythonhosted.org",
+        ),
+    )
+
     class _Response:
         def __init__(
             self,
@@ -1064,16 +1086,22 @@ class AcquisitionDownloadTests(unittest.TestCase):
             url: str,
             length: str | None = None,
             encoding: str | None = None,
+            transfer_encoding: str | None = None,
+            read_error: Exception | None = None,
         ) -> None:
             self.status = status
             self._url = url
             self._data = data
             self._offset = 0
+            self._read_error = read_error
+            self.read_amounts: list[int] = []
             self.headers: Dict[str, str] = {}
             if length is not None:
                 self.headers["Content-Length"] = length
             if encoding is not None:
                 self.headers["Content-Encoding"] = encoding
+            if transfer_encoding is not None:
+                self.headers["Transfer-Encoding"] = transfer_encoding
 
         def __enter__(self) -> "AcquisitionDownloadTests._Response":
             return self
@@ -1085,152 +1113,492 @@ class AcquisitionDownloadTests(unittest.TestCase):
             return self._url
 
         def read(self, amount: int) -> bytes:
+            self.read_amounts.append(amount)
+            if self._read_error is not None:
+                raise self._read_error
             block = self._data[self._offset : self._offset + amount]
             self._offset += len(block)
             return block
 
     class _Opener:
         def __init__(
-            self, response: "AcquisitionDownloadTests._Response"
+            self,
+            response: "AcquisitionDownloadTests._Response" | None = None,
+            *,
+            error: Exception | None = None,
         ) -> None:
             self.response = response
+            self.error = error
+            self.calls = 0
+            self.requests: list[Any] = []
+
+        def open(self, request: Any, timeout: int) -> Any:
+            self.calls += 1
+            self.requests.append(request)
+            if timeout != 300:
+                raise AssertionError("acquisition timeout drifted")
+            if self.error is not None:
+                raise self.error
+            if self.response is None:
+                raise AssertionError("acquisition response is absent")
+            return self.response
+
+    class _RedirectingOpener:
+        def __init__(self) -> None:
             self.calls = 0
 
-        def open(self, _request: Any, timeout: int) -> Any:
+        def open(self, request: Any, timeout: int) -> Any:
             self.calls += 1
             if timeout != 300:
                 raise AssertionError("acquisition timeout drifted")
-            return self.response
+            return acquire_build._RejectRedirects().redirect_request(
+                request,
+                None,
+                302,
+                "raw-redirect-cause",
+                {},
+                "https://example.invalid/raw-redirect-target",
+            )
 
-    def test_download_accepts_only_exact_response_identity(
+    def _assert_gate(
+        self,
+        artifact_kind: str,
+        failure: str,
+        operation: Any,
+        *,
+        forbidden: Sequence[str] = (),
+    ) -> ArtifactError:
+        with self.assertRaises(ArtifactError) as caught:
+            operation()
+        expected = (
+            f"fabrica-build-gate: acquisition-{artifact_kind}-{failure}"
+        )
+        self.assertEqual(str(caught.exception), expected)
+        self.assertIsNone(caught.exception.__cause__)
+        for value in forbidden:
+            self.assertNotIn(value, str(caught.exception))
+        return caught.exception
+
+    def test_download_accepts_exact_body_with_advisory_headers_and_fixed_request(
         self,
     ) -> None:
-        url = (
-            "https://files.pythonhosted.org/packages/reviewed/"
-            "demo-1.0-py3-none-any.whl"
-        )
+        artifact_kind = "archive"
+        url = "https://codeload.github.com/reviewed/archive.tar.gz"
+        host = "codeload.github.com"
         payload = b"abc"
+        header_cases = (
+            ("absent", None, None, None),
+            ("exact", "3", None, None),
+            ("stale", "999", None, None),
+            ("malformed", "not-a-decimal", None, None),
+            ("chunked", None, None, "chunked"),
+            ("stale-chunked", "0", None, "chunked"),
+            ("identity", "3", "identity", None),
+            ("empty-identity", "3", "", None),
+        )
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            for name, length, encoding, transfer_encoding in header_cases:
+                with self.subTest(name=name):
+                    destination = root / (name + ".tar.gz")
+                    response = self._Response(
+                        payload,
+                        url=url,
+                        length=length,
+                        encoding=encoding,
+                        transfer_encoding=transfer_encoding,
+                    )
+                    opener = self._Opener(response)
+                    acquire_build._download(
+                        opener=opener,
+                        artifact_kind=artifact_kind,
+                        url=url,
+                        expected_host=host,
+                        expected_byte_size=len(payload),
+                        expected_sha256=sha256(payload),
+                        destination=destination,
+                    )
+                    self.assertEqual(destination.read_bytes(), payload)
+                    self.assertEqual(
+                        stat.S_IMODE(destination.stat().st_mode),
+                        0o444,
+                    )
+                    self.assertEqual(opener.calls, 1)
+                    self.assertEqual(len(opener.requests), 1)
+                    request = opener.requests[0]
+                    self.assertEqual(request.get_method(), "GET")
+                    self.assertEqual(request.full_url, url)
+                    self.assertEqual(
+                        {
+                            key.lower(): value
+                            for key, value in request.header_items()
+                        },
+                        {
+                            "accept": "application/octet-stream",
+                            "accept-encoding": "identity",
+                            "user-agent": (
+                                "fabrica-sam-build-acquisition-v1"
+                            ),
+                        },
+                    )
+                    self.assertEqual(response.read_amounts, [4, 1])
+                    self.assertTrue(
+                        all(
+                            amount <= len(payload) + 1
+                            for amount in response.read_amounts
+                        )
+                    )
+
+    def test_download_stream_length_is_authoritative_over_all_headers(
+        self,
+    ) -> None:
+        artifact_kind = "archive"
+        url = "https://codeload.github.com/reviewed/archive.tar.gz"
+        host = "codeload.github.com"
+        expected_payload = b"abc"
+        header_cases = (
+            ("absent", None, None),
+            ("exact", "3", None),
+            ("stale", "999", None),
+            ("malformed", "not-a-decimal", None),
+            ("chunked", None, "chunked"),
+            ("malformed-chunked", "invalid", "chunked"),
+        )
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            for body_name, payload in (
+                ("short", b"ab"),
+                ("long", b"abcd"),
+            ):
+                for header_name, length, transfer_encoding in header_cases:
+                    with self.subTest(
+                        body=body_name,
+                        header=header_name,
+                    ):
+                        response = self._Response(
+                            payload,
+                            url=url,
+                            length=length,
+                            transfer_encoding=transfer_encoding,
+                        )
+                        destination = root / (
+                            body_name + "-" + header_name + ".tar.gz"
+                        )
+                        self._assert_gate(
+                            artifact_kind,
+                            "stream-length",
+                            lambda: acquire_build._download(
+                                opener=self._Opener(response),
+                                artifact_kind=artifact_kind,
+                                url=url,
+                                expected_host=host,
+                                expected_byte_size=len(expected_payload),
+                                expected_sha256=sha256(expected_payload),
+                                destination=destination,
+                            ),
+                            forbidden=(
+                                url,
+                                str(destination),
+                                str(len(expected_payload)),
+                                str(len(payload)),
+                            ),
+                        )
+                        self.assertLessEqual(
+                            max(response.read_amounts),
+                            len(expected_payload) + 1,
+                        )
+
+    def test_download_digest_and_content_encoding_fail_closed(
+        self,
+    ) -> None:
+        artifact_kind = "archive"
+        url = "https://codeload.github.com/reviewed/archive.tar.gz"
+        host = "codeload.github.com"
+        payload = b"abc"
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            wrong_digest = sha256(b"abd")
+            digest_destination = root / "wrong-digest.tar.gz"
+            self._assert_gate(
+                artifact_kind,
+                "digest",
+                lambda: acquire_build._download(
+                    opener=self._Opener(
+                        self._Response(payload, url=url, length="3")
+                    ),
+                    artifact_kind=artifact_kind,
+                    url=url,
+                    expected_host=host,
+                    expected_byte_size=len(payload),
+                    expected_sha256=wrong_digest,
+                    destination=digest_destination,
+                ),
+                forbidden=(url, str(digest_destination), wrong_digest),
+            )
+
+            encoding_destination = root / "encoding.tar.gz"
+            self._assert_gate(
+                artifact_kind,
+                "header",
+                lambda: acquire_build._download(
+                    opener=self._Opener(
+                        self._Response(
+                            payload,
+                            url=url,
+                            length="malformed-and-advisory",
+                            encoding="gzip",
+                            transfer_encoding="chunked",
+                        )
+                    ),
+                    artifact_kind=artifact_kind,
+                    url=url,
+                    expected_host=host,
+                    expected_byte_size=len(payload),
+                    expected_sha256=sha256(payload),
+                    destination=encoding_destination,
+                ),
+                forbidden=(url, str(encoding_destination), "gzip"),
+            )
+
+    def test_download_uses_exact_artifact_specific_redacted_failures(
+        self,
+    ) -> None:
+        payload = b"x"
         digest = sha256(payload)
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            destination = root / "good.whl"
-            opener = self._Opener(
-                self._Response(
-                    payload,
-                    url=url,
-                    length=str(len(payload)),
+            for artifact_kind, url, host in self._ARTIFACTS:
+                status_destination = root / (
+                    artifact_kind + "-status.bin"
                 )
-            )
-            acquire_build._download(
-                opener=opener,
-                url=url,
-                expected_host="files.pythonhosted.org",
-                expected_byte_size=len(payload),
-                expected_sha256=digest,
-                destination=destination,
-            )
-            self.assertEqual(destination.read_bytes(), payload)
-            self.assertEqual(opener.calls, 1)
+                self._assert_gate(
+                    artifact_kind,
+                    "response",
+                    lambda: acquire_build._download(
+                        opener=self._Opener(
+                            self._Response(
+                                payload,
+                                status=206,
+                                url=url,
+                                length="stale",
+                            )
+                        ),
+                        artifact_kind=artifact_kind,
+                        url=url,
+                        expected_host=host,
+                        expected_byte_size=1,
+                        expected_sha256=digest,
+                        destination=status_destination,
+                    ),
+                    forbidden=(url, str(status_destination), "206"),
+                )
 
-            cases = {
-                "status": self._Response(
-                    payload,
-                    status=206,
-                    url=url,
-                    length="3",
-                ),
-                "effective-url": self._Response(
-                    payload,
-                    url=url + "?redirected=1",
-                    length="3",
-                ),
-                "missing-length": self._Response(payload, url=url),
-                "wrong-length": self._Response(
-                    payload, url=url, length="4"
-                ),
-                "encoding": self._Response(
-                    payload,
-                    url=url,
-                    length="3",
-                    encoding="gzip",
-                ),
-                "short": self._Response(
-                    b"ab", url=url, length="3"
-                ),
-                "long": self._Response(
-                    b"abcd", url=url, length="3"
-                ),
-                "hash": self._Response(
-                    b"abd", url=url, length="3"
-                ),
-            }
-            for name, response in cases.items():
-                with self.subTest(name=name):
-                    with self.assertRaises(ArtifactError):
-                        acquire_build._download(
-                            opener=self._Opener(response),
-                            url=url,
-                            expected_host="files.pythonhosted.org",
-                            expected_byte_size=3,
-                            expected_sha256=digest,
-                            destination=root / (name + ".whl"),
-                        )
+                effective_url = url + "?raw-effective-url"
+                effective_destination = root / (
+                    artifact_kind + "-effective.bin"
+                )
+                self._assert_gate(
+                    artifact_kind,
+                    "response",
+                    lambda: acquire_build._download(
+                        opener=self._Opener(
+                            self._Response(
+                                payload,
+                                url=effective_url,
+                                length="1",
+                            )
+                        ),
+                        artifact_kind=artifact_kind,
+                        url=url,
+                        expected_host=host,
+                        expected_byte_size=1,
+                        expected_sha256=digest,
+                        destination=effective_destination,
+                    ),
+                    forbidden=(
+                        url,
+                        effective_url,
+                        str(effective_destination),
+                    ),
+                )
 
-    def test_download_rejects_host_redirect_and_existing_destination(
+                invalid_url = url.replace(host, "example.invalid")
+                invalid_destination = root / (
+                    artifact_kind + "-invalid-url.bin"
+                )
+                self._assert_gate(
+                    artifact_kind,
+                    "url",
+                    lambda: acquire_build._download(
+                        opener=self._Opener(
+                            self._Response(payload, url=url)
+                        ),
+                        artifact_kind=artifact_kind,
+                        url=invalid_url,
+                        expected_host=host,
+                        expected_byte_size=1,
+                        expected_sha256=digest,
+                        destination=invalid_destination,
+                    ),
+                    forbidden=(
+                        invalid_url,
+                        str(invalid_destination),
+                    ),
+                )
+
+                redirect_destination = root / (
+                    artifact_kind + "-redirect.bin"
+                )
+                redirect_opener = self._RedirectingOpener()
+                self._assert_gate(
+                    artifact_kind,
+                    "redirect",
+                    lambda: acquire_build._download(
+                        opener=redirect_opener,
+                        artifact_kind=artifact_kind,
+                        url=url,
+                        expected_host=host,
+                        expected_byte_size=1,
+                        expected_sha256=digest,
+                        destination=redirect_destination,
+                    ),
+                    forbidden=(
+                        url,
+                        str(redirect_destination),
+                        "raw-redirect-cause",
+                        "example.invalid",
+                    ),
+                )
+                self.assertEqual(redirect_opener.calls, 1)
+
+                transport_destination = root / (
+                    artifact_kind + "-transport.bin"
+                )
+                transport_opener = self._Opener(
+                    error=OSError("raw-transport-cause")
+                )
+                self._assert_gate(
+                    artifact_kind,
+                    "transport",
+                    lambda: acquire_build._download(
+                        opener=transport_opener,
+                        artifact_kind=artifact_kind,
+                        url=url,
+                        expected_host=host,
+                        expected_byte_size=1,
+                        expected_sha256=digest,
+                        destination=transport_destination,
+                    ),
+                    forbidden=(
+                        url,
+                        str(transport_destination),
+                        "raw-transport-cause",
+                    ),
+                )
+                self.assertEqual(transport_opener.calls, 1)
+
+                existing = root / (
+                    artifact_kind + "-existing.bin"
+                )
+                existing.write_bytes(b"raw-destination-sentinel")
+                destination_opener = self._Opener(
+                    self._Response(
+                        payload,
+                        url=url,
+                        length="1",
+                    )
+                )
+                self._assert_gate(
+                    artifact_kind,
+                    "destination",
+                    lambda: acquire_build._download(
+                        opener=destination_opener,
+                        artifact_kind=artifact_kind,
+                        url=url,
+                        expected_host=host,
+                        expected_byte_size=1,
+                        expected_sha256=digest,
+                        destination=existing,
+                    ),
+                    forbidden=(
+                        url,
+                        str(existing),
+                        "raw-destination-sentinel",
+                    ),
+                )
+                self.assertEqual(destination_opener.calls, 0)
+                self.assertEqual(
+                    existing.read_bytes(),
+                    b"raw-destination-sentinel",
+                )
+
+    def test_download_preserves_strict_url_contract_and_closed_kind(
         self,
     ) -> None:
         valid_url = (
             "https://files.pythonhosted.org/packages/reviewed/"
             "demo-1.0-py3-none-any.whl"
         )
+        invalid_urls = (
+            valid_url.replace("https://", "http://"),
+            valid_url.replace(
+                "files.pythonhosted.org",
+                "example.invalid",
+            ),
+            valid_url.replace(
+                "files.pythonhosted.org",
+                "files.pythonhosted.org:443",
+            ),
+            valid_url.replace(
+                "files.pythonhosted.org",
+                "files.pythonhosted.org:not-a-port",
+            ),
+            valid_url.replace(
+                "files.pythonhosted.org",
+                "user@files.pythonhosted.org",
+            ),
+            valid_url + "?query=forbidden",
+            valid_url + "#fragment",
+            valid_url.replace("demo", "démø"),
+        )
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            opener = self._Opener(
-                self._Response(b"x", url=valid_url, length="1")
-            )
-            invalid_destination = root / "invalid-host.whl"
-            with self.assertRaisesRegex(
-                ArtifactError, "URL is invalid"
-            ):
-                acquire_build._download(
-                    opener=opener,
-                    url=valid_url.replace(
-                        "files.pythonhosted.org", "example.invalid"
-                    ),
-                    expected_host="files.pythonhosted.org",
-                    expected_byte_size=1,
-                    expected_sha256=sha256(b"x"),
-                    destination=invalid_destination,
+            for index, invalid_url in enumerate(invalid_urls):
+                destination = root / f"invalid-{index}.whl"
+                opener = self._Opener(
+                    self._Response(b"x", url=valid_url)
                 )
-            self.assertEqual(opener.calls, 0)
-            self.assertFalse(invalid_destination.exists())
+                self._assert_gate(
+                    "wheel",
+                    "url",
+                    lambda: acquire_build._download(
+                        opener=opener,
+                        artifact_kind="wheel",
+                        url=invalid_url,
+                        expected_host="files.pythonhosted.org",
+                        expected_byte_size=1,
+                        expected_sha256=sha256(b"x"),
+                        destination=destination,
+                    ),
+                    forbidden=(invalid_url, str(destination)),
+                )
+                self.assertEqual(opener.calls, 0)
+                self.assertFalse(destination.exists())
 
-            existing = root / "existing.whl"
-            existing.write_bytes(b"sentinel")
             with self.assertRaisesRegex(
-                ArtifactError, "failed closed"
+                ArtifactError,
+                "^fabrica-build-gate: acquisition-artifact-kind$",
             ):
                 acquire_build._download(
-                    opener=opener,
+                    opener=self._Opener(
+                        self._Response(b"x", url=valid_url)
+                    ),
+                    artifact_kind="foreign",
                     url=valid_url,
                     expected_host="files.pythonhosted.org",
                     expected_byte_size=1,
                     expected_sha256=sha256(b"x"),
-                    destination=existing,
-                )
-            self.assertEqual(opener.calls, 0)
-            self.assertEqual(existing.read_bytes(), b"sentinel")
-
-            with self.assertRaisesRegex(
-                ArtifactError, "redirect was refused"
-            ):
-                acquire_build._RejectRedirects().redirect_request(
-                    None,
-                    None,
-                    302,
-                    "redirect",
-                    {},
-                    "https://example.invalid/",
+                    destination=root / "foreign.whl",
                 )
 
 
@@ -1870,6 +2238,39 @@ class DependencyReadyTests(unittest.TestCase):
 
 
 class RuntimeAdapterArtifactTests(unittest.TestCase):
+    def test_tracked_profile_binds_normalized_config_and_loader(self) -> None:
+        worker = ROOT / "services/sam-worker"
+        loader_data = (worker / "sam_worker/model_loader.py").read_bytes()
+        profile_data = (worker / "adapter-profile.json").read_bytes()
+        profile = json.loads(profile_data)
+        reviewed = json.loads(
+            (worker / "artifact-manifest.json").read_text("utf-8")
+        )
+        self.assertEqual(
+            profile["config"]["parsedCanonicalSha256"],
+            "268e8972d9b8a502a1eec2a9ca6f42c65ffd2819c1108b6b8ed3da682fe5ac17",
+        )
+        self.assertEqual(profile["loader"]["byteSize"], len(loader_data))
+        self.assertEqual(profile["loader"]["sha256"], sha256(loader_data))
+        self.assertEqual(
+            profile["profileSha256"],
+            "f03c378caa5b9ba7979d67ffe958dfd9ca65cc823a10d728faed8c612937b7bf",
+        )
+        profile_core = dict(profile)
+        del profile_core["profileSha256"]
+        self.assertEqual(
+            profile["profileSha256"],
+            sha256(canonical_json(profile_core).encode("utf-8")),
+        )
+        self.assertEqual(
+            reviewed["dependencies"]["adapterProfile"],
+            {
+                "byteSize": len(profile_data),
+                "sha256": sha256(profile_data),
+                "status": "reviewed",
+            },
+        )
+
     def test_reviewed_overlay_passes_and_mutation_or_path_drift_fails(
         self,
     ) -> None:

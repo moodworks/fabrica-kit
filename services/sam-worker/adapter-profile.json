@@ -1,7 +1,7 @@
 {
   "config": {
     "byteSize": 3650,
-    "parsedCanonicalSha256": "4c9b2a847cc3672fdc80cddf09bb5b4128e3b35d5ebbc732e3b1142d5de5f080",
+    "parsedCanonicalSha256": "268e8972d9b8a502a1eec2a9ca6f42c65ffd2819c1108b6b8ed3da682fe5ac17",
     "repositoryPath": "sam2/configs/sam2.1/sam2.1_hiera_b+.yaml",
     "sha256": "e73f9e9547b305040552ee943ebd3a34cee5727a76fc2ab88b87f7b28b430754",
     "targetInventory": [
@@ -74,10 +74,10 @@
     "selectedConfigContainsWeightsPath": false
   },
   "loader": {
-    "byteSize": 14829,
+    "byteSize": 15546,
     "imagePath": "/opt/fabrica/worker/sam_worker/model_loader.py",
     "path": "services/sam-worker/sam_worker/model_loader.py",
-    "sha256": "f7989bd8ce534aca41d5bb7e00cc7ac209294f541f2adacae41bd6128389ba14"
+    "sha256": "ec90d83f41840970b8df9947229908aad49fc15c71386096a60fe83318cf90dc"
   },
   "overlay": {
     "digestAlgorithm": "fabrica-path-content-tree-v1",
@@ -114,7 +114,7 @@
     "dynamic_multimask_stability_thresh": 0.98,
     "dynamic_multimask_via_stability": true
   },
-  "profileSha256": "82a110c9739c2990d663a86f848bc9a0218391c6f21565b16dcda24baf8f1826",
+  "profileSha256": "f03c378caa5b9ba7979d67ffe958dfd9ca65cc823a10d728faed8c612937b7bf",
   "semanticCompatibilityStatus": "deferred-no-torch-or-sam-execution",
   "upstreamHydraBypassed": true,
   "upstreamPackageInitializerExecuted": false,

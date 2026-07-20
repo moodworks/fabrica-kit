@@ -21,7 +21,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any, Dict, Iterable, List, Mapping, Sequence, Tuple
 
 REVIEWED_ARTIFACT_MANIFEST_SHA256 = (
-    "baab7246927ea22ac9f769cab60af2fc3c03fe3ef81aa9a660ab56441365647d"
+    "085ddd290b17b6931ea026c274610d9f6c49bad49a5fd372e846a2060b9ac5c4"
 )
 MANIFEST_MAXIMUM_BYTES = 64_000
 TREE_DIGEST_DOMAIN = b"fabrica-path-content-tree-v1\x00"
@@ -396,6 +396,7 @@ def validate_reviewed_manifest(
             "licenses",
             "dependencies",
             "baseImage",
+            "deploymentImage",
             "manifestSha256",
         },
         "artifactManifest",
@@ -1138,6 +1139,35 @@ def validate_reviewed_manifest(
         raise ArtifactError(
             "Reviewed dependency build status is unsupported."
         )
+
+    deployment_image = _closed_object(
+        manifest["deploymentImage"],
+        {
+            "repository",
+            "platform",
+            "requiredObject",
+            "immutableReferenceFormat",
+            "runtimeEnvironment",
+            "buildKitProvenance",
+            "buildKitSbom",
+            "trustStrength",
+        },
+        "artifactManifest.deploymentImage",
+    )
+    if deployment_image != {
+        "repository": "ghcr.io/moodworks/fabrica-sam-worker",
+        "platform": "linux/amd64",
+        "requiredObject": "oci-or-docker-v2-image-manifest",
+        "immutableReferenceFormat": (
+            "ghcr.io/moodworks/fabrica-sam-worker@"
+            "sha256:<64-lowercase-hex>"
+        ),
+        "runtimeEnvironment": "SAM_WORKER_IMAGE_DIGEST",
+        "buildKitProvenance": "disabled",
+        "buildKitSbom": "disabled",
+        "trustStrength": "environment-bound-not-hardware-backed",
+    }:
+        raise ArtifactError("Deployment image contract drifted.")
 
     base = _closed_object(
         manifest["baseImage"],
@@ -2569,7 +2599,7 @@ def verify_runtime_adapter(
         or config["byteSize"] != manifest["config"]["byteSize"]
         or config["sha256"] != manifest["config"]["sha256"]
         or config["parsedCanonicalSha256"]
-        != "4c9b2a847cc3672fdc80cddf09bb5b4128e3b35d5ebbc732e3b1142d5de5f080"
+        != "268e8972d9b8a502a1eec2a9ca6f42c65ffd2819c1108b6b8ed3da682fe5ac17"
         or config["targetOccurrenceCount"] != 14
         or config["uniqueTargetCount"] != 12
         or target_inventory != REVIEWED_ADAPTER_TARGET_INVENTORY

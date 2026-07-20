@@ -1,11 +1,11 @@
 {
-  "vectorVersion": 2,
+  "vectorVersion": 4,
   "directHosting": {
     "profile": {
-      "profileVersion": "sam-runpod-direct-hosting-v1",
-      "workerHostingVersion": "sam-worker-fastapi-direct-v1",
+      "profileVersion": "sam-runpod-direct-hosting-v2",
+      "workerHostingVersion": "sam-worker-fastapi-direct-v2",
       "provider": "runpod-serverless-load-balancer",
-      "protocolContractVersion": "sam-mask-v1",
+      "protocolContractVersion": "sam-mask-v2",
       "routes": {
         "health": {
           "method": "GET",
@@ -26,8 +26,8 @@
             "inferenceReady": false
           },
           "model-staged-not-loaded": {
-            "status": 503,
-            "body": "strict-redacted-json",
+            "status": 204,
+            "body": "empty",
             "inferenceReady": false
           },
           "model-loaded-ready": {
@@ -42,8 +42,8 @@
           }
         }
       },
-      "requestEnvelope": "bare-sam-mask-v1",
-      "responseEnvelope": "bare-sam-mask-v1",
+      "requestEnvelope": "bare-sam-mask-v2",
+      "responseEnvelope": "bare-sam-mask-v2",
       "endpointHostTemplate": "https://{endpointId}.api.runpod.ai/v1/masks",
       "endpointIdSyntax": "dns-label-lowercase-v1",
       "requestLifecycle": {
@@ -77,6 +77,15 @@
         "providerProcessingMaximumMs": 330000,
         "clientSemantics": "single-wall-timeout-indeterminate-after-dispatch"
       },
+      "workerImageIdentity": {
+        "platform": "linux/amd64",
+        "objectType": "oci-or-docker-v2-image-manifest",
+        "trustedConfiguration": "SAM_WORKER_IMAGE_DIGEST",
+        "authorizationRequestField": "workerImageDigest",
+        "responseField": "executionIdentity.workerImageDigest",
+        "mismatchBehavior": "fail-before-inference-or-result-acceptance",
+        "trustStrength": "environment-bound-not-hardware-backed"
+      },
       "documentationEvidence": {
         "retrievedAt": "2026-07-18T13:15:50Z",
         "expiresAt": "2026-08-18T13:15:50Z",
@@ -88,7 +97,7 @@
         ]
       }
     },
-    "sha256": "1687de7e1936944b0f8b8a14ed4500a988f92558fe3c1680cfe3acc7bc8b8f3d"
+    "sha256": "872054e82fc13e771fa65381e2db1f19dfb2dd609584574e8c532ed8eb82fa18"
   },
   "limits": {
     "rawMaskWorkingBytes": 268435456

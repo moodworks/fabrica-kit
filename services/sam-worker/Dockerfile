@@ -34,7 +34,7 @@ RUN --network=default python /opt/fabrica/build/acquire.py \
 
 FROM --platform=linux/amd64 pytorch/pytorch:2.5.1-cuda12.4-cudnn9-runtime@sha256:c8268a92a69bd500f8be0e665b2630ee006dadaf7bfbc24249141b15ff622755 AS runtime
 
-ARG FABRICA_GIT_SHA=unavailable
+ARG FABRICA_GIT_SHA
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
@@ -45,7 +45,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     TRANSFORMERS_OFFLINE=1 \
     PYTHONPATH=/opt/fabrica/sam2-overlay:/opt/fabrica/runtime-deps:/opt/fabrica/worker:/opt/fabrica/sam2-source
 
-RUN --network=none python -c "import re,sys; value=sys.argv[1]; valid=value == 'unavailable' or (re.fullmatch(r'[0-9a-f]{40}', value) is not None and value != '0' * 40); exec(\"if not valid:\\n    raise SystemExit('fabrica-build-gate: source-revision')\")" "${FABRICA_GIT_SHA}"
+RUN --network=none python -c "import re,sys; value=sys.argv[1]; valid=re.fullmatch(r'[0-9a-f]{40}', value) is not None and value != '0' * 40; exec(\"if not valid:\\n    raise SystemExit('fabrica-build-gate: source-revision')\")" "${FABRICA_GIT_SHA}"
 
 RUN --network=none python -c "import sys; exec(\"if sys.version_info[:2] != (3, 11):\\n    raise SystemExit('fabrica-build-gate: runtime-cpython-major-minor')\")"
 
@@ -60,18 +60,20 @@ RUN --network=none python -c "import grp,pwd; exec(\"try:\\n    user = pwd.getpw
 
 LABEL org.opencontainers.image.source="https://github.com/moodworks/fabrica-kit" \
       org.opencontainers.image.revision="${FABRICA_GIT_SHA}" \
-      io.fabrica.source-revision-contract="git-sha40-or-unavailable-v1" \
-      io.fabrica.image-use="health-only-non-promotable-v1" \
-      io.fabrica.build-contract.version="fabrica-sam-runpod-github-v1" \
+      io.fabrica.source-revision-contract="required-git-sha40-v1" \
+      io.fabrica.image-use="pinned-digest-deployment-only-v1" \
+      io.fabrica.build-contract.version="fabrica-sam-ghcr-linux-amd64-v1" \
+      io.fabrica.sam.worker-image-digest-env="SAM_WORKER_IMAGE_DIGEST" \
+      io.fabrica.sam.worker-image-object="linux-amd64-image-manifest-v1" \
       io.fabrica.sam.repository-commit="05d9e57fb3945b10c861046c1e6749e2bfc258e3" \
       io.fabrica.sam.model-id="sam2.1_hiera_base_plus" \
       io.fabrica.sam.config="configs/sam2.1/sam2.1_hiera_b+.yaml" \
       io.fabrica.sam.config-sha256="e73f9e9547b305040552ee943ebd3a34cee5727a76fc2ab88b87f7b28b430754" \
       io.fabrica.sam.checkpoint-sha256="a2345aede8715ab1d5d31b4a509fb160c5a4af1970f199d9054ccfb746c004c5" \
-      io.fabrica.sam.artifact-manifest-sha256="baab7246927ea22ac9f769cab60af2fc3c03fe3ef81aa9a660ab56441365647d" \
-      io.fabrica.sam.hosting-profile-sha256="1687de7e1936944b0f8b8a14ed4500a988f92558fe3c1680cfe3acc7bc8b8f3d" \
-      io.fabrica.sam.direct-adapter-profile-sha256="62809b35b0ccf2d28f1bcd086857718a7c909b247adeccdddd587305066449a4" \
-      io.fabrica.sam.runtime-adapter-profile-sha256="82a110c9739c2990d663a86f848bc9a0218391c6f21565b16dcda24baf8f1826"
+      io.fabrica.sam.artifact-manifest-sha256="085ddd290b17b6931ea026c274610d9f6c49bad49a5fd372e846a2060b9ac5c4" \
+      io.fabrica.sam.hosting-profile-sha256="872054e82fc13e771fa65381e2db1f19dfb2dd609584574e8c532ed8eb82fa18" \
+      io.fabrica.sam.direct-adapter-profile-sha256="1e6795c970fcfa9443b850f27149e237daf63ffa668cd5094189936453467e28" \
+      io.fabrica.sam.runtime-adapter-profile-sha256="f03c378caa5b9ba7979d67ffe958dfd9ca65cc823a10d728faed8c612937b7bf"
 
 COPY --from=acquisition /opt/fabrica/closed/worker /opt/fabrica/worker
 COPY --from=acquisition /opt/fabrica/closed/sam2-overlay /opt/fabrica/sam2-overlay
@@ -119,6 +121,8 @@ RUN --network=none python -m sam_worker.artifacts verify-runtime \
         --runtime-deps /opt/fabrica/runtime-deps \
     && chown -R root:root /opt/fabrica \
     && chmod -R a-w /opt/fabrica
+
+RUN --network=none python -c "exec(\"try:\\n    import importlib.metadata as metadata\\n    import yaml\\n    from sam_worker.artifacts import IMAGE_CONFIG_PATH\\n    from sam_worker.model_loader import parse_reviewed_config\\n    if metadata.version('pyyaml') != '6.0.2':\\n        raise RuntimeError('pinned YAML identity drifted')\\n    parse_reviewed_config(IMAGE_CONFIG_PATH.read_bytes(), yaml)\\nexcept Exception:\\n    raise SystemExit('fabrica-build-gate: selected-config-parse') from None\")"
 
 EXPOSE 80/tcp
 USER 10001:10001

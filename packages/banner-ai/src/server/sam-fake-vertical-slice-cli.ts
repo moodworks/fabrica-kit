@@ -11,11 +11,11 @@ import {
   type SamMaskRequest,
 } from '../sam/sam-mask-contracts.js';
 import { materializeSamMaskCutout } from '../sam/sam-cutout-materializer.js';
-import { createSamRunPodDirectV2Adapter } from './sam-runpod-direct-v2-adapter.js';
+import { createSamRunPodDirectV3Adapter } from './sam-runpod-direct-v3-adapter.js';
 import {
   SAM_DETERMINISTIC_DIRECT_FAKE_IDENTITY,
-  createDeterministicSamRunPodDirectV2Transport,
-} from './sam-runpod-direct-v2-deterministic-fake-transport.js';
+  createDeterministicSamRunPodDirectV3Transport,
+} from './sam-runpod-direct-v3-deterministic-fake-transport.js';
 
 const label = 'DETERMINISTIC FAKE MASKS — NOT SAM OUTPUT';
 const sha256 = (bytes: Uint8Array): string => createHash('sha256').update(bytes).digest('hex');
@@ -61,8 +61,8 @@ const main = async (): Promise<void> => {
     limits: { minMaskAreaPixels: 64, maxCandidates: 8 },
     output: { maskEncoding: SAM_MASK_ENCODING },
   };
-  const transport = createDeterministicSamRunPodDirectV2Transport();
-  const adapter = createSamRunPodDirectV2Adapter({
+  const transport = createDeterministicSamRunPodDirectV3Transport();
+  const adapter = createSamRunPodDirectV3Adapter({
     endpointId: 'deterministic-fake-only',
     expectedExecutionIdentity: SAM_DETERMINISTIC_DIRECT_FAKE_IDENTITY,
     transport,

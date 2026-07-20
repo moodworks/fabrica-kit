@@ -1,6 +1,6 @@
 import { z } from 'zod';
 
-export const SAM_MASK_CONTRACT_VERSION = 'sam-mask-v1' as const;
+export const SAM_MASK_CONTRACT_VERSION = 'sam-mask-v2' as const;
 export const SAM_MASK_ENCODING = 'fabrica-binary-rle-v1' as const;
 
 export const SAM_LIMITS = Object.freeze({
@@ -22,6 +22,10 @@ export const SAM_LIMITS = Object.freeze({
 });
 
 const Sha256Schema = z.string().regex(/^[0-9a-f]{64}$/u);
+export const SamWorkerImageDigestSchema = z
+  .string()
+  .regex(/^sha256:[0-9a-f]{64}$/u)
+  .refine((value) => value !== `sha256:${'0'.repeat(64)}`, 'Worker image digest must be resolved.');
 const UuidSchema = z
   .string()
   .regex(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u);
@@ -163,6 +167,7 @@ export const SamLiveExecutionIdentitySchema = z
       'https://dl.fbaipublicfiles.com/segment_anything_2/092824/sam2.1_hiera_base_plus.pt',
     ),
     checkpointSha256: Sha256Schema,
+    workerImageDigest: SamWorkerImageDigestSchema,
   })
   .superRefine((identity, context) => {
     if (identity.checkpointSha256 === '0'.repeat(64)) {
