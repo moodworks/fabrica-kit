@@ -10,6 +10,8 @@ from typing import Any
 from image_manifest import (
     DOCKER_IMAGE_CONFIG,
     DOCKER_IMAGE_MANIFEST,
+    EXPECTED_RUNTIME_ENVIRONMENT,
+    EXPECTED_RUNTIME_MATERIALIZED_HISTORY_SUFFIX,
     IMAGE_MANIFEST_MEDIA_TYPES,
     OCI_IMAGE_CONFIG,
     OCI_IMAGE_INDEX,
@@ -26,7 +28,14 @@ ROOT = Path(__file__).resolve().parents[3]
 WORKFLOW = (
     ROOT / ".github/workflows/publish-sam-worker-ghcr.yml"
 )
+PUBLICATION_CLI = ROOT / "services/sam-worker/ghcr_publication.py"
+CONTENT_BOUNDARY_CLI = (
+    ROOT / "services/sam-worker/image_content_boundary.py"
+)
 SOURCE_COMMIT = "e817abacac6eab447c42b0969ec83cadd4d1e7f9"
+RUNTIME_LAYER_COUNT = len(
+    EXPECTED_RUNTIME_MATERIALIZED_HISTORY_SUFFIX
+)
 
 
 def encoded(value: Any) -> bytes:
@@ -60,18 +69,61 @@ def fixture(
         {
             "architecture": "amd64",
             "config": {
+                "Cmd": ["python", "-m", "sam_worker.server"],
+                "Env": [
+                    "%s=%s" % item
+                    for item in sorted(
+                        EXPECTED_RUNTIME_ENVIRONMENT.items()
+                    )
+                ],
+                "ExposedPorts": {"80/tcp": {}},
+                "Healthcheck": {"Test": ["NONE"]},
                 "Labels": {
+                    "io.fabrica.build-contract.version": (
+                        "fabrica-sam-ghcr-linux-amd64-v1"
+                    ),
+                    "io.fabrica.image-use": (
+                        "pinned-digest-deployment-only-v1"
+                    ),
+                    "io.fabrica.sam.worker-image-digest-env": (
+                        "SAM_WORKER_IMAGE_DIGEST"
+                    ),
+                    "io.fabrica.sam.worker-image-object": (
+                        "linux-amd64-image-manifest-v1"
+                    ),
                     "org.opencontainers.image.revision": SOURCE_COMMIT,
                     "org.opencontainers.image.source": (
                         "https://github.com/moodworks/fabrica-kit"
                     ),
-                }
+                },
+                "User": "10001:10001",
+                "WorkingDir": "/opt/fabrica/worker",
             },
+            "history": [
+                {"created_by": marker}
+                for marker in (
+                    EXPECTED_RUNTIME_MATERIALIZED_HISTORY_SUFFIX
+                )
+            ],
             "os": "linux",
-            "rootfs": {"diff_ids": [], "type": "layers"},
+            "rootfs": {
+                "diff_ids": [
+                    "sha256:" + ("%064x" % index)
+                    for index in range(
+                        1,
+                        RUNTIME_LAYER_COUNT + 1,
+                    )
+                ],
+                "type": "layers",
+            },
         }
     )
-    layer = b"fixture-layer"
+    layers = [
+        ("fixture-layer-%d" % index).encode("ascii")
+        for index in range(
+            len(EXPECTED_RUNTIME_MATERIALIZED_HISTORY_SUFFIX)
+        )
+    ]
     manifest = encoded(
         {
             "config": {
@@ -89,12 +141,13 @@ def fixture(
                     ),
                     "size": len(layer),
                 }
+                for layer in layers
             ],
             "mediaType": manifest_media_type,
             "schemaVersion": 2,
         }
     )
-    return manifest, config, layer
+    return manifest, config, layers[0]
 
 
 class ImageManifestTests(unittest.TestCase):
@@ -121,12 +174,20 @@ class ImageManifestTests(unittest.TestCase):
             OCI_IMAGE_MANIFEST,
         )
         self.assertEqual(inspected["configDigest"], digest(config))
+        layer_count = len(
+            EXPECTED_RUNTIME_MATERIALIZED_HISTORY_SUFFIX
+        )
+        self.assertEqual(
+            inspected["layerCount"],
+            str(layer_count),
+        )
         verify_linux_amd64_config(
             config,
             inspected["configDigest"],
             inspected["platformManifestDigest"],
             len(config),
             SOURCE_COMMIT,
+            layer_count,
         )
 
     def test_docker_schema_two_image_manifest_is_accepted_as_platform_manifest(
@@ -153,6 +214,7 @@ class ImageManifestTests(unittest.TestCase):
             inspected["platformManifestDigest"],
             len(config),
             SOURCE_COMMIT,
+            len(EXPECTED_RUNTIME_MATERIALIZED_HISTORY_SUFFIX),
         )
 
     def test_index_digest_is_never_accepted_without_child_manifest_proof(
@@ -279,6 +341,7 @@ class ImageManifestTests(unittest.TestCase):
                 digest(config),
                 len(config),
                 SOURCE_COMMIT,
+                len(EXPECTED_RUNTIME_MATERIALIZED_HISTORY_SUFFIX),
             )
 
     def test_digest_and_media_type_validation_fail_closed(self) -> None:
@@ -318,6 +381,7 @@ class ImageManifestTests(unittest.TestCase):
                 manifest_digest,
                 len(foreign_config),
                 SOURCE_COMMIT,
+                len(EXPECTED_RUNTIME_MATERIALIZED_HISTORY_SUFFIX),
             )
 
     def test_config_source_revision_must_match_exact_commit(self) -> None:
@@ -332,6 +396,139 @@ class ImageManifestTests(unittest.TestCase):
                 digest(manifest),
                 len(config),
                 "a" * 40,
+                len(EXPECTED_RUNTIME_MATERIALIZED_HISTORY_SUFFIX),
+            )
+
+    def test_config_rootfs_and_history_must_match_manifest_layers(
+        self,
+    ) -> None:
+        manifest, config, _layer = fixture()
+        values = json.loads(config)
+        cases = {
+            "missing-rootfs": {
+                key: value
+                for key, value in values.items()
+                if key != "rootfs"
+            },
+            "wrong-diff-count": {
+                **values,
+                "rootfs": {"diff_ids": [], "type": "layers"},
+            },
+            "missing-history": {
+                key: value
+                for key, value in values.items()
+                if key != "history"
+            },
+            "materialized-history-mismatch": {
+                **values,
+                "history": [
+                    {
+                        "created_by": "LABEL reviewed",
+                        "empty_layer": True,
+                    }
+                ],
+            },
+        }
+        for case, value in cases.items():
+            with self.subTest(case=case):
+                changed = encoded(value)
+                with self.assertRaises(ImageManifestError):
+                    verify_linux_amd64_config(
+                        changed,
+                        digest(changed),
+                        digest(manifest),
+                        len(changed),
+                        SOURCE_COMMIT,
+                        RUNTIME_LAYER_COUNT,
+                    )
+
+    def test_config_history_rejects_secret_or_ssh_build_mounts(
+        self,
+    ) -> None:
+        manifest, config, _layer = fixture()
+        for created_by in (
+            "RUN --mount=type=secret,id=token true",
+            "RUN --mount=type=ssh true",
+            "RUN cp /run/secrets/token /tmp/token",
+        ):
+            with self.subTest(created_by=created_by):
+                value = json.loads(config)
+                value["history"] = [{"created_by": created_by}]
+                changed = encoded(value)
+                with self.assertRaisesRegex(
+                    ImageManifestError,
+                    "forbidden build input",
+                ):
+                    verify_linux_amd64_config(
+                        changed,
+                        digest(changed),
+                        digest(manifest),
+                        len(changed),
+                        SOURCE_COMMIT,
+                        RUNTIME_LAYER_COUNT,
+                    )
+
+    def test_config_runtime_directives_and_environment_are_bound(
+        self,
+    ) -> None:
+        manifest, config, _layer = fixture()
+        cases: dict[str, Any] = {}
+        wrong_command = json.loads(config)
+        wrong_command["config"]["Cmd"] = ["sh"]
+        cases["command"] = wrong_command
+        wrong_user = json.loads(config)
+        wrong_user["config"]["User"] = "0:0"
+        cases["user"] = wrong_user
+        enabled_healthcheck = json.loads(config)
+        enabled_healthcheck["config"]["Healthcheck"] = {
+            "Test": ["CMD", "true"]
+        }
+        cases["healthcheck"] = enabled_healthcheck
+        missing_offline = json.loads(config)
+        missing_offline["config"]["Env"] = [
+            value
+            for value in missing_offline["config"]["Env"]
+            if not value.startswith("PIP_NO_INDEX=")
+        ]
+        cases["offline-environment"] = missing_offline
+        credential_environment = json.loads(config)
+        credential_environment["config"]["Env"].append(
+            "GITHUB_TOKEN=synthetic"
+        )
+        cases["credential-environment"] = credential_environment
+        for case, value in cases.items():
+            with self.subTest(case=case):
+                changed = encoded(value)
+                with self.assertRaises(ImageManifestError):
+                    verify_linux_amd64_config(
+                        changed,
+                        digest(changed),
+                        digest(manifest),
+                        len(changed),
+                        SOURCE_COMMIT,
+                        RUNTIME_LAYER_COUNT,
+                    )
+
+    def test_materialized_history_suffix_binds_reviewed_runtime_graph(
+        self,
+    ) -> None:
+        manifest, config, _layer = fixture()
+        value = json.loads(config)
+        value["history"][-1]["created_by"] = (
+            "unreviewed runtime materialization"
+        )
+        changed = encoded(value)
+        with self.assertRaisesRegex(
+            ImageManifestError,
+            "reviewed runtime graph",
+        ):
+            verify_linux_amd64_config(
+                changed,
+                digest(changed),
+                digest(manifest),
+                len(changed),
+                SOURCE_COMMIT,
+                RUNTIME_LAYER_COUNT,
             )
 
     def test_manifest_media_type_allowlist_excludes_indexes_and_configs(
@@ -406,7 +603,9 @@ class PublicationWorkflowTests(unittest.TestCase):
         )
         self.assertEqual(source.count("git clean -ndx"), 2)
         prebuild_proof = source.rindex("git clean -ndx")
-        build_offset = source.index("docker buildx build")
+        build_offset = source.index(
+            "--file services/sam-worker/Dockerfile"
+        )
         self.assertLess(prebuild_proof, build_offset)
         self.assertIn("version: v0.25.0", source)
         action_references = re.findall(
@@ -426,8 +625,11 @@ class PublicationWorkflowTests(unittest.TestCase):
             ],
         )
 
-    def test_workflow_build_and_registry_identity_are_fail_closed(self) -> None:
+    def test_workflow_has_one_publication_and_no_bootstrap_or_latest_tag(
+        self,
+    ) -> None:
         source = WORKFLOW.read_text("utf-8")
+        cli_source = PUBLICATION_CLI.read_text("utf-8")
         for required in (
             "ghcr.io/moodworks/fabrica-sam-worker",
             "--platform linux/amd64",
@@ -435,14 +637,27 @@ class PublicationWorkflowTests(unittest.TestCase):
             "--provenance=false",
             "--sbom=false",
             "--metadata-file",
-            "containerimage.digest",
-            "Docker-Content-Digest",
-            "resolve-root",
-            "inspect-platform",
-            "verify-config",
-            "SAM_WORKER_IMAGE_DIGEST",
+            "image_content_boundary.py",
+            "ghcr_publication.py",
+            "verify-image",
         ):
             self.assertIn(required, source)
+        for required in (
+            "containerimage.digest",
+            "docker-content-digest",
+            "resolve_root",
+            "inspect_platform_manifest",
+            "verify_linux_amd64_config",
+            "validate_root_platform_relationship",
+            "SAM_WORKER_IMAGE_DIGEST",
+            "visibility\") != \"public\"",
+            "_verify_anonymous_public_identity",
+            "_parse_anonymous_bearer_challenge",
+            "www-authenticate",
+            "ANONYMOUS_PULL_SCOPE",
+            "/manifests/latest",
+        ):
+            self.assertIn(required, cli_source)
         self.assertNotRegex(
             source,
             r"(?i)(?:tag|image|reference)[^\n]*:latest",
@@ -451,8 +666,145 @@ class PublicationWorkflowTests(unittest.TestCase):
             source.count("docker buildx build"),
             1,
         )
+        self.assertEqual(source.count("--push"), 1)
+        self.assertEqual(
+            source.count(
+                "--file services/sam-worker/Dockerfile"
+            ),
+            1,
+        )
+        self.assertEqual(
+            source.count(
+                '--tag "${IMAGE_REPOSITORY}:${SOURCE_COMMIT}"'
+            ),
+            1,
+        )
         self.assertNotIn("docker.io/", source)
         self.assertNotIn("quay.io/", source)
+        for forbidden in (
+            "bootstrap",
+            "package-preflight",
+            "package-confirm",
+            "private",
+            "sam-worker-registry-token",
+            "print(token)",
+            "::add-mask::",
+            "python -c",
+            "curl ",
+        ):
+            self.assertNotIn(forbidden, source)
+        for forbidden in (
+            'method="PATCH"',
+            'method="DELETE"',
+            "print(registry_token)",
+            "write_text(registry_token",
+        ):
+            self.assertNotIn(forbidden, cli_source)
+
+    def test_content_boundary_precedes_authentication_and_build(
+        self,
+    ) -> None:
+        source = WORKFLOW.read_text("utf-8")
+        boundary = source.index(
+            "- name: Verify closed SAM image-content boundary"
+        )
+        authentication = source.index(
+            "- name: Authenticate only to GHCR"
+        )
+        worker_build = source.index(
+            "- name: Build and publish one Linux AMD64 SAM worker image"
+        )
+        verification = source.index(
+            "- name: Verify public Linux AMD64 image identity"
+        )
+        self.assertLess(boundary, authentication)
+        self.assertLess(authentication, worker_build)
+        self.assertLess(worker_build, verification)
+
+    def test_host_verifiers_are_not_worker_image_artifacts(self) -> None:
+        dockerfile = (
+            ROOT / "services/sam-worker/Dockerfile"
+        ).read_text("utf-8")
+        dockerignore = (
+            ROOT / "services/sam-worker/Dockerfile.dockerignore"
+        ).read_text("utf-8")
+        self.assertNotIn("ghcr_publication.py", dockerfile)
+        self.assertNotIn(
+            "!services/sam-worker/ghcr_publication.py",
+            dockerignore,
+        )
+        self.assertNotIn("image_content_boundary.py", dockerfile)
+        self.assertNotIn(
+            "!services/sam-worker/image_content_boundary.py",
+            dockerignore,
+        )
+        for path in (PUBLICATION_CLI, CONTENT_BOUNDARY_CLI):
+            with self.subTest(path=path.name):
+                self.assertEqual(
+                    path.stat().st_mode & 0o111,
+                    0o111,
+                )
+                self.assertTrue(
+                    path.read_bytes().startswith(
+                        b"#!/usr/bin/env python3\n"
+                    )
+                )
+
+    def test_publication_verifier_has_no_write_methods_or_token_files(
+        self,
+    ) -> None:
+        source = PUBLICATION_CLI.read_text("utf-8")
+        for forbidden in (
+            'method="PATCH"',
+            'method="POST"',
+            'method="PUT"',
+            'method="DELETE"',
+            "print(registry_token)",
+            "write_text(registry_token",
+            "package-preflight",
+            "package-confirm",
+            "bootstrap_required",
+        ):
+            self.assertNotIn(forbidden, source)
+        self.assertIn(
+            "Authorization\": \"Bearer \" + registry_token",
+            source,
+        )
+        unauthenticated_start = source.index(
+            "def _unauthenticated_registry_get("
+        )
+        unauthenticated_end = source.index(
+            "\ndef _anonymous_bearer_registry_get(",
+            unauthenticated_start,
+        )
+        self.assertNotIn(
+            "Authorization",
+            source[
+                unauthenticated_start:unauthenticated_end
+            ],
+        )
+        token_start = source.index(
+            "def _anonymous_registry_token("
+        )
+        token_end = source.index(
+            "\ndef _authenticated_registry_get(",
+            token_start,
+        )
+        self.assertNotIn(
+            "Authorization",
+            source[token_start:token_end],
+        )
+        bearer_start = source.index(
+            "def _anonymous_bearer_registry_get("
+        )
+        bearer_end = source.index(
+            "\ndef _parse_anonymous_bearer_challenge(",
+            bearer_start,
+        )
+        self.assertIn(
+            "Authorization",
+            source[bearer_start:bearer_end],
+        )
 
 
 if __name__ == "__main__":
