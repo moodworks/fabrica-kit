@@ -13,6 +13,8 @@ import urllib.parse
 from pathlib import Path
 from typing import Mapping, Sequence
 
+sys.dont_write_bytecode = True
+
 WORKER_DIRECTORY = "services/sam-worker"
 DOCKERFILE = WORKER_DIRECTORY + "/Dockerfile"
 DOCKERIGNORE = WORKER_DIRECTORY + "/Dockerfile.dockerignore"
