@@ -10,6 +10,7 @@ from typing import Any
 from image_manifest import (
     DOCKER_IMAGE_CONFIG,
     DOCKER_IMAGE_MANIFEST,
+    EXPECTED_IMAGE_LABELS,
     EXPECTED_RUNTIME_ENVIRONMENT,
     EXPECTED_RUNTIME_MATERIALIZED_HISTORY_SUFFIX,
     IMAGE_MANIFEST_MEDIA_TYPES,
@@ -79,22 +80,8 @@ def fixture(
                 "ExposedPorts": {"80/tcp": {}},
                 "Healthcheck": {"Test": ["NONE"]},
                 "Labels": {
-                    "io.fabrica.build-contract.version": (
-                        "fabrica-sam-ghcr-linux-amd64-v1"
-                    ),
-                    "io.fabrica.image-use": (
-                        "pinned-digest-deployment-only-v1"
-                    ),
-                    "io.fabrica.sam.worker-image-digest-env": (
-                        "SAM_WORKER_IMAGE_DIGEST"
-                    ),
-                    "io.fabrica.sam.worker-image-object": (
-                        "linux-amd64-image-manifest-v1"
-                    ),
+                    **EXPECTED_IMAGE_LABELS,
                     "org.opencontainers.image.revision": SOURCE_COMMIT,
-                    "org.opencontainers.image.source": (
-                        "https://github.com/moodworks/fabrica-kit"
-                    ),
                 },
                 "User": "10001:10001",
                 "WorkingDir": "/opt/fabrica/worker",
@@ -399,6 +386,105 @@ class ImageManifestTests(unittest.TestCase):
                 len(EXPECTED_RUNTIME_MATERIALIZED_HISTORY_SUFFIX),
             )
 
+    def test_config_binds_every_immutable_dockerfile_label(
+        self,
+    ) -> None:
+        expected_labels = {
+            "io.fabrica.build-contract.version": (
+                "fabrica-sam-ghcr-linux-amd64-v1"
+            ),
+            "io.fabrica.image-use": (
+                "pinned-digest-deployment-only-v1"
+            ),
+            "io.fabrica.sam.artifact-manifest-sha256": (
+                "085ddd290b17b6931ea026c274610d9f6c49bad49a5fd372e846a2060b9ac5c4"
+            ),
+            "io.fabrica.sam.checkpoint-sha256": (
+                "a2345aede8715ab1d5d31b4a509fb160c5a4af1970f199d9054ccfb746c004c5"
+            ),
+            "io.fabrica.sam.config": (
+                "configs/sam2.1/sam2.1_hiera_b+.yaml"
+            ),
+            "io.fabrica.sam.config-sha256": (
+                "e73f9e9547b305040552ee943ebd3a34cee5727a76fc2ab88b87f7b28b430754"
+            ),
+            "io.fabrica.sam.direct-adapter-profile-sha256": (
+                "1e6795c970fcfa9443b850f27149e237daf63ffa668cd5094189936453467e28"
+            ),
+            "io.fabrica.sam.hosting-profile-sha256": (
+                "872054e82fc13e771fa65381e2db1f19dfb2dd609584574e8c532ed8eb82fa18"
+            ),
+            "io.fabrica.sam.model-id": "sam2.1_hiera_base_plus",
+            "io.fabrica.sam.repository-commit": (
+                "05d9e57fb3945b10c861046c1e6749e2bfc258e3"
+            ),
+            "io.fabrica.sam.runtime-adapter-profile-sha256": (
+                "f03c378caa5b9ba7979d67ffe958dfd9ca65cc823a10d728faed8c612937b7bf"
+            ),
+            "io.fabrica.sam.worker-image-digest-env": (
+                "SAM_WORKER_IMAGE_DIGEST"
+            ),
+            "io.fabrica.sam.worker-image-object": (
+                "linux-amd64-image-manifest-v1"
+            ),
+            "io.fabrica.source-revision-contract": (
+                "required-git-sha40-v1"
+            ),
+            "org.opencontainers.image.source": (
+                "https://github.com/moodworks/fabrica-kit"
+            ),
+        }
+        self.assertEqual(EXPECTED_IMAGE_LABELS, expected_labels)
+        manifest, config, _layer = fixture()
+        for label in (
+            *sorted(expected_labels),
+            "org.opencontainers.image.revision",
+        ):
+            with self.subTest(label=label):
+                value = json.loads(config)
+                value["config"]["Labels"][label] = "foreign"
+                changed = encoded(value)
+                with self.assertRaisesRegex(
+                    ImageManifestError,
+                    "exact source revision",
+                ):
+                    verify_linux_amd64_config(
+                        changed,
+                        digest(changed),
+                        digest(manifest),
+                        len(changed),
+                        SOURCE_COMMIT,
+                        RUNTIME_LAYER_COUNT,
+                    )
+
+    def test_config_digest_precedes_strict_json_parsing(self) -> None:
+        manifest, config, _layer = fixture()
+        malformed = b"{"
+        with self.assertRaisesRegex(
+            ImageManifestError,
+            "bytes do not match",
+        ):
+            verify_linux_amd64_config(
+                malformed,
+                digest(config),
+                digest(manifest),
+                len(malformed),
+                SOURCE_COMMIT,
+                RUNTIME_LAYER_COUNT,
+            )
+        with self.assertRaisesRegex(
+            ImageManifestError,
+            "strict UTF-8 JSON",
+        ):
+            verify_linux_amd64_config(
+                malformed,
+                digest(malformed),
+                digest(manifest),
+                len(malformed),
+                SOURCE_COMMIT,
+                RUNTIME_LAYER_COUNT,
+            )
+
     def test_config_rootfs_and_history_must_match_manifest_layers(
         self,
     ) -> None:
@@ -509,13 +595,28 @@ class ImageManifestTests(unittest.TestCase):
                         RUNTIME_LAYER_COUNT,
                     )
 
-    def test_materialized_history_suffix_binds_reviewed_runtime_graph(
+    def test_final_workdir_materialization_binds_reviewed_runtime_graph(
         self,
     ) -> None:
+        marker = "workdir /opt/fabrica/worker"
+        self.assertEqual(
+            EXPECTED_RUNTIME_MATERIALIZED_HISTORY_SUFFIX[-1],
+            marker,
+        )
+        self.assertEqual(
+            EXPECTED_RUNTIME_MATERIALIZED_HISTORY_SUFFIX.count(
+                marker
+            ),
+            1,
+        )
         manifest, config, _layer = fixture()
         value = json.loads(config)
+        self.assertEqual(
+            value["history"][-1],
+            {"created_by": marker},
+        )
         value["history"][-1]["created_by"] = (
-            "unreviewed runtime materialization"
+            "workdir /opt/fabrica/unreviewed"
         )
         changed = encoded(value)
         with self.assertRaisesRegex(
@@ -652,10 +753,15 @@ class PublicationWorkflowTests(unittest.TestCase):
             "SAM_WORKER_IMAGE_DIGEST",
             "visibility\") != \"public\"",
             "_verify_anonymous_public_identity",
+            "_verified_anonymous_image_identity",
+            "_registry_config_blob_get",
+            "CONFIG_BLOB_REDIRECT_HOST",
+            "MAX_CONFIG_BLOB_REDIRECTS = 1",
             "_parse_anonymous_bearer_challenge",
             "www-authenticate",
             "ANONYMOUS_PULL_SCOPE",
             "/manifests/latest",
+            "verify-anonymous-image",
         ):
             self.assertIn(required, cli_source)
         self.assertNotRegex(
@@ -804,6 +910,40 @@ class PublicationWorkflowTests(unittest.TestCase):
         self.assertIn(
             "Authorization",
             source[bearer_start:bearer_end],
+        )
+        config_start = source.index(
+            "def _registry_config_blob_get("
+        )
+        config_end = source.index(
+            "\ndef _unauthenticated_registry_get(",
+            config_start,
+        )
+        config_source = source[config_start:config_end]
+        self.assertIn(
+            '"Authorization": "Bearer " + registry_token',
+            config_source,
+        )
+        follow_source = config_source[
+            config_source.index("redirects += 1") :
+        ]
+        self.assertNotIn("Authorization", follow_source)
+        anonymous_start = source.index(
+            "def _verified_anonymous_image_identity("
+        )
+        anonymous_end = source.index(
+            "\ndef _anonymous_manifest_access(",
+            anonymous_start,
+        )
+        anonymous_source = source[
+            anonymous_start:anonymous_end
+        ]
+        self.assertNotIn(
+            "_required_github_token",
+            anonymous_source,
+        )
+        self.assertNotIn(
+            "verify_public_package",
+            anonymous_source,
         )
 
 
