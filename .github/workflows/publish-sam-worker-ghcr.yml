@@ -1,4 +1,4 @@
-name: Publish pinned SAM worker to private GHCR
+name: Publish pinned SAM worker to public GHCR
 
 on:
   workflow_dispatch:
@@ -57,16 +57,11 @@ jobs:
             exit 1
           fi
 
-      - name: Inspect authenticated package privacy before publication
-        id: package
+      - name: Verify closed SAM image-content boundary
         shell: bash
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          python3 services/sam-worker/ghcr_publication.py \
-            package-preflight \
-            --github-output "${GITHUB_OUTPUT}"
+          ./services/sam-worker/image_content_boundary.py
 
       # docker/setup-buildx-action v3.11.1, reviewed 2026-07-20.
       - uses: docker/setup-buildx-action@e468171a9de216ec08956ac3ada2f0791b6bd435
@@ -81,50 +76,6 @@ jobs:
         run: |
           set -euo pipefail
           printf '%s' "${GHCR_TOKEN}" | docker login ghcr.io --username "${GITHUB_ACTOR}" --password-stdin
-
-      - name: Publish source-free package bootstrap when absent or inaccessible
-        if: steps.package.outputs.bootstrap_required == 'true'
-        shell: bash
-        run: |
-          set -euo pipefail
-          if [[ ! "${GITHUB_RUN_ID}" =~ ^[1-9][0-9]*$ ]] || [[ ! "${GITHUB_RUN_ATTEMPT}" =~ ^[1-9][0-9]*$ ]]; then
-            echo "GitHub run identity is invalid" >&2
-            exit 1
-          fi
-          BOOTSTRAP_CONTEXT="${RUNNER_TEMP}/sam-ghcr-bootstrap-context"
-          if [[ -e "${BOOTSTRAP_CONTEXT}" ]]; then
-            echo "bootstrap context already exists" >&2
-            exit 1
-          fi
-          mkdir -m 700 "${BOOTSTRAP_CONTEXT}"
-          printf '%s\n' \
-            'FROM scratch' \
-            'LABEL org.opencontainers.image.source="https://github.com/moodworks/fabrica-kit"' \
-            > "${BOOTSTRAP_CONTEXT}/Dockerfile"
-          if [[ "$(find "${BOOTSTRAP_CONTEXT}" -mindepth 1 -maxdepth 1 -printf '%f\n')" != "Dockerfile" ]]; then
-            echo "bootstrap context is not source-free" >&2
-            exit 1
-          fi
-          docker buildx build \
-            --platform linux/amd64 \
-            --file "${BOOTSTRAP_CONTEXT}/Dockerfile" \
-            --network=none \
-            --provenance=false \
-            --sbom=false \
-            --tag "${IMAGE_REPOSITORY}:bootstrap-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
-            --push \
-            "${BOOTSTRAP_CONTEXT}"
-
-      - name: Require authenticated private linked package before worker build
-        id: privacy
-        shell: bash
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          set -euo pipefail
-          python3 services/sam-worker/ghcr_publication.py \
-            package-confirm \
-            --github-output "${GITHUB_OUTPUT}"
 
       - name: Build and publish one Linux AMD64 SAM worker image
         shell: bash
@@ -154,7 +105,7 @@ jobs:
             --metadata-file "${RUNNER_TEMP}/sam-worker-build-metadata.json" \
             .
 
-      - name: Verify private registry Linux AMD64 image identity
+      - name: Verify public Linux AMD64 image identity
         id: identity
         shell: bash
         env:

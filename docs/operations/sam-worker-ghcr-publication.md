@@ -1,144 +1,143 @@
-# SAM worker GHCR publication and digest-pinned deployment
+# SAM worker public GHCR publication and digest-pinned deployment
 
 This procedure is for a later, separately authorized external stage. Local
-implementation and repair stages only prepare and test repository code. They do not
-publish a package, create a credential, change RunPod, contact a worker, or run
-inference.
+implementation and review do not publish a package, change RunPod, contact a worker,
+or run inference. Public image availability is distribution only; it does not
+authorize `/ping`, `/v1/masks`, a worker wake-up, deployment, or inference.
 
-## Identity and trust boundary
-
-The deployment identity is the Linux/AMD64 platform image-manifest digest:
+The deployment identity is the registry-proven Linux/AMD64 OCI or Docker schema-2
+image-manifest digest:
 
 ```text
 ghcr.io/moodworks/fabrica-sam-worker@sha256:<64-lowercase-hex>
 ```
 
-It is not the source commit, tag, image config digest, multi-platform index digest,
-base-image digest, local Docker ID, or a digest inferred from a filename. The trust
-chain is:
+It is not a tag, Git commit, config digest, multi-platform index digest, base-image
+digest, local Docker ID, or digest inferred from a filename. The trust chain is:
 
 ```text
-verified GHCR Linux/AMD64 image-manifest digest
+verified public GHCR Linux/AMD64 image-manifest digest
 → RunPod image reference pinned to repository@digest
 → independently configured SAM_WORKER_IMAGE_DIGEST
-→ authorization-bound caller expectation sent in the strict worker request
+→ authorization-bound caller expectation
 → worker comparison before engine invocation
-→ trusted digest in the strict live response execution identity
-→ caller equality check before returning or materializing results
+→ trusted digest in the strict response
+→ caller equality check before accepting or materializing results
 ```
 
-`SAM_WORKER_IMAGE_DIGEST` is immutable non-secret configuration. It is not a
-hardware-backed, provider-signed, or measured-boot attestation. Its value is trusted
-because the operator must configure it independently to the same registry-proven
-manifest used in RunPod's pinned image reference.
+This is environment-bound identity, not hardware-backed attestation.
+
+## Pre-build image-content boundary
+
+Before Docker authentication, build, or push, the manual workflow runs the
+repository-owned executable `services/sam-worker/image_content_boundary.py`. It fails
+closed unless all of these are proven from the exact checkout:
+
+- every Docker context/control input is a tracked stage-zero regular file with its
+  reviewed mode and SHA-256;
+- `Dockerfile.dockerignore` begins with a deny-all rule and exposes exactly 21 reviewed
+  files—no Git metadata, environment files, credentials, authentication material,
+  tests, fixtures, reports, images, provider responses, caches, editor files, or build
+  artifacts;
+- the Dockerfile has exactly the two reviewed pinned Linux/AMD64 stages, one mandatory
+  `FABRICA_GIT_SHA` argument, reviewed environment, exact local and cross-stage
+  `COPY` edges, and no `ADD`, broad copy, secret mount, or SSH mount;
+- only the acquisition stage has one reviewed network-enabled command; all other
+  build commands are network-disabled, and the only cross-stage mount is the reviewed
+  read-only wheelhouse;
+- the artifact manifest, SAM archive/checkpoint identities, adapter profile,
+  requirements lock, wheel inventory, dependency-license inventory, exact acquisition
+  URLs, byte sizes, hashes, and license/dependency closure all match; and
+- the acquisition program has the reviewed host allowlist and produces the exact
+  closed output graph copied by the runtime stage.
+
+This is a closed static input/graph/hash/license proof. It does not claim byte-level
+inspection of generated layer tar archives. Post-push verification adds registry
+manifest/config/rootfs/history structural proof, but it also does not claim to have
+opened every layer tar.
 
 ## Publication contract
 
-The manual `Publish pinned SAM worker to private GHCR` workflow accepts one explicit
-40-character lowercase source commit. It checks out that commit without persisted Git
-credentials and confirms `HEAD` exactly. Except for the harmless source-free bootstrap
-described below, its only actual SAM worker publication is tagged:
+`Publish pinned SAM worker to public GHCR` is manual `workflow_dispatch` only. It
+accepts one explicit nonzero 40-character lowercase source commit, checks out that
+commit without persisted Git credentials, and verifies exact clean `HEAD`.
+
+The workflow performs exactly one build and one push:
 
 ```text
 ghcr.io/moodworks/fabrica-sam-worker:<exact-source-commit>
 ```
 
-The build uses repository-root context, `services/sam-worker/Dockerfile`, and only
-`linux/amd64`. `FABRICA_GIT_SHA` is mandatory and the image config label must bind the
-same exact commit. The workflow grants only `contents: read` and `packages: write`,
-authenticates to GHCR with its ephemeral `GITHUB_TOKEN`, and publishes to no other
-registry. It never creates or updates `latest`.
+The exact-commit tag is a publication locator, never a deployment identity. No
+bootstrap image or tag is created, and `latest` is never created or updated. The build
+uses repository-root context, `services/sam-worker/Dockerfile`, and only
+`linux/amd64`. BuildKit provenance and SBOM outputs are explicitly disabled so
+attestation objects cannot silently become the intended platform-manifest identity.
+The workflow grants only `contents: read` and `packages: write`, authenticates to
+GHCR with its ephemeral `GITHUB_TOKEN`, and publishes to no other registry.
 
-Before any SAM worker build, the workflow performs an authenticated GitHub Packages
-GET against the user-owned `moodworks/fabrica-sam-worker` container package. A
-successful response must prove the exact package name and type, `private` visibility,
-the `moodworks` user owner, and linkage to `moodworks/fabrica-kit`. Because the GET
-uses this workflow repository's `GITHUB_TOKEN`, a successful private, exactly linked
-response is also the available Actions-access proof; the package response does not
-expose a separate Actions-access list. Public, internal, malformed, mislinked,
-forbidden, or other failed responses stop before any worker build. The workflow never
-changes package visibility and never deletes a package. See GitHub's official
-[Packages REST reference](https://docs.github.com/en/rest/packages/packages) and
-[GitHub Actions package publication guidance](https://docs.github.com/en/packages/managing-github-packages-using-github-actions-workflows/publishing-and-installing-a-package-with-github-actions).
+After push, the verifier performs these gates before emitting any success output:
 
-An authenticated `404` does not prove absence; it means absent or inaccessible. That
-state permits only one harmless namespace-bootstrap attempt. The workflow constructs
-a temporary build context under `RUNNER_TEMP` containing exactly a `FROM scratch`
-Dockerfile and the required public repository-linkage label. It builds with no network,
-provenance, or SBOM and pushes only a unique
-`bootstrap-<run-id>-<run-attempt>` version. The bootstrap contains no SAM worker
-source, model, checkpoint, configuration, fixtures, credentials, or private metadata.
-Afterward, the same authenticated exact-private linkage check is mandatory. A failed
-bootstrap push or any absent, inaccessible, public, internal, ambiguous, or mislinked
-post-bootstrap result stops before the SAM worker build. This is particularly
-important because a package created from a public workflow repository can inherit
-public visibility.
+1. Authenticated GitHub package metadata must return the exact
+   `moodworks/fabrica-sam-worker` container package, visibility `public`, owner login
+   `moodworks`, owner type `User`, a valid exact owner ID, and exact linkage to the
+   `moodworks/fabrica-kit` repository and the same owner identity.
+2. An authenticated, pull-scoped GHCR token is parsed in memory. The raw build-root
+   object is fetched by the BuildKit-returned digest and validated by bytes,
+   `Docker-Content-Digest`, response/document media type, and OCI structure.
+3. A root index or manifest list is only a routing object. The verifier selects
+   exactly one Linux/AMD64 child image-manifest descriptor, fetches that child, and
+   proves its bytes, digest, media type, size, config descriptor, nonempty layer
+   descriptors, and distinction from the config digest.
+4. The config bytes/digest/size must prove Linux/AMD64, the exact source/revision
+   and build-contract labels, exact final user/workdir/command/exposed-port,
+   Docker's disabled-healthcheck config `{"Test":["NONE"]}`, offline environment, a
+   rootfs diff-ID count equal to the manifest layer count, and a
+   sanitized history whose materialized-entry count also equals that layer count. Its
+   final 15 materialized entries must match the reviewed final-stage order: six
+   pre-copy runtime gates, six closed cross-stage copies, dependency installation
+   verification, complete runtime verification, and selected-config parsing.
+   Secret/SSH mount or credential-bearing history is rejected.
+5. Without any authorization header, the verifier fetches the exact platform
+   manifest again and independently repeats the raw digest/header/media/size/config
+   and layer-count proof.
+6. Without any authorization header, an exact request for the `latest` manifest must
+   return HTTP 404. Any other status fails closed.
 
-BuildKit provenance and SBOM attestations are explicitly disabled. This avoids
-creating an attestation-bearing index as an accidental deployment identity, but the
-workflow does not assume that this setting makes BuildKit's returned digest a
-platform-manifest digest. After push it fetches the registry object by digest and
-checks the raw-byte SHA-256, `Docker-Content-Digest`, response media type, and document
-media type. If the root is an OCI index or Docker manifest list, the validator selects
-exactly one Linux/AMD64 child and then separately fetches and proves that child image
-manifest. It verifies the manifest's config descriptor, config raw-byte digest and
-size, Linux/AMD64 fields, source/revision labels, layer descriptor types, and the
-manifest/config digest distinction. It repeats the authenticated exact-private package
-check after registry verification and before emitting success metadata. Any ambiguity
-or mismatch fails closed.
-
-The workflow emits only the source commit, source tag, root object classification,
-Linux/AMD64 platform image-manifest digest and media type, config digest, immutable
-image reference, and explicit provenance/SBOM policy. Tokens and response bodies are
-not emitted as identity metadata. The repository-owned publication CLI parses the
-scoped registry-token envelope and keeps the token only in process memory; it neither
-prints nor writes that token.
+Only then does the workflow emit the immutable image reference, platform-manifest
+digest and media type, config digest, root classification, source commit, public
+package binding, and anonymous-access proofs. Tokens and provider response bodies are
+not emitted or persisted.
 
 ## Later authorized operator sequence
 
-1. After an authorized commit exists, manually dispatch the publication workflow with
-   that exact full commit. Review the workflow run and require success from the
-   privacy gate and post-push platform-manifest validator. If the run publishes only
-   the harmless bootstrap and then rejects non-private metadata, stop. Do not assume
-   the package can be converted back to private, and do not treat this procedure as
-   authorization to change visibility, delete, or recreate it. Resolve package
-   ownership and privacy under a separate package-administration review before any
-   rerun.
-2. Confirm the new `ghcr.io/moodworks/fabrica-sam-worker` package is private. Record
-   the workflow's verified `platformManifestDigest` and immutable `imageReference`.
-   Do not use the exact-commit tag as deployment identity.
-3. Only after the package exists, create a least-privilege GitHub classic personal
-   access token for the RunPod pull identity with only `read:packages`. Do not grant
-   repository write, package write/delete, workflow, administration, or unrelated
-   scopes. Store it only in the provider's private-registry credential facility.
-   GitHub's official
-   [Container registry authentication documentation](https://docs.github.com/en/packages/working-with-a-github-packages-registry/working-with-the-container-registry#authenticating-with-a-personal-access-token-classic)
-   defines the classic PAT and `read:packages` pull scope.
-4. Configure RunPod private-registry authentication for `ghcr.io` with the dedicated
-   read identity. Do not place the token in an image reference, endpoint environment
-   report, source file, log, or deployment note. In that later authorized stage, use
-   RunPod's official
-   [private container registry management reference](https://docs.runpod.io/runpodctl/reference/runpodctl-registry)
-   to save the pull credential, then follow the official
-   [template-management reference](https://docs.runpod.io/sdks/graphql/manage-pod-templates)
-   to attach the saved credential by `containerRegistryAuthId` to the reviewed
-   Serverless template/configuration. Do not embed registry credentials in the
-   endpoint image URL. These are deferred operator actions; local implementation and
-   repair stages do not run `runpodctl`, issue a GraphQL mutation, or create or attach
-   a credential.
-5. In one separately reviewed deployment, configure the worker image as:
+1. Ensure the `moodworks/fabrica-kit` commit under review contains the expected public
+   image policy. Manually dispatch the publication workflow with that exact full
+   commit. Do not rerun a failed publication as an implicit retry; each dispatch is a
+   separate operator action, and workflow concurrency remains keyed to the source
+   commit.
+2. Require success from the pre-build image-content gate and every post-push gate.
+   Confirm package metadata says `public`, anonymous retrieval of the exact digest
+   succeeds, and anonymous `latest` returns 404. If visibility, ownership, linkage, or
+   anonymous retrieval differs, stop; do not deploy or weaken the verifier.
+3. Record only the verified `platformManifestDigest` and immutable
+   `imageReference`. Do not use the exact-commit tag, build-root index, or config
+   digest as deployment identity.
+4. Because this package is public, do not create a GHCR PAT and do not configure
+   RunPod private-registry authentication. A registry pull credential would add an
+   unnecessary secret and is outside this policy.
+5. In one separately reviewed RunPod deployment, configure the worker image exactly:
 
    ```text
    ghcr.io/moodworks/fabrica-sam-worker@sha256:<verified-linux-amd64-manifest-digest>
    ```
 
-6. Configure `SAM_WORKER_IMAGE_DIGEST` to that exact same
+6. Configure `SAM_WORKER_IMAGE_DIGEST` to the exact same
    `sha256:<64-lowercase-hex>` platform-manifest digest. Preserve the reviewed SAM
-   model, checkpoint, configuration, request/response limits, direct Load Balancer
-   architecture, one dispatch, zero client retries, zero polls, and no queue wrapper.
-7. Preserve minimum workers `0` and maximum workers `1`. A deployment or later health
-   or inference exercise requires its own explicit authorization; publication alone
-   grants none.
+   model, checkpoint, configuration, limits, direct Load Balancer architecture, one
+   dispatch, zero client retries, zero polls, and no queue wrapper.
+7. Preserve minimum workers `0` and maximum workers `1`. Deployment, health checks,
+   worker wake-up, and inference each require separate explicit authorization.
 
-The existing endpoint `sawwuq4u7oiftj` version 11 remains historical evidence and must
-not be mutated by this publication procedure.
+The existing endpoint `sawwuq4u7oiftj` version 11 remains historical evidence and
+must not be mutated by this publication procedure.

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Fail-closed GHCR privacy gating and worker image verification."""
+"""Fail-closed public GHCR package and worker image verification."""
 
 from __future__ import annotations
 
@@ -280,7 +280,7 @@ def _required_github_actor() -> str:
 
 def _package_metadata(
     github_api_base_url: str,
-) -> Mapping[str, Any] | None:
+) -> Mapping[str, Any]:
     response = _http_get(
         (
             github_api_base_url
@@ -293,11 +293,9 @@ def _package_metadata(
             "X-GitHub-Api-Version": GITHUB_API_VERSION,
         },
         maximum_bytes=MAX_PACKAGE_METADATA_BYTES,
-        accepted_statuses={200, 404},
+        accepted_statuses={200},
         error_code="package-metadata-http",
     )
-    if response.status == 404:
-        return None
     return _strict_json_object(
         response.body,
         maximum_bytes=MAX_PACKAGE_METADATA_BYTES,
@@ -305,7 +303,40 @@ def _package_metadata(
     )
 
 
-def _validate_private_package(metadata: Mapping[str, Any]) -> None:
+def _owner_identity(github_api_base_url: str) -> int:
+    response = _http_get(
+        github_api_base_url + "/users/moodworks",
+        headers={
+            "Accept": "application/vnd.github+json",
+            "Authorization": "Bearer " + _required_github_token(),
+            "User-Agent": "fabrica-sam-ghcr-publication-gate",
+            "X-GitHub-Api-Version": GITHUB_API_VERSION,
+        },
+        maximum_bytes=MAX_PACKAGE_METADATA_BYTES,
+        accepted_statuses={200},
+        error_code="owner-metadata-http",
+    )
+    metadata = _strict_json_object(
+        response.body,
+        maximum_bytes=MAX_PACKAGE_METADATA_BYTES,
+        error_code="owner-metadata-envelope",
+    )
+    owner_id = metadata.get("id")
+    if (
+        metadata.get("login") != EXPECTED_OWNER
+        or metadata.get("type") != "User"
+        or isinstance(owner_id, bool)
+        or not isinstance(owner_id, int)
+        or owner_id < 1
+    ):
+        raise PublicationError("owner-user-identity")
+    return owner_id
+
+
+def _validate_public_package(
+    metadata: Mapping[str, Any],
+    expected_owner_id: int,
+) -> None:
     owner = metadata.get("owner")
     repository = metadata.get("repository")
     package_id = metadata.get("id")
@@ -330,13 +361,13 @@ def _validate_private_package(metadata: Mapping[str, Any]) -> None:
         or package_id < 1
         or metadata.get("name") != EXPECTED_PACKAGE
         or metadata.get("package_type") != "container"
-        or metadata.get("visibility") != "private"
+        or metadata.get("visibility") != "public"
         or not isinstance(owner, dict)
         or owner.get("login") != EXPECTED_OWNER
         or owner.get("type") != "User"
         or isinstance(owner_id, bool)
         or not isinstance(owner_id, int)
-        or owner_id < 1
+        or owner_id != expected_owner_id
         or not isinstance(repository, dict)
         or isinstance(repository_id, bool)
         or not isinstance(repository_id, int)
@@ -349,7 +380,7 @@ def _validate_private_package(metadata: Mapping[str, Any]) -> None:
         or repository_owner.get("type") != "User"
         or repository_owner.get("id") != owner_id
     ):
-        raise PublicationError("package-private-linkage")
+        raise PublicationError("package-public-linkage")
 
 
 def _append_github_output(
@@ -374,47 +405,10 @@ def _append_github_output(
             output.write("%s=%s\n" % (key, value))
 
 
-def package_preflight(
-    github_api_base_url: str,
-    github_output: str,
-) -> None:
+def verify_public_package(github_api_base_url: str) -> None:
+    owner_id = _owner_identity(github_api_base_url)
     metadata = _package_metadata(github_api_base_url)
-    if metadata is None:
-        _append_github_output(
-            github_output,
-            {
-                "bootstrap_required": "true",
-                "package_state": "absent-or-inaccessible",
-            },
-        )
-        return
-    _validate_private_package(metadata)
-    _append_github_output(
-        github_output,
-        {
-            "bootstrap_required": "false",
-            "package_state": "private-linked-actions-readable",
-        },
-    )
-
-
-def package_confirm(
-    github_api_base_url: str,
-    github_output: str | None,
-) -> None:
-    metadata = _package_metadata(github_api_base_url)
-    if metadata is None:
-        raise PublicationError("package-private-confirmation")
-    _validate_private_package(metadata)
-    _append_github_output(
-        github_output,
-        {
-            "package_visibility": "private",
-            "package_owner": EXPECTED_OWNER,
-            "package_repository": EXPECTED_REPOSITORY_FULL_NAME,
-            "actions_access_proof": "authenticated-package-get",
-        },
-    )
+    _validate_public_package(metadata, owner_id)
 
 
 def _registry_token(
@@ -447,7 +441,7 @@ def _registry_token(
     return parse_registry_token(response.body)
 
 
-def _registry_get(
+def _authenticated_registry_get(
     registry_api_base_url: str,
     path: str,
     registry_token: str,
@@ -466,6 +460,28 @@ def _registry_get(
         headers=headers,
         maximum_bytes=MAX_REGISTRY_DOCUMENT_BYTES,
         accepted_statuses={200},
+        error_code=error_code,
+    )
+
+
+def _anonymous_registry_get(
+    registry_api_base_url: str,
+    path: str,
+    *,
+    accept: str | None,
+    accepted_statuses: set[int],
+    error_code: str,
+) -> HttpResponse:
+    headers = {
+        "User-Agent": "fabrica-sam-ghcr-publication-verifier",
+    }
+    if accept is not None:
+        headers["Accept"] = accept
+    return _http_get(
+        registry_api_base_url + path,
+        headers=headers,
+        maximum_bytes=MAX_REGISTRY_DOCUMENT_BYTES,
+        accepted_statuses=accepted_statuses,
         error_code=error_code,
     )
 
@@ -539,7 +555,7 @@ def _verified_image_identity(
             ),
         )
     )
-    root_response = _registry_get(
+    root_response = _authenticated_registry_get(
         registry_api_base_url,
         (
             "/v2/moodworks/fabrica-sam-worker/manifests/"
@@ -559,7 +575,7 @@ def _verified_image_identity(
     if root["rootObjectType"] == "image-manifest":
         platform_response = root_response
     elif root["rootObjectType"] == "image-index":
-        platform_response = _registry_get(
+        platform_response = _authenticated_registry_get(
             registry_api_base_url,
             (
                 "/v2/moodworks/fabrica-sam-worker/manifests/"
@@ -577,7 +593,7 @@ def _verified_image_identity(
         platform_manifest_digest,
         platform_manifest_size,
     )
-    config_response = _registry_get(
+    config_response = _authenticated_registry_get(
         registry_api_base_url,
         (
             "/v2/moodworks/fabrica-sam-worker/blobs/"
@@ -593,6 +609,7 @@ def _verified_image_identity(
         platform_manifest_digest,
         int(platform["configSize"], 10),
         source_commit,
+        int(platform["layerCount"], 10),
     )
     verified_root, verified_manifest = (
         validate_root_platform_relationship(
@@ -616,7 +633,9 @@ def _verified_image_identity(
         "platformManifestMediaType": platform[
             "platformManifestMediaType"
         ],
+        "platformManifestSize": str(platform_manifest_size),
         "configDigest": platform["configDigest"],
+        "layerCount": platform["layerCount"],
         "buildRootDigest": verified_root,
         "buildRootObjectType": root["rootObjectType"],
         "buildKitProvenance": "disabled",
@@ -627,14 +646,56 @@ def _verified_image_identity(
     }
 
 
+def _verify_anonymous_public_identity(
+    registry_api_base_url: str,
+    identity: Mapping[str, str],
+) -> None:
+    manifest_digest = identity["platformManifestDigest"]
+    manifest_response = _anonymous_registry_get(
+        registry_api_base_url,
+        (
+            "/v2/moodworks/fabrica-sam-worker/manifests/"
+            + manifest_digest
+        ),
+        accept=", ".join(sorted(IMAGE_MANIFEST_MEDIA_TYPES)),
+        accepted_statuses={200},
+        error_code="anonymous-platform-http",
+    )
+    anonymous = inspect_platform_manifest(
+        manifest_response.body,
+        _manifest_headers(manifest_response),
+        manifest_digest,
+        int(identity["platformManifestSize"], 10),
+    )
+    if (
+        anonymous["platformManifestMediaType"]
+        != identity["platformManifestMediaType"]
+        or anonymous["configDigest"] != identity["configDigest"]
+        or anonymous["layerCount"] != identity["layerCount"]
+    ):
+        raise PublicationError("anonymous-platform-identity")
+
+    latest_response = _anonymous_registry_get(
+        registry_api_base_url,
+        "/v2/moodworks/fabrica-sam-worker/manifests/latest",
+        accept=", ".join(sorted(IMAGE_MANIFEST_MEDIA_TYPES)),
+        accepted_statuses={404},
+        error_code="anonymous-latest-http",
+    )
+    if latest_response.status != 404:
+        raise PublicationError("anonymous-latest-present")
+
+
 def _write_step_summary(
     path: str,
     identity: Mapping[str, str],
 ) -> None:
     summary = (
-        "### Verified private SAM worker image identity\n\n"
-        "- Package privacy gate: `private`, linked to "
-        "`moodworks/fabrica-kit`, authenticated Actions access\n"
+        "### Verified public SAM worker image identity\n\n"
+        "- Package: `public`, user-owned by `moodworks`, linked to "
+        "`moodworks/fabrica-kit`\n"
+        "- Anonymous exact-manifest retrieval: verified\n"
+        "- Anonymous `latest` lookup: verified HTTP 404\n"
         "- Source commit: `%s`\n"
         "- Platform: `linux/amd64`\n"
         "- Image: `%s`\n"
@@ -643,6 +704,8 @@ def _write_step_summary(
         "`SAM_WORKER_IMAGE_DIGEST=%s`\n"
         "- BuildKit provenance: disabled\n"
         "- BuildKit SBOM: disabled\n"
+        "- Proof scope: closed pre-build input graph plus post-push "
+        "manifest/config/rootfs/history structure; no layer-tar byte claim\n"
         % (
             identity["sourceCommit"],
             identity["imageReference"],
@@ -671,13 +734,17 @@ def verify_image(
     github_output: str,
     step_summary: str,
 ) -> None:
+    verify_public_package(github_api_base_url)
     identity = _verified_image_identity(
         build_metadata=build_metadata,
         source_commit=source_commit,
         registry_api_base_url=registry_api_base_url,
         registry_token_url=registry_token_url,
     )
-    package_confirm(github_api_base_url, None)
+    _verify_anonymous_public_identity(
+        registry_api_base_url,
+        identity,
+    )
     _append_github_output(
         github_output,
         {
@@ -694,6 +761,11 @@ def verify_image(
             "build_root_object_type": identity[
                 "buildRootObjectType"
             ],
+            "package_visibility": "public",
+            "package_owner": EXPECTED_OWNER,
+            "package_repository": EXPECTED_REPOSITORY_FULL_NAME,
+            "anonymous_manifest_proof": "exact-digest-http-200",
+            "anonymous_latest_proof": "http-404",
         },
     )
     _write_step_summary(step_summary, identity)
@@ -718,12 +790,6 @@ def _parser() -> argparse.ArgumentParser:
         action="store_true",
     )
     commands = parser.add_subparsers(dest="command", required=True)
-
-    preflight = commands.add_parser("package-preflight")
-    preflight.add_argument("--github-output", required=True)
-
-    confirm = commands.add_parser("package-confirm")
-    confirm.add_argument("--github-output")
 
     image = commands.add_parser("verify-image")
     image.add_argument("--build-metadata", required=True)
@@ -750,18 +816,6 @@ def main(argv: Sequence[str] | None = None) -> int:
         REGISTRY_TOKEN_URL,
         arguments.allow_loopback_test_endpoints,
     )
-    if arguments.command == "package-preflight":
-        package_preflight(
-            github_api_base_url,
-            arguments.github_output,
-        )
-        return 0
-    if arguments.command == "package-confirm":
-        package_confirm(
-            github_api_base_url,
-            arguments.github_output,
-        )
-        return 0
     verify_image(
         build_metadata=arguments.build_metadata,
         source_commit=arguments.source_commit,

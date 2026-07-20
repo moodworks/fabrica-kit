@@ -50,6 +50,48 @@ DIGEST_PATTERN = re.compile(r"sha256:[0-9a-f]{64}")
 COMMIT_PATTERN = re.compile(r"[0-9a-f]{40}")
 ZERO_DIGEST = "sha256:" + "0" * 64
 MAX_DOCUMENT_BYTES = 4_000_000
+EXPECTED_RUNTIME_ENVIRONMENT = {
+    "HF_HUB_OFFLINE": "1",
+    "PIP_CONFIG_FILE": "/dev/null",
+    "PIP_DISABLE_PIP_VERSION_CHECK": "1",
+    "PIP_NO_INDEX": "1",
+    "PYTHONDONTWRITEBYTECODE": "1",
+    "PYTHONPATH": (
+        "/opt/fabrica/sam2-overlay:/opt/fabrica/runtime-deps:"
+        "/opt/fabrica/worker:/opt/fabrica/sam2-source"
+    ),
+    "PYTHONUNBUFFERED": "1",
+    "TRANSFORMERS_OFFLINE": "1",
+}
+EXPECTED_RUNTIME_MATERIALIZED_HISTORY_SUFFIX = (
+    "fabrica-build-gate: source-revision",
+    "fabrica-build-gate: runtime-cpython-major-minor",
+    "fabrica-build-gate: torch-metadata-missing",
+    "fabrica-build-gate: torchvision-metadata-missing",
+    "groupadd --gid 10001 fabrica",
+    "fabrica-build-gate: runtime-user-identity",
+    "copy /opt/fabrica/closed/worker /opt/fabrica/worker",
+    (
+        "copy /opt/fabrica/closed/sam2-overlay "
+        "/opt/fabrica/sam2-overlay"
+    ),
+    (
+        "copy /opt/fabrica/closed/sam2-source "
+        "/opt/fabrica/sam2-source"
+    ),
+    "copy /opt/fabrica/closed/sam /opt/fabrica/sam",
+    (
+        "copy /opt/fabrica/closed/requirements.lock "
+        "/opt/fabrica/sam/requirements.lock"
+    ),
+    (
+        "copy /opt/fabrica/closed/wheelhouse-manifest.json "
+        "/opt/fabrica/sam/wheelhouse-manifest.json"
+    ),
+    "python -m sam_worker.artifacts verify-dependencies",
+    "python -m sam_worker.artifacts verify-runtime",
+    "fabrica-build-gate: selected-config-parse",
+)
 
 
 class ImageManifestError(ValueError):
@@ -298,6 +340,7 @@ def inspect_platform_manifest(
         "configDigest": config_digest,
         "configMediaType": str(config["mediaType"]),
         "configSize": str(config["size"]),
+        "layerCount": str(len(layers)),
     }
 
 
@@ -307,6 +350,7 @@ def verify_linux_amd64_config(
     platform_manifest_digest: Any,
     expected_size: int,
     source_commit: str,
+    expected_layer_count: int,
 ) -> None:
     if (
         isinstance(expected_size, bool)
@@ -320,8 +364,11 @@ def verify_linux_amd64_config(
     if (
         COMMIT_PATTERN.fullmatch(source_commit) is None
         or source_commit == "0" * 40
+        or isinstance(expected_layer_count, bool)
+        or not isinstance(expected_layer_count, int)
+        or expected_layer_count < 1
     ):
-        raise ImageManifestError("source commit is invalid")
+        raise ImageManifestError("source or layer identity is invalid")
     validated_config_digest = verify_document_digest(
         config_bytes, config_digest, "image config"
     )
@@ -353,9 +400,167 @@ def verify_linux_amd64_config(
         != source_commit
         or labels.get("org.opencontainers.image.source")
         != "https://github.com/moodworks/fabrica-kit"
+        or labels.get("io.fabrica.image-use")
+        != "pinned-digest-deployment-only-v1"
+        or labels.get("io.fabrica.build-contract.version")
+        != "fabrica-sam-ghcr-linux-amd64-v1"
+        or labels.get("io.fabrica.sam.worker-image-digest-env")
+        != "SAM_WORKER_IMAGE_DIGEST"
+        or labels.get("io.fabrica.sam.worker-image-object")
+        != "linux-amd64-image-manifest-v1"
     ):
         raise ImageManifestError(
             "image config does not bind the exact source revision"
+        )
+    if (
+        image_config.get("User") != "10001:10001"
+        or image_config.get("WorkingDir")
+        != "/opt/fabrica/worker"
+        or image_config.get("Cmd")
+        != ["python", "-m", "sam_worker.server"]
+        or image_config.get("ExposedPorts")
+        != {"80/tcp": {}}
+        or image_config.get("Healthcheck")
+        != {"Test": ["NONE"]}
+    ):
+        raise ImageManifestError(
+            "image config runtime directives are not reviewed"
+        )
+    environment = image_config.get("Env")
+    if not isinstance(environment, list):
+        raise ImageManifestError(
+            "image config environment is unsupported"
+        )
+    observed_environment: dict[str, str] = {}
+    forbidden_environment_markers = (
+        "auth",
+        "credential",
+        "password",
+        "private_key",
+        "secret",
+        "token",
+    )
+    for assignment in environment:
+        if (
+            not isinstance(assignment, str)
+            or "=" not in assignment
+            or "\x00" in assignment
+        ):
+            raise ImageManifestError(
+                "image config environment is unsupported"
+            )
+        name, value = assignment.split("=", 1)
+        if (
+            not re.fullmatch(r"[A-Z_][A-Z0-9_]*", name)
+            or name in observed_environment
+            or any(
+                marker in name.lower()
+                for marker in forbidden_environment_markers
+            )
+        ):
+            raise ImageManifestError(
+                "image config environment contains a forbidden input"
+            )
+        observed_environment[name] = value
+    if any(
+        observed_environment.get(name) != value
+        for name, value in EXPECTED_RUNTIME_ENVIRONMENT.items()
+    ):
+        raise ImageManifestError(
+            "image config environment is not the reviewed runtime"
+        )
+    rootfs = config.get("rootfs")
+    if (
+        not isinstance(rootfs, dict)
+        or set(rootfs) != {"type", "diff_ids"}
+        or rootfs.get("type") != "layers"
+        or not isinstance(rootfs.get("diff_ids"), list)
+        or len(rootfs["diff_ids"]) != expected_layer_count
+    ):
+        raise ImageManifestError(
+            "image config rootfs does not match manifest layers"
+        )
+    for diff_id in rootfs["diff_ids"]:
+        validate_digest(diff_id, "rootfs diff ID")
+
+    history = config.get("history")
+    if not isinstance(history, list) or not history:
+        raise ImageManifestError("image config history is missing")
+    materialized_created_by: list[str] = []
+    forbidden_history_markers = (
+        "--mount=type=secret",
+        "--mount=type=ssh",
+        "/run/secrets",
+        "authorization:",
+        "github_token",
+        "ghcr_token",
+        ".git-credentials",
+        "id_rsa",
+        "password=",
+    )
+    for entry in history:
+        if (
+            not isinstance(entry, dict)
+            or not set(entry).issubset(
+                {
+                    "author",
+                    "comment",
+                    "created",
+                    "created_by",
+                    "empty_layer",
+                }
+            )
+            or (
+                "empty_layer" in entry
+                and not isinstance(entry["empty_layer"], bool)
+            )
+        ):
+            raise ImageManifestError(
+                "image config history structure is unsupported"
+            )
+        for field in ("author", "comment", "created", "created_by"):
+            value = entry.get(field)
+            if value is not None and (
+                not isinstance(value, str)
+                or len(value) > 32_768
+                or "\x00" in value
+            ):
+                raise ImageManifestError(
+                    "image config history structure is unsupported"
+                )
+        searchable = " ".join(
+            value
+            for field in ("author", "comment", "created_by")
+            if isinstance((value := entry.get(field)), str)
+        ).lower()
+        if any(marker in searchable for marker in forbidden_history_markers):
+            raise ImageManifestError(
+                "image config history contains a forbidden build input"
+            )
+        if entry.get("empty_layer") is not True:
+            materialized_created_by.append(
+                str(entry.get("created_by", "")).lower()
+            )
+    if len(materialized_created_by) != expected_layer_count:
+        raise ImageManifestError(
+            "image config history does not match manifest layers"
+        )
+    suffix_length = len(
+        EXPECTED_RUNTIME_MATERIALIZED_HISTORY_SUFFIX
+    )
+    if (
+        len(materialized_created_by) < suffix_length
+        or any(
+            marker not in created_by
+            for marker, created_by in zip(
+                EXPECTED_RUNTIME_MATERIALIZED_HISTORY_SUFFIX,
+                materialized_created_by[-suffix_length:],
+            )
+        )
+    ):
+        raise ImageManifestError(
+            "image config materialized history does not match "
+            "the reviewed runtime graph"
         )
 
 
@@ -432,6 +637,7 @@ def _parser() -> argparse.ArgumentParser:
     config.add_argument("--digest", required=True)
     config.add_argument("--manifest-digest", required=True)
     config.add_argument("--expected-size", required=True, type=int)
+    config.add_argument("--expected-layer-count", required=True, type=int)
     config.add_argument("--root-digest", required=True)
     config.add_argument("--root-object-type", required=True)
     config.add_argument("--manifest-media-type", required=True)
@@ -485,6 +691,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 ],
                 "config_digest": result["configDigest"],
                 "config_size": result["configSize"],
+                "layer_count": result["layerCount"],
             },
         )
         return 0
@@ -506,6 +713,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         arguments.manifest_digest,
         arguments.expected_size,
         arguments.source_commit,
+        arguments.expected_layer_count,
     )
     root_digest, manifest_digest = validate_root_platform_relationship(
         arguments.root_digest,

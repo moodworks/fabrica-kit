@@ -553,12 +553,31 @@ Dockerfile/build defines or copies no secret or provider key; none may enter a b
 argument, layer, or label. The image label
 `io.fabrica.image-use=pinned-digest-deployment-only-v1` forbids tag-based deployment.
 
+The manual workflow publishes a public GHCR package and performs exactly one worker
+build/push. Before Docker authentication it executes the repository-owned image-content
+boundary: a deny-all/exact-allowlist context, tracked regular-file identities, exact
+Dockerfile stage/COPY/mount/ARG/environment graph, acquisition host/URL/size/hash
+closure, and runtime/dependency license closure. Broad `COPY`, `ADD`, Git/environment
+or credential files, tests/fixtures/reports/images/provider responses, caches, secret
+or SSH mounts, and unreviewed downloads fail closed.
+
 BuildKit provenance and SBOM output are explicitly disabled for this single-platform
 workflow. Its returned root digest is still unclassified until raw GHCR bytes,
 `Docker-Content-Digest`, media type, manifest descriptors, config digest and size,
-Linux/AMD64 config fields, and source labels are verified. A root OCI index or Docker
-manifest list is never accepted as the deployment identity; exactly one Linux/AMD64
-child image manifest must be fetched and independently proven.
+Linux/AMD64 config fields, source labels, rootfs diff-ID/layer count, and sanitized
+history/materialized-layer count are verified. The config also fixes the reviewed
+runtime user, workdir, command, exposed port, exact disabled-healthcheck config
+`{"Test":["NONE"]}`, offline environment, and build-contract labels. The final 15
+materialized history entries must match the Dockerfile's six runtime gates, six closed
+cross-stage copies, dependency gate, complete-runtime gate, and selected-config gate
+in order. A root OCI index or Docker manifest list is never
+accepted as the deployment identity; exactly one Linux/AMD64 child image manifest must
+be fetched and independently proven. Authenticated GitHub metadata must also prove the
+exact public, user-owned, repository-linked package. The exact platform manifest must
+then pass the same raw identity proof anonymously, while anonymous `latest` must return
+exactly HTTP 404. No GHCR pull credential is needed for a later RunPod pull. The static
+and post-push checks prove a closed input/graph/hash/license boundary and OCI
+structure; they do not claim byte-level inspection of layer tar archives.
 
 A bounded provider-free `git ls-files -z` test continues to reject tracked
 model/checkpoint/archive/wheel suffixes and exact artifact basenames and checks that no
@@ -831,9 +850,13 @@ scale back to zero without inference.
 The prepared successor image is labeled
 `io.fabrica.image-use=pinned-digest-deployment-only-v1` and requires an exact
 `FABRICA_GIT_SHA`. Before any future deployment or inference authorization, a
-separately authorized GHCR publication must record and prove the Linux/AMD64 platform
-image-manifest digest. The existing health-only RunPod image and endpoint version 11
-remain untouched and cannot inherit this identity.
+separately authorized public GHCR publication must record and prove the Linux/AMD64
+platform image-manifest digest, exact public package binding, anonymous exact-digest
+retrieval, and absence of an anonymous `latest` tag. RunPod must use the public
+`repository@digest` reference without a GHCR PAT or private-registry configuration.
+The existing health-only RunPod image and endpoint version 11 remain untouched and
+cannot inherit this identity. Public image availability grants no health, worker
+contact, inference, or deployment authority.
 
 A later inference exercise remains outside this milestone and still requires a new,
 unexpired, single-use authorization bound to the endpoint, immutable image digest,

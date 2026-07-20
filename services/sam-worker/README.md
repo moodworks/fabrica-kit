@@ -11,13 +11,24 @@ the container port, `PORT`, and `PORT_HEALTH` to `8000`:
 - one process, one model instance, and one admitted inference request
 - no startup-time or request-time download
 
-Stage 1 now prepares a separately authorized manual GHCR publication path at
-`ghcr.io/moodworks/fabrica-sam-worker`. It does not publish, deploy, or change the
-existing endpoint. A future deployment must use the registry-proven Linux/AMD64
-platform image-manifest reference
+The separately authorized manual GHCR path publishes a public image at
+`ghcr.io/moodworks/fabrica-sam-worker`. Local implementation does not publish,
+deploy, or change the existing endpoint. Before Docker authentication or build, the
+workflow proves the exact tracked Docker context, Dockerfile copy/stage/mount graph,
+reviewed acquisition URLs and hashes, and dependency/license closure with
+`image_content_boundary.py`. It then performs exactly one worker build/push and
+requires public package ownership/linkage, authenticated OCI proof, anonymous
+exact-digest retrieval, and anonymous HTTP 404 for `latest`. OCI config proof binds
+the reviewed runtime directives/environment, rootfs/layer counts, and the final
+15-entry materialized Dockerfile graph; it is structural proof, not layer-tar byte
+inspection. A future deployment must use the registry-proven Linux/AMD64 platform
+image-manifest reference
 `ghcr.io/moodworks/fabrica-sam-worker@sha256:<digest>` and independently set
 `SAM_WORKER_IMAGE_DIGEST` to that same digest. Missing, malformed, uppercase, zero, or
-mismatched values fail before model loading or inference. See
+mismatched values fail before model loading or inference. Because the package policy
+is public, no GHCR PAT or RunPod private-registry credential is required. Public
+availability grants no deployment, worker contact, health-check, or inference
+authority. See
 `docs/operations/sam-worker-ghcr-publication.md`.
 
 This milestone established a reproducible GitHub build source. A later, separately
@@ -321,6 +332,8 @@ classifies any root index before resolving and proving its platform manifest.
 These commands do not run Docker, torch, SAM, or RunPod:
 
 ```bash
+./services/sam-worker/image_content_boundary.py
+
 PYTHONPATH=services/sam-worker python3 -m unittest discover \
   -s services/sam-worker/tests -p 'test_*.py'
 
@@ -338,7 +351,9 @@ PYTHONPATH=services/sam-worker python3 -m sam_worker.artifacts verify-dependenci
 The complete fake-engine suite covers the direct request/response contract,
 readiness, redaction, overload, checkpoint-loading policy, deterministic fake masks,
 artifact and archive safety, lock/wheel/license closure, acquisition ordering, build
-context, offline final installation, and forbidden provider/secret operations.
+context, the exact image-content boundary, OCI root/platform/config/rootfs/history
+proof, public and anonymous GHCR response handling, offline final installation, and
+forbidden provider/secret operations.
 
 ## Authorized health-only RunPod configuration
 
