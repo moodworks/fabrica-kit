@@ -26,6 +26,7 @@ ROOT = Path(__file__).resolve().parents[3]
 WORKFLOW = (
     ROOT / ".github/workflows/publish-sam-worker-ghcr.yml"
 )
+PUBLICATION_CLI = ROOT / "services/sam-worker/ghcr_publication.py"
 SOURCE_COMMIT = "e817abacac6eab447c42b0969ec83cadd4d1e7f9"
 
 
@@ -406,7 +407,9 @@ class PublicationWorkflowTests(unittest.TestCase):
         )
         self.assertEqual(source.count("git clean -ndx"), 2)
         prebuild_proof = source.rindex("git clean -ndx")
-        build_offset = source.index("docker buildx build")
+        build_offset = source.index(
+            "--file services/sam-worker/Dockerfile"
+        )
         self.assertLess(prebuild_proof, build_offset)
         self.assertIn("version: v0.25.0", source)
         action_references = re.findall(
@@ -428,31 +431,154 @@ class PublicationWorkflowTests(unittest.TestCase):
 
     def test_workflow_build_and_registry_identity_are_fail_closed(self) -> None:
         source = WORKFLOW.read_text("utf-8")
+        cli_source = PUBLICATION_CLI.read_text("utf-8")
         for required in (
             "ghcr.io/moodworks/fabrica-sam-worker",
             "--platform linux/amd64",
             "--file services/sam-worker/Dockerfile",
+            "--network=none",
             "--provenance=false",
             "--sbom=false",
             "--metadata-file",
-            "containerimage.digest",
-            "Docker-Content-Digest",
-            "resolve-root",
-            "inspect-platform",
-            "verify-config",
-            "SAM_WORKER_IMAGE_DIGEST",
+            "ghcr_publication.py",
+            "package-preflight",
+            "package-confirm",
+            "verify-image",
         ):
             self.assertIn(required, source)
+        for required in (
+            "containerimage.digest",
+            "docker-content-digest",
+            "resolve_root",
+            "inspect_platform_manifest",
+            "verify_linux_amd64_config",
+            "validate_root_platform_relationship",
+            "SAM_WORKER_IMAGE_DIGEST",
+        ):
+            self.assertIn(required, cli_source)
         self.assertNotRegex(
             source,
             r"(?i)(?:tag|image|reference)[^\n]*:latest",
         )
         self.assertEqual(
             source.count("docker buildx build"),
+            2,
+        )
+        self.assertEqual(
+            source.count(
+                "--file services/sam-worker/Dockerfile"
+            ),
+            1,
+        )
+        self.assertEqual(
+            source.count(
+                '--tag "${IMAGE_REPOSITORY}:${SOURCE_COMMIT}"'
+            ),
             1,
         )
         self.assertNotIn("docker.io/", source)
         self.assertNotIn("quay.io/", source)
+        for forbidden in (
+            "sam-worker-registry-token",
+            "print(token)",
+            "::add-mask::",
+            "python -c",
+            "curl ",
+        ):
+            self.assertNotIn(forbidden, source)
+        for forbidden in (
+            'method="PATCH"',
+            'method="DELETE"',
+            "print(registry_token)",
+            "write_text(registry_token",
+        ):
+            self.assertNotIn(forbidden, cli_source)
+
+    def test_workflow_privacy_gate_precedes_worker_build(self) -> None:
+        source = WORKFLOW.read_text("utf-8")
+        preflight = source.index(
+            "- name: Inspect authenticated package privacy before publication"
+        )
+        bootstrap = source.index(
+            "- name: Publish source-free package bootstrap"
+        )
+        confirmation = source.index(
+            "- name: Require authenticated private linked package"
+        )
+        worker_build = source.index(
+            "- name: Build and publish one Linux AMD64 SAM worker image"
+        )
+        verification = source.index(
+            "- name: Verify private registry Linux AMD64 image identity"
+        )
+        self.assertLess(preflight, bootstrap)
+        self.assertLess(bootstrap, confirmation)
+        self.assertLess(confirmation, worker_build)
+        self.assertLess(worker_build, verification)
+        self.assertIn(
+            "if: steps.package.outputs.bootstrap_required == 'true'",
+            source[bootstrap:confirmation],
+        )
+        self.assertIn(
+            "package-confirm",
+            source[confirmation:worker_build],
+        )
+        self.assertNotIn(
+            "services/sam-worker/Dockerfile",
+            source[:worker_build],
+        )
+
+    def test_bootstrap_context_is_source_free_by_construction(self) -> None:
+        source = WORKFLOW.read_text("utf-8")
+        bootstrap = source.index(
+            "- name: Publish source-free package bootstrap"
+        )
+        confirmation = source.index(
+            "- name: Require authenticated private linked package"
+        )
+        step = source[bootstrap:confirmation]
+        self.assertIn(
+            'BOOTSTRAP_CONTEXT="${RUNNER_TEMP}/'
+            'sam-ghcr-bootstrap-context"',
+            step,
+        )
+        self.assertIn("'FROM scratch'", step)
+        self.assertIn("--network=none", step)
+        self.assertIn(
+            "'LABEL org.opencontainers.image.source="
+            '"https://github.com/moodworks/fabrica-kit"\'',
+            step,
+        )
+        self.assertIn(
+            '--tag "${IMAGE_REPOSITORY}:bootstrap-'
+            '${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"',
+            step,
+        )
+        self.assertIn('"${BOOTSTRAP_CONTEXT}"', step)
+        self.assertNotRegex(step, r"(?m)^\s*['\"]?(?:ADD|COPY)\s")
+        self.assertNotIn("services/sam-worker", step)
+
+    def test_publication_cli_is_not_a_worker_image_artifact(self) -> None:
+        dockerfile = (
+            ROOT / "services/sam-worker/Dockerfile"
+        ).read_text("utf-8")
+        dockerignore = (
+            ROOT / "services/sam-worker/Dockerfile.dockerignore"
+        ).read_text("utf-8")
+        self.assertNotIn("ghcr_publication.py", dockerfile)
+        self.assertNotIn(
+            "!services/sam-worker/ghcr_publication.py",
+            dockerignore,
+        )
+        self.assertEqual(
+            PUBLICATION_CLI.stat().st_mode & 0o111,
+            0o111,
+        )
+        self.assertTrue(
+            PUBLICATION_CLI.read_bytes().startswith(
+                b"#!/usr/bin/env python3\n"
+            )
+        )
 
 
 if __name__ == "__main__":
