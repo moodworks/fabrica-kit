@@ -574,10 +574,15 @@ in order. A root OCI index or Docker manifest list is never
 accepted as the deployment identity; exactly one Linux/AMD64 child image manifest must
 be fetched and independently proven. Authenticated GitHub metadata must also prove the
 exact public, user-owned, repository-linked package. The exact platform manifest must
-then pass the same raw identity proof anonymously, while anonymous `latest` must return
-exactly HTTP 404. No GHCR pull credential is needed for a later RunPod pull. The static
-and post-push checks prove a closed input/graph/hash/license boundary and OCI
-structure; they do not claim byte-level inspection of layer tar archives.
+then be requested first without authorization. A Registry V2 HTTP 401 is accepted only
+with one exact GHCR Bearer realm/service/pull-scope challenge; its anonymous token is
+obtained without GitHub credentials, retained only in memory, and used to repeat the
+raw platform-manifest proof. A direct public HTTP 200 must pass the same raw proof and
+is then independently re-proven with that anonymous bearer token. The same token must
+make `latest` return exactly HTTP 404. No GHCR pull credential is needed for a later
+RunPod pull. The static and post-push checks prove a closed input/graph/hash/license
+boundary and OCI structure; they do not claim byte-level inspection of layer tar
+archives.
 
 A bounded provider-free `git ls-files -z` test continues to reject tracked
 model/checkpoint/archive/wheel suffixes and exact artifact basenames and checks that no

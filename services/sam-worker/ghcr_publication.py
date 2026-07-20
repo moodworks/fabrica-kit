@@ -41,6 +41,10 @@ OUTPUT_KEY_PATTERN = re.compile(r"[a-z0-9_]+")
 MAX_TOKEN_ENVELOPE_BYTES = 64_000
 MAX_PACKAGE_METADATA_BYTES = 1_000_000
 MAX_REGISTRY_DOCUMENT_BYTES = 4_000_000
+MAX_AUTHENTICATE_HEADER_BYTES = 4_096
+ANONYMOUS_PULL_SCOPE = (
+    "repository:moodworks/fabrica-sam-worker:pull"
+)
 
 
 class PublicationError(RuntimeError):
@@ -441,6 +445,35 @@ def _registry_token(
     return parse_registry_token(response.body)
 
 
+def _anonymous_registry_token(
+    registry_token_url: str,
+) -> str:
+    query = urllib.parse.urlencode(
+        {
+            "service": "ghcr.io",
+            "scope": ANONYMOUS_PULL_SCOPE,
+        }
+    )
+    response = _http_get(
+        registry_token_url + "?" + query,
+        headers={
+            "Accept": "application/json",
+            "User-Agent": "fabrica-sam-ghcr-publication-verifier",
+        },
+        maximum_bytes=MAX_TOKEN_ENVELOPE_BYTES,
+        accepted_statuses={200},
+        error_code="anonymous-token-http",
+    )
+    try:
+        return parse_registry_token(response.body)
+    except PublicationError as error:
+        if error.code == "registry-token-envelope":
+            raise PublicationError(
+                "anonymous-token-envelope"
+            ) from error
+        raise
+
+
 def _authenticated_registry_get(
     registry_api_base_url: str,
     path: str,
@@ -464,7 +497,7 @@ def _authenticated_registry_get(
     )
 
 
-def _anonymous_registry_get(
+def _unauthenticated_registry_get(
     registry_api_base_url: str,
     path: str,
     *,
@@ -484,6 +517,77 @@ def _anonymous_registry_get(
         accepted_statuses=accepted_statuses,
         error_code=error_code,
     )
+
+
+def _anonymous_bearer_registry_get(
+    registry_api_base_url: str,
+    path: str,
+    registry_token: str,
+    *,
+    accept: str | None,
+    accepted_statuses: set[int],
+    error_code: str,
+) -> HttpResponse:
+    headers = {
+        "Authorization": "Bearer " + registry_token,
+        "User-Agent": "fabrica-sam-ghcr-publication-verifier",
+    }
+    if accept is not None:
+        headers["Accept"] = accept
+    return _http_get(
+        registry_api_base_url + path,
+        headers=headers,
+        maximum_bytes=MAX_REGISTRY_DOCUMENT_BYTES,
+        accepted_statuses=accepted_statuses,
+        error_code=error_code,
+    )
+
+
+def _parse_anonymous_bearer_challenge(
+    response: HttpResponse,
+    registry_token_url: str,
+) -> None:
+    values = [
+        value
+        for name, value in response.headers
+        if name.lower() == "www-authenticate"
+    ]
+    if (
+        response.status != 401
+        or len(values) != 1
+        or not values[0].isascii()
+        or len(values[0].encode("ascii")) > MAX_AUTHENTICATE_HEADER_BYTES
+        or "\r" in values[0]
+        or "\n" in values[0]
+        or not values[0].startswith("Bearer ")
+    ):
+        raise PublicationError("anonymous-bearer-challenge")
+    text = values[0][len("Bearer ") :]
+    parameters: dict[str, str] = {}
+    position = 0
+    parameter_pattern = re.compile(
+        r'([a-z][a-z0-9_]*)="([^"\\\r\n]*)"'
+    )
+    while position < len(text):
+        match = parameter_pattern.match(text, position)
+        if match is None:
+            raise PublicationError("anonymous-bearer-challenge")
+        name, value = match.groups()
+        if name in parameters:
+            raise PublicationError("anonymous-bearer-challenge")
+        parameters[name] = value
+        position = match.end()
+        if position == len(text):
+            break
+        if text[position] != ",":
+            raise PublicationError("anonymous-bearer-challenge")
+        position += 1
+    if parameters != {
+        "realm": registry_token_url,
+        "service": "ghcr.io",
+        "scope": ANONYMOUS_PULL_SCOPE,
+    }:
+        raise PublicationError("anonymous-bearer-challenge")
 
 
 def _manifest_headers(response: HttpResponse) -> bytes:
@@ -648,39 +752,78 @@ def _verified_image_identity(
 
 def _verify_anonymous_public_identity(
     registry_api_base_url: str,
+    registry_token_url: str,
     identity: Mapping[str, str],
 ) -> None:
     manifest_digest = identity["platformManifestDigest"]
-    manifest_response = _anonymous_registry_get(
+    manifest_path = (
+        "/v2/moodworks/fabrica-sam-worker/manifests/"
+        + manifest_digest
+    )
+    manifest_accept = ", ".join(
+        sorted(IMAGE_MANIFEST_MEDIA_TYPES)
+    )
+    initial_response = _unauthenticated_registry_get(
         registry_api_base_url,
-        (
-            "/v2/moodworks/fabrica-sam-worker/manifests/"
-            + manifest_digest
-        ),
-        accept=", ".join(sorted(IMAGE_MANIFEST_MEDIA_TYPES)),
+        manifest_path,
+        accept=manifest_accept,
+        accepted_statuses={200, 401},
+        error_code="anonymous-platform-initial-http",
+    )
+    if initial_response.status == 401:
+        _parse_anonymous_bearer_challenge(
+            initial_response,
+            registry_token_url,
+        )
+        direct_response: HttpResponse | None = None
+    elif initial_response.status == 200:
+        if any(
+            name.lower() == "www-authenticate"
+            for name, _value in initial_response.headers
+        ):
+            raise PublicationError(
+                "anonymous-direct-response-challenge"
+            )
+        direct_response = initial_response
+    else:
+        raise PublicationError("anonymous-platform-initial-http")
+    anonymous_token = _anonymous_registry_token(
+        registry_token_url
+    )
+    manifest_response = _anonymous_bearer_registry_get(
+        registry_api_base_url,
+        manifest_path,
+        anonymous_token,
+        accept=manifest_accept,
         accepted_statuses={200},
-        error_code="anonymous-platform-http",
+        error_code="anonymous-platform-bearer-http",
     )
-    anonymous = inspect_platform_manifest(
-        manifest_response.body,
-        _manifest_headers(manifest_response),
-        manifest_digest,
-        int(identity["platformManifestSize"], 10),
-    )
-    if (
-        anonymous["platformManifestMediaType"]
-        != identity["platformManifestMediaType"]
-        or anonymous["configDigest"] != identity["configDigest"]
-        or anonymous["layerCount"] != identity["layerCount"]
+    for response in (
+        (direct_response, manifest_response)
+        if direct_response is not None
+        else (manifest_response,)
     ):
-        raise PublicationError("anonymous-platform-identity")
+        anonymous = inspect_platform_manifest(
+            response.body,
+            _manifest_headers(response),
+            manifest_digest,
+            int(identity["platformManifestSize"], 10),
+        )
+        if (
+            anonymous["platformManifestMediaType"]
+            != identity["platformManifestMediaType"]
+            or anonymous["configDigest"] != identity["configDigest"]
+            or anonymous["layerCount"] != identity["layerCount"]
+        ):
+            raise PublicationError("anonymous-platform-identity")
 
-    latest_response = _anonymous_registry_get(
+    latest_response = _anonymous_bearer_registry_get(
         registry_api_base_url,
         "/v2/moodworks/fabrica-sam-worker/manifests/latest",
+        anonymous_token,
         accept=", ".join(sorted(IMAGE_MANIFEST_MEDIA_TYPES)),
         accepted_statuses={404},
-        error_code="anonymous-latest-http",
+        error_code="anonymous-latest-bearer-http",
     )
     if latest_response.status != 404:
         raise PublicationError("anonymous-latest-present")
@@ -694,8 +837,8 @@ def _write_step_summary(
         "### Verified public SAM worker image identity\n\n"
         "- Package: `public`, user-owned by `moodworks`, linked to "
         "`moodworks/fabrica-kit`\n"
-        "- Anonymous exact-manifest retrieval: verified\n"
-        "- Anonymous `latest` lookup: verified HTTP 404\n"
+        "- Registry V2 anonymous exact-manifest access: verified\n"
+        "- Same-token anonymous `latest` lookup: verified HTTP 404\n"
         "- Source commit: `%s`\n"
         "- Platform: `linux/amd64`\n"
         "- Image: `%s`\n"
@@ -743,6 +886,7 @@ def verify_image(
     )
     _verify_anonymous_public_identity(
         registry_api_base_url,
+        registry_token_url,
         identity,
     )
     _append_github_output(
@@ -764,8 +908,12 @@ def verify_image(
             "package_visibility": "public",
             "package_owner": EXPECTED_OWNER,
             "package_repository": EXPECTED_REPOSITORY_FULL_NAME,
-            "anonymous_manifest_proof": "exact-digest-http-200",
-            "anonymous_latest_proof": "http-404",
+            "anonymous_manifest_proof": (
+                "registry-v2-anonymous-exact-digest-http-200"
+            ),
+            "anonymous_latest_proof": (
+                "registry-v2-anonymous-bearer-http-404"
+            ),
         },
     )
     _write_step_summary(step_summary, identity)

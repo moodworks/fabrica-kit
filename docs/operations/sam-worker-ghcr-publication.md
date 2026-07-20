@@ -98,11 +98,20 @@ After push, the verifier performs these gates before emitting any success output
    pre-copy runtime gates, six closed cross-stage copies, dependency installation
    verification, complete runtime verification, and selected-config parsing.
    Secret/SSH mount or credential-bearing history is rejected.
-5. Without any authorization header, the verifier fetches the exact platform
-   manifest again and independently repeats the raw digest/header/media/size/config
-   and layer-count proof.
-6. Without any authorization header, an exact request for the `latest` manifest must
-   return HTTP 404. Any other status fails closed.
+5. The first public exact-manifest request carries no `Authorization` header. A direct
+   HTTP 200 is accepted only after the complete raw identity proof. For GHCR's normal
+   Registry V2 HTTP 401 path, exactly one `Bearer` challenge must name the already
+   validated `https://ghcr.io/token` realm, service `ghcr.io`, and exact
+   `repository:moodworks/fabrica-sam-worker:pull` scope, with no unknown, duplicate, or
+   malformed parameter.
+6. The verifier requests that anonymous pull token without a GitHub credential or
+   `Authorization` header, strictly parses it in memory, and never prints or persists
+   it. In both challenge and direct-HTTP-200 cases, the exact manifest is requested
+   again with only that anonymous bearer token and must independently repeat the
+   complete raw digest/header/media/size/config/layer proof. A direct response must
+   also pass that complete proof before the bearer re-proof.
+7. Using that same anonymous bearer token, an exact request for the `latest` manifest
+   must return HTTP 404. Any other status fails closed.
 
 Only then does the workflow emit the immutable image reference, platform-manifest
 digest and media type, config digest, root classification, source commit, public
@@ -117,8 +126,9 @@ not emitted or persisted.
    separate operator action, and workflow concurrency remains keyed to the source
    commit.
 2. Require success from the pre-build image-content gate and every post-push gate.
-   Confirm package metadata says `public`, anonymous retrieval of the exact digest
-   succeeds, and anonymous `latest` returns 404. If visibility, ownership, linkage, or
+   Confirm package metadata says `public`, the credential-free Registry V2 challenge
+   and anonymous bearer retrieval of the exact digest succeed, and bearer-authenticated
+   `latest` returns 404. If visibility, ownership, linkage, challenge, token, or
    anonymous retrieval differs, stop; do not deploy or weaken the verifier.
 3. Record only the verified `platformManifestDigest` and immutable
    `imageReference`. Do not use the exact-commit tag, build-root index, or config

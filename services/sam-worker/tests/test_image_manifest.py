@@ -652,6 +652,9 @@ class PublicationWorkflowTests(unittest.TestCase):
             "SAM_WORKER_IMAGE_DIGEST",
             "visibility\") != \"public\"",
             "_verify_anonymous_public_identity",
+            "_parse_anonymous_bearer_challenge",
+            "www-authenticate",
+            "ANONYMOUS_PULL_SCOPE",
             "/manifests/latest",
         ):
             self.assertIn(required, cli_source)
@@ -767,16 +770,40 @@ class PublicationWorkflowTests(unittest.TestCase):
             "Authorization\": \"Bearer \" + registry_token",
             source,
         )
-        anonymous_start = source.index(
-            "def _anonymous_registry_get("
+        unauthenticated_start = source.index(
+            "def _unauthenticated_registry_get("
         )
-        anonymous_end = source.index(
-            "\ndef _manifest_headers(",
-            anonymous_start,
+        unauthenticated_end = source.index(
+            "\ndef _anonymous_bearer_registry_get(",
+            unauthenticated_start,
         )
         self.assertNotIn(
             "Authorization",
-            source[anonymous_start:anonymous_end],
+            source[
+                unauthenticated_start:unauthenticated_end
+            ],
+        )
+        token_start = source.index(
+            "def _anonymous_registry_token("
+        )
+        token_end = source.index(
+            "\ndef _authenticated_registry_get(",
+            token_start,
+        )
+        self.assertNotIn(
+            "Authorization",
+            source[token_start:token_end],
+        )
+        bearer_start = source.index(
+            "def _anonymous_bearer_registry_get("
+        )
+        bearer_end = source.index(
+            "\ndef _parse_anonymous_bearer_challenge(",
+            bearer_start,
+        )
+        self.assertIn(
+            "Authorization",
+            source[bearer_start:bearer_end],
         )
 
 

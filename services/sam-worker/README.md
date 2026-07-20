@@ -18,8 +18,11 @@ workflow proves the exact tracked Docker context, Dockerfile copy/stage/mount gr
 reviewed acquisition URLs and hashes, and dependency/license closure with
 `image_content_boundary.py`. It then performs exactly one worker build/push and
 requires public package ownership/linkage, authenticated OCI proof, anonymous
-exact-digest retrieval, and anonymous HTTP 404 for `latest`. OCI config proof binds
-the reviewed runtime directives/environment, rootfs/layer counts, and the final
+Registry V2 challenge/token retrieval, exact-digest proof, and bearer HTTP 404 for
+`latest`. The initial request and anonymous token request contain no GitHub credential
+or authorization; the scoped anonymous token remains in memory only and must re-prove
+the exact manifest even when the initial public request returns HTTP 200. OCI config
+proof binds the reviewed runtime directives/environment, rootfs/layer counts, and the final
 15-entry materialized Dockerfile graph; it is structural proof, not layer-tar byte
 inspection. A future deployment must use the registry-proven Linux/AMD64 platform
 image-manifest reference

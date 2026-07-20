@@ -34,6 +34,10 @@ CLI = ROOT / "services/sam-worker/ghcr_publication.py"
 SOURCE_COMMIT = "e3bb2eea5fe251e30e7541aa80768d004a1ffb14"
 GITHUB_TOKEN = "synthetic-github-token-never-emit"
 REGISTRY_TOKEN = "synthetic-registry-token-never-emit"
+ANONYMOUS_TOKEN = "synthetic-anonymous-token-never-emit"
+WRONG_ANONYMOUS_TOKEN = (
+    "synthetic-wrong-anonymous-token-never-emit"
+)
 
 
 def encoded(value: Any) -> bytes:
@@ -188,14 +192,26 @@ class Scenario:
             }
         )
     )
+    anonymous_token_status: int = 200
+    anonymous_token_body: bytes = field(
+        default_factory=lambda: encoded(
+            {
+                "expires_in": 300,
+                "issued_at": "2026-07-20T00:00:00Z",
+                "token": ANONYMOUS_TOKEN,
+            }
+        )
+    )
     manifest: bytes = field(
         default_factory=lambda: image_fixture()[0]
     )
     config: bytes = field(
         default_factory=lambda: image_fixture()[1]
     )
-    anonymous_manifest_status: int = 200
-    anonymous_manifest_body: bytes | None = None
+    direct_public_manifest: bool = False
+    challenge_case: str = "valid"
+    anonymous_bearer_status: int = 200
+    anonymous_bearer_body: bytes | None = None
     latest_status: int = 404
     hits: list[str] = field(default_factory=list)
 
@@ -225,6 +241,7 @@ class FixtureHandler(BaseHTTPRequestHandler):
         *,
         content_type: str = "application/json",
         content_digest: str | None = None,
+        extra_headers: tuple[tuple[str, str], ...] = (),
     ) -> None:
         self.send_response(status)
         self.send_header("Content-Type", content_type)
@@ -234,6 +251,8 @@ class FixtureHandler(BaseHTTPRequestHandler):
                 "Docker-Content-Digest",
                 content_digest,
             )
+        for name, value in extra_headers:
+            self.send_header(name, value)
         self.end_headers()
         self.wfile.write(body)
 
@@ -271,17 +290,42 @@ class FixtureHandler(BaseHTTPRequestHandler):
             )
             return
         if parsed.path == "/token":
-            scenario.hits.append("token-auth")
             expected_basic = "Basic " + base64.b64encode(
                 ("fixture-actor:" + GITHUB_TOKEN).encode("utf-8")
             ).decode("ascii")
-            if self.headers.get("Authorization") != expected_basic:
-                self._send(401, b"{}")
+            authorization = self.headers.get("Authorization")
+            if authorization == expected_basic:
+                scenario.hits.append("token-auth")
+                self._send(
+                    scenario.token_status,
+                    scenario.token_body,
+                )
                 return
-            self._send(
-                scenario.token_status,
-                scenario.token_body,
-            )
+            if authorization is None:
+                scenario.hits.append("token-anon")
+                query = urllib.parse.parse_qs(
+                    parsed.query,
+                    keep_blank_values=True,
+                    strict_parsing=True,
+                )
+                if query != {
+                    "scope": [
+                        (
+                            "repository:moodworks/"
+                            "fabrica-sam-worker:pull"
+                        )
+                    ],
+                    "service": ["ghcr.io"],
+                }:
+                    self._send(400, b"{}")
+                    return
+                self._send(
+                    scenario.anonymous_token_status,
+                    scenario.anonymous_token_body,
+                )
+                return
+            scenario.hits.append("token-foreign-auth")
+            self._send(401, b"{}")
             return
 
         manifest_digest = digest(scenario.manifest)
@@ -301,14 +345,98 @@ class FixtureHandler(BaseHTTPRequestHandler):
                 )
                 return
             if authorization is None:
-                scenario.hits.append("manifest-anon")
+                scenario.hits.append("manifest-anon-initial")
+                if scenario.direct_public_manifest:
+                    self._send(
+                        200,
+                        scenario.manifest,
+                        content_type=OCI_IMAGE_MANIFEST,
+                        content_digest=manifest_digest,
+                    )
+                    return
+                realm = (
+                    "http://127.0.0.1:%d/token"
+                    % self.server.server_address[1]
+                )
+                valid_challenge = (
+                    'Bearer realm="%s",service="ghcr.io",'
+                    'scope="repository:moodworks/'
+                    'fabrica-sam-worker:pull"' % realm
+                )
+                challenge_values = {
+                    "valid": (valid_challenge,),
+                    "wrong-realm": (
+                        valid_challenge.replace(
+                            realm,
+                            "https://example.invalid/token",
+                        ),
+                    ),
+                    "wrong-service": (
+                        valid_challenge.replace(
+                            'service="ghcr.io"',
+                            'service="registry.example"',
+                        ),
+                    ),
+                    "wrong-scope": (
+                        valid_challenge.replace(
+                            (
+                                'scope="repository:moodworks/'
+                                'fabrica-sam-worker:pull"'
+                            ),
+                            (
+                                'scope="repository:moodworks/'
+                                'fabrica-sam-worker:push"'
+                            ),
+                        ),
+                    ),
+                    "unknown-parameter": (
+                        valid_challenge + ',foreign="value"',
+                    ),
+                    "duplicate-parameter": (
+                        valid_challenge
+                        + (',service="ghcr.io"'),
+                    ),
+                    "missing-parameter": (
+                        'Bearer realm="%s",service="ghcr.io"'
+                        % realm,
+                    ),
+                    "malformed": (
+                        'Bearer realm="%s,service="ghcr.io"'
+                        % realm,
+                    ),
+                    "wrong-scheme": (
+                        valid_challenge.replace(
+                            "Bearer ",
+                            "Basic ",
+                        ),
+                    ),
+                    "missing": (),
+                    "multiple-headers": (
+                        valid_challenge,
+                        valid_challenge,
+                    ),
+                }.get(scenario.challenge_case, ())
+                self._send(
+                    401,
+                    b"{}",
+                    extra_headers=tuple(
+                        (
+                            "WWW-Authenticate",
+                            value,
+                        )
+                        for value in challenge_values
+                    ),
+                )
+                return
+            if authorization == "Bearer " + ANONYMOUS_TOKEN:
+                scenario.hits.append("manifest-anon-bearer")
                 body = (
                     scenario.manifest
-                    if scenario.anonymous_manifest_body is None
-                    else scenario.anonymous_manifest_body
+                    if scenario.anonymous_bearer_body is None
+                    else scenario.anonymous_bearer_body
                 )
                 self._send(
-                    scenario.anonymous_manifest_status,
+                    scenario.anonymous_bearer_status,
                     body,
                     content_type=OCI_IMAGE_MANIFEST,
                     content_digest=manifest_digest,
@@ -340,12 +468,15 @@ class FixtureHandler(BaseHTTPRequestHandler):
         if parsed.path == (
             "/v2/moodworks/fabrica-sam-worker/manifests/latest"
         ):
-            if self.headers.get("Authorization") is not None:
-                scenario.hits.append("latest-foreign-auth")
-                self._send(401, b"{}")
+            if (
+                self.headers.get("Authorization")
+                == "Bearer " + ANONYMOUS_TOKEN
+            ):
+                scenario.hits.append("latest-anon-bearer")
+                self._send(scenario.latest_status, b"{}")
                 return
-            scenario.hits.append("latest-anon")
-            self._send(scenario.latest_status, b"{}")
+            scenario.hits.append("latest-foreign-auth")
+            self._send(401, b"{}")
             return
 
         scenario.hits.append("foreign")
@@ -432,6 +563,12 @@ class GhcrPublicationEntrypointTests(unittest.TestCase):
                 files = {
                     "github-output": github_output.read_text("utf-8"),
                     "step-summary": step_summary.read_text("utf-8"),
+                    "file-inventory": "\n".join(
+                        sorted(
+                            path.name
+                            for path in root.iterdir()
+                        )
+                    ),
                 }
                 return result, files, list(scenario.hits)
         finally:
@@ -458,6 +595,8 @@ class GhcrPublicationEntrypointTests(unittest.TestCase):
             )
             self.assertNotIn(GITHUB_TOKEN, value)
             self.assertNotIn(REGISTRY_TOKEN, value)
+            self.assertNotIn(ANONYMOUS_TOKEN, value)
+            self.assertNotIn(WRONG_ANONYMOUS_TOKEN, value)
 
     def test_public_exact_manifest_success_is_emitted_only_after_all_proofs(
         self,
@@ -474,8 +613,10 @@ class GhcrPublicationEntrypointTests(unittest.TestCase):
                 "token-auth",
                 "manifest-auth",
                 "config-auth",
-                "manifest-anon",
-                "latest-anon",
+                "manifest-anon-initial",
+                "token-anon",
+                "manifest-anon-bearer",
+                "latest-anon-bearer",
             ],
         )
         manifest_digest = digest(scenario.manifest)
@@ -496,11 +637,17 @@ class GhcrPublicationEntrypointTests(unittest.TestCase):
             files["github-output"],
         )
         self.assertIn(
-            "anonymous_manifest_proof=exact-digest-http-200",
+            (
+                "anonymous_manifest_proof="
+                "registry-v2-anonymous-exact-digest-http-200"
+            ),
             files["github-output"],
         )
         self.assertIn(
-            "anonymous_latest_proof=http-404",
+            (
+                "anonymous_latest_proof="
+                "registry-v2-anonymous-bearer-http-404"
+            ),
             files["github-output"],
         )
         self.assertIn(
@@ -510,6 +657,31 @@ class GhcrPublicationEntrypointTests(unittest.TestCase):
         self.assertIn(
             "no layer-tar byte claim",
             files["step-summary"],
+        )
+        self.assertEqual(
+            files["file-inventory"],
+            (
+                "build-metadata.json\n"
+                "github-output\n"
+                "step-summary"
+            ),
+        )
+        self.assert_no_token_disclosure(result, files)
+
+    def test_direct_public_manifest_is_reproven_with_anonymous_bearer(
+        self,
+    ) -> None:
+        scenario = Scenario(direct_public_manifest=True)
+        result, files, hits = self._run(scenario)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(
+            hits[-4:],
+            [
+                "manifest-anon-initial",
+                "token-anon",
+                "manifest-anon-bearer",
+                "latest-anon-bearer",
+            ],
         )
         self.assert_no_token_disclosure(result, files)
 
@@ -578,7 +750,7 @@ class GhcrPublicationEntrypointTests(unittest.TestCase):
                 self.assertEqual(files["step-summary"], "")
                 self.assert_no_token_disclosure(result, files)
 
-    def test_anonymous_manifest_must_repeat_raw_identity_proof(
+    def test_anonymous_bearer_manifest_must_repeat_raw_identity_proof(
         self,
     ) -> None:
         cases = (
@@ -588,31 +760,130 @@ class GhcrPublicationEntrypointTests(unittest.TestCase):
         for case, status, body in cases:
             with self.subTest(case=case):
                 scenario = Scenario(
-                    anonymous_manifest_status=status,
-                    anonymous_manifest_body=body,
+                    anonymous_bearer_status=status,
+                    anonymous_bearer_body=body,
                 )
                 result, files, hits = self._run(scenario)
                 self.assertNotEqual(result.returncode, 0)
                 self.assertEqual(
                     hits[-1],
-                    "manifest-anon",
+                    "manifest-anon-bearer",
                 )
-                self.assertNotIn("latest-anon", hits)
+                self.assertNotIn("latest-anon-bearer", hits)
                 self.assertEqual(files["github-output"], "")
                 self.assertEqual(files["step-summary"], "")
                 self.assert_no_token_disclosure(result, files)
 
-    def test_anonymous_latest_must_be_exact_http_404(self) -> None:
+    def test_anonymous_bearer_challenge_is_exact_and_closed(
+        self,
+    ) -> None:
+        for challenge_case in (
+            "wrong-realm",
+            "wrong-service",
+            "wrong-scope",
+            "unknown-parameter",
+            "duplicate-parameter",
+            "missing-parameter",
+            "malformed",
+            "wrong-scheme",
+            "missing",
+            "multiple-headers",
+        ):
+            with self.subTest(challenge_case=challenge_case):
+                scenario = Scenario(
+                    challenge_case=challenge_case,
+                )
+                result, files, hits = self._run(scenario)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertEqual(
+                    hits[-1],
+                    "manifest-anon-initial",
+                )
+                self.assertNotIn("token-anon", hits)
+                self.assertIn(
+                    "anonymous-bearer-challenge",
+                    result.stderr,
+                )
+                self.assertEqual(files["github-output"], "")
+                self.assertEqual(files["step-summary"], "")
+                self.assert_no_token_disclosure(result, files)
+
+    def test_anonymous_token_http_and_envelope_fail_closed(
+        self,
+    ) -> None:
+        cases = (
+            ("http", 503, encoded({"token": ANONYMOUS_TOKEN})),
+            ("empty", 200, b""),
+            ("duplicate", 200, b'{"token":"a","token":"b"}'),
+            (
+                "unknown",
+                200,
+                encoded(
+                    {
+                        "token": ANONYMOUS_TOKEN,
+                        "foreign": True,
+                    }
+                ),
+            ),
+        )
+        for case, status, body in cases:
+            with self.subTest(case=case):
+                scenario = Scenario(
+                    anonymous_token_status=status,
+                    anonymous_token_body=body,
+                )
+                result, files, hits = self._run(scenario)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertEqual(hits[-1], "token-anon")
+                self.assertNotIn("manifest-anon-bearer", hits)
+                self.assertIn(
+                    (
+                        "anonymous-token-http"
+                        if case == "http"
+                        else "anonymous-token-envelope"
+                    ),
+                    result.stderr,
+                )
+                self.assertEqual(files["github-output"], "")
+                self.assertEqual(files["step-summary"], "")
+                self.assert_no_token_disclosure(result, files)
+
+    def test_wrong_anonymous_token_is_never_replaced_by_github_auth(
+        self,
+    ) -> None:
+        scenario = Scenario(
+            anonymous_token_body=encoded(
+                {"token": WRONG_ANONYMOUS_TOKEN}
+            )
+        )
+        result, files, hits = self._run(scenario)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(hits[-1], "manifest-foreign-auth")
+        self.assertNotIn("latest-anon-bearer", hits)
+        self.assertIn(
+            "anonymous-platform-bearer-http",
+            result.stderr,
+        )
+        self.assertEqual(files["github-output"], "")
+        self.assertEqual(files["step-summary"], "")
+        self.assert_no_token_disclosure(result, files)
+
+    def test_anonymous_latest_must_be_exact_bearer_http_404(
+        self,
+    ) -> None:
         for status in (200, 401):
             with self.subTest(status=status):
                 scenario = Scenario(latest_status=status)
                 result, files, hits = self._run(scenario)
                 self.assertNotEqual(result.returncode, 0)
-                self.assertEqual(hits[-1], "latest-anon")
+                self.assertEqual(
+                    hits[-1],
+                    "latest-anon-bearer",
+                )
                 self.assertEqual(files["github-output"], "")
                 self.assertEqual(files["step-summary"], "")
                 self.assertIn(
-                    "anonymous-latest-http",
+                    "anonymous-latest-bearer-http",
                     result.stderr,
                 )
                 self.assert_no_token_disclosure(result, files)
