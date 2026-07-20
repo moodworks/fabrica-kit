@@ -21,7 +21,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any, Dict, Iterable, List, Mapping, Sequence, Tuple
 
 REVIEWED_ARTIFACT_MANIFEST_SHA256 = (
-    "06c8701c61cb7ccdeb1f67d4c06f095368bd0d410a2905b1733583a2df51fca4"
+    "085ddd290b17b6931ea026c274610d9f6c49bad49a5fd372e846a2060b9ac5c4"
 )
 MANIFEST_MAXIMUM_BYTES = 64_000
 TREE_DIGEST_DOMAIN = b"fabrica-path-content-tree-v1\x00"
@@ -396,6 +396,7 @@ def validate_reviewed_manifest(
             "licenses",
             "dependencies",
             "baseImage",
+            "deploymentImage",
             "manifestSha256",
         },
         "artifactManifest",
@@ -1138,6 +1139,35 @@ def validate_reviewed_manifest(
         raise ArtifactError(
             "Reviewed dependency build status is unsupported."
         )
+
+    deployment_image = _closed_object(
+        manifest["deploymentImage"],
+        {
+            "repository",
+            "platform",
+            "requiredObject",
+            "immutableReferenceFormat",
+            "runtimeEnvironment",
+            "buildKitProvenance",
+            "buildKitSbom",
+            "trustStrength",
+        },
+        "artifactManifest.deploymentImage",
+    )
+    if deployment_image != {
+        "repository": "ghcr.io/moodworks/fabrica-sam-worker",
+        "platform": "linux/amd64",
+        "requiredObject": "oci-or-docker-v2-image-manifest",
+        "immutableReferenceFormat": (
+            "ghcr.io/moodworks/fabrica-sam-worker@"
+            "sha256:<64-lowercase-hex>"
+        ),
+        "runtimeEnvironment": "SAM_WORKER_IMAGE_DIGEST",
+        "buildKitProvenance": "disabled",
+        "buildKitSbom": "disabled",
+        "trustStrength": "environment-bound-not-hardware-backed",
+    }:
+        raise ArtifactError("Deployment image contract drifted.")
 
     base = _closed_object(
         manifest["baseImage"],

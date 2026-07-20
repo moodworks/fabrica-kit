@@ -59,6 +59,7 @@ from sam_worker.protocol import (
     mask_digest,
     parse_request,
     postprocess,
+    worker_image_digest,
 )
 from sam_worker.hosting import DIRECT_HOSTING_PROFILE, DIRECT_HOSTING_PROFILE_SHA256
 from sam_worker.model_loader import (
@@ -78,6 +79,7 @@ from sam_worker.runtime import (
     STARTUP_BLOCKED,
     STARTUP_STATE_LOG_MESSAGES,
     SamWorkerRuntime,
+    configured_worker_image_digest,
     create_production_runtime,
 )
 from sam_worker.server import validated_port
@@ -92,6 +94,8 @@ except ModuleNotFoundError:
 
 ROOT = Path(__file__).resolve().parents[3]
 VECTORS = json.loads((ROOT / "services/sam-worker/protocol-vectors.json").read_text("utf-8"))
+TEST_WORKER_IMAGE_DIGEST = "sha256:" + "f" * 64
+os.environ.setdefault("SAM_WORKER_IMAGE_DIGEST", TEST_WORKER_IMAGE_DIGEST)
 
 
 def chunk(kind: bytes, data: bytes) -> bytes:
@@ -146,11 +150,12 @@ def rgba_png(width: int, height: int, filter_types: Sequence[int] = ()) -> tuple
 def request(width: int = 10, height: int = 10) -> Dict[str, Any]:
     png, _rgba = rgba_png(width, height)
     return {
-        "contractVersion": "sam-mask-v1",
+        "contractVersion": "sam-mask-v2",
         "requestId": "9d4c6db4-9808-4c21-9e6b-924edc266f41",
         "workspaceId": "32205d2c-f4a4-41bf-a08d-9927bb4b4b52",
         "jobId": "337ed90e-234e-4cf4-8d94-0919a9249f4e",
         "attemptId": "684173c2-7a85-4703-b99f-abee3f037e53",
+        "workerImageDigest": TEST_WORKER_IMAGE_DIGEST,
         "source": {
             "mediaType": "image/png",
             "byteSize": len(png),
@@ -189,7 +194,19 @@ class FakeEngine:
 
 
 def run_fake(request_value: Mapping[str, Any], engine: Any) -> Mapping[str, Any]:
-    return build_response(parse_request(request_value), engine)
+    return build_response(
+        parse_request(request_value),
+        engine,
+        TEST_WORKER_IMAGE_DIGEST,
+    )
+
+
+def fake_runtime(engine: Any, state: str) -> SamWorkerRuntime:
+    return SamWorkerRuntime(
+        engine,
+        state,
+        TEST_WORKER_IMAGE_DIGEST,
+    )
 
 
 def compact_candidate(width: int, height: int) -> Dict[str, Any]:
@@ -206,7 +223,7 @@ def compact_candidate(width: int, height: int) -> Dict[str, Any]:
 
 class ProtocolTests(unittest.TestCase):
     def test_shared_protocol_vectors(self) -> None:
-        self.assertEqual(VECTORS["vectorVersion"], 2)
+        self.assertEqual(VECTORS["vectorVersion"], 4)
         self.assertEqual(VECTORS["directHosting"]["profile"], DIRECT_HOSTING_PROFILE)
         self.assertEqual(
             VECTORS["directHosting"]["sha256"], DIRECT_HOSTING_PROFILE_SHA256
@@ -229,7 +246,7 @@ class ProtocolTests(unittest.TestCase):
         )
         self.assertEqual(
             DIRECT_HOSTING_PROFILE_SHA256,
-            "2e5d64b6741802f7963fa678d174fca92a367a32672764fae5831c3131702f3a",
+            "872054e82fc13e771fa65381e2db1f19dfb2dd609584574e8c532ed8eb82fa18",
         )
         self.assertEqual(
             MAX_RAW_MASK_WORKING_BYTES,
@@ -299,11 +316,78 @@ class ProtocolTests(unittest.TestCase):
             lambda item: item["source"].update({"width": 9}),
             lambda item: item["source"].update({"pngBase64": item["source"]["pngBase64"].rstrip("=")}),
             lambda item: item.update({"requestId": item["requestId"].upper()}),
+            lambda item: item.pop("workerImageDigest"),
+            lambda item: item.update(
+                {"workerImageDigest": TEST_WORKER_IMAGE_DIGEST.upper()}
+            ),
+            lambda item: item.update(
+                {"workerImageDigest": "sha256:" + "0" * 64}
+            ),
+            lambda item: item.update(
+                {"workerImageDigest": "sha256:" + "f" * 63}
+            ),
         ):
             changed = copy.deepcopy(valid)
             mutation(changed)
             with self.assertRaises(ContractError):
                 parse_request(changed)
+
+    def test_worker_image_digest_is_trusted_configuration_not_a_guess(self) -> None:
+        self.assertEqual(
+            worker_image_digest(TEST_WORKER_IMAGE_DIGEST),
+            TEST_WORKER_IMAGE_DIGEST,
+        )
+        for value in (
+            None,
+            "",
+            " ",
+            TEST_WORKER_IMAGE_DIGEST.upper(),
+            "sha256:" + "0" * 64,
+            "sha256:" + "a" * 63,
+            "fabrica-sam-worker:commit-tag",
+            "f" * 64,
+        ):
+            with self.subTest(value=value):
+                with self.assertRaises(ContractError):
+                    worker_image_digest(value)
+                with patch.dict(
+                    os.environ,
+                    {"SAM_WORKER_IMAGE_DIGEST": value}
+                    if isinstance(value, str)
+                    else {},
+                    clear=True,
+                ):
+                    with self.assertRaisesRegex(
+                        RuntimeError,
+                        "^SAM worker image digest configuration is invalid[.]$",
+                    ):
+                        configured_worker_image_digest()
+
+    def test_worker_digest_mismatch_fails_before_engine_invocation(self) -> None:
+        class CountingEngine(FakeEngine):
+            def __init__(self) -> None:
+                super().__init__([])
+                self.segment_calls = 0
+
+            def segment(
+                self, validated: Any
+            ) -> Sequence[Mapping[str, Any]]:
+                self.segment_calls += 1
+                return super().segment(validated)
+
+        changed = request()
+        changed["workerImageDigest"] = "sha256:" + "e" * 64
+        engine = CountingEngine()
+        with self.assertRaisesRegex(
+            ContractError,
+            "differs from trusted runtime configuration",
+        ):
+            build_response(
+                parse_request(changed),
+                engine,
+                TEST_WORKER_IMAGE_DIGEST,
+            )
+        self.assertEqual(engine.segment_calls, 0)
 
     def test_prompt_modes_and_basis_conversion_exclude_qwen(self) -> None:
         valid = request()
@@ -366,6 +450,51 @@ class ProtocolTests(unittest.TestCase):
         self.assertNotIn("torch", sys.modules)
         self.assertNotIn("sam2", sys.modules)
         self.assertNotIn("runpod", sys.modules)
+
+    def test_live_response_identity_injects_only_trusted_worker_digest(
+        self,
+    ) -> None:
+        class LiveIdentityEngine(FakeEngine):
+            def execution_identity(self) -> Mapping[str, Any]:
+                return {
+                    "kind": "meta-sam2.1",
+                    "repositoryUrl": (
+                        "https://github.com/facebookresearch/sam2"
+                    ),
+                    "repositoryCommit": (
+                        "05d9e57fb3945b10c861046c1e6749e2bfc258e3"
+                    ),
+                    "modelId": "sam2.1_hiera_base_plus",
+                    "configIdentity": (
+                        "configs/sam2.1/sam2.1_hiera_b+.yaml"
+                    ),
+                    "checkpointUrl": (
+                        "https://dl.fbaipublicfiles.com/"
+                        "segment_anything_2/092824/"
+                        "sam2.1_hiera_base_plus.pt"
+                    ),
+                    "checkpointSha256": "a" * 64,
+                }
+
+        response = build_response(
+            parse_request(request()),
+            LiveIdentityEngine([]),
+            TEST_WORKER_IMAGE_DIGEST,
+        )
+        self.assertEqual(
+            response["executionIdentity"]["workerImageDigest"],
+            TEST_WORKER_IMAGE_DIGEST,
+        )
+        unsigned = dict(response)
+        actual_digest = unsigned.pop("responseSha256")
+        self.assertEqual(
+            hashlib.sha256(canonical_json(unsigned).encode()).hexdigest(),
+            actual_digest,
+        )
+        self.assertNotIn(
+            "workerImageDigest",
+            LiveIdentityEngine([]).execution_identity(),
+        )
 
     def test_engine_raw_candidate_limit_fails_entire_request(self) -> None:
         mask = rectangle(10, 10, 1, 1, 2, 2)
@@ -774,6 +903,54 @@ class ProtocolTests(unittest.TestCase):
 
 
 class DirectRuntimeTests(unittest.TestCase):
+    def test_production_startup_captures_image_digest_once_and_fails_closed_first(
+        self,
+    ) -> None:
+        with (
+            patch.dict(os.environ, {}, clear=True),
+            patch("sam_worker.runtime.ProductionSamEngine") as engine,
+            patch("sam_worker.runtime._artifact_path_exists") as artifacts,
+        ):
+            with self.assertRaisesRegex(
+                RuntimeError,
+                "^SAM worker image digest configuration is invalid[.]$",
+            ):
+                create_production_runtime()
+            engine.assert_not_called()
+            artifacts.assert_not_called()
+
+        with (
+            patch.dict(
+                os.environ,
+                {"SAM_WORKER_IMAGE_DIGEST": TEST_WORKER_IMAGE_DIGEST},
+                clear=True,
+            ),
+            patch(
+                "sam_worker.runtime._artifact_path_exists",
+                return_value=False,
+            ),
+            patch(
+                "sam_worker.runtime.ProductionSamEngine",
+                return_value=FakeEngine([]),
+            ),
+        ):
+            runtime = create_production_runtime()
+            os.environ["SAM_WORKER_IMAGE_DIGEST"] = "sha256:" + "e" * 64
+            self.assertEqual(
+                runtime.worker_image_digest,
+                TEST_WORKER_IMAGE_DIGEST,
+            )
+            with self.assertRaises(AttributeError):
+                setattr(
+                    runtime,
+                    "worker_image_digest",
+                    "sha256:" + "d" * 64,
+                )
+            self.assertEqual(
+                runtime.worker_image_digest,
+                TEST_WORKER_IMAGE_DIGEST,
+            )
+
     def test_cached_startup_states_are_terminal_and_load_once(self) -> None:
         class LoadEngine(FakeEngine):
             def __init__(self, should_fail: bool = False) -> None:
@@ -787,21 +964,21 @@ class DirectRuntimeTests(unittest.TestCase):
                     raise RuntimeError("private startup detail")
 
         ready_engine = LoadEngine()
-        ready = SamWorkerRuntime(ready_engine, MODEL_STAGED_NOT_LOADED)
+        ready = fake_runtime(ready_engine, MODEL_STAGED_NOT_LOADED)
         ready.load_model_once()
         ready.load_model_once()
         self.assertEqual(ready.readiness_state(), MODEL_LOADED_READY)
         self.assertEqual(ready_engine.loads, 1)
 
         failed_engine = LoadEngine(should_fail=True)
-        failed = SamWorkerRuntime(failed_engine, MODEL_STAGED_NOT_LOADED)
+        failed = fake_runtime(failed_engine, MODEL_STAGED_NOT_LOADED)
         failed.load_model_once()
         failed.load_model_once()
         self.assertEqual(failed.readiness_state(), STARTUP_BLOCKED)
         self.assertEqual(failed_engine.loads, 1)
 
         absent_engine = LoadEngine()
-        absent = SamWorkerRuntime(absent_engine, MODEL_NOT_STAGED)
+        absent = fake_runtime(absent_engine, MODEL_NOT_STAGED)
         absent.load_model_once()
         self.assertEqual(absent.readiness_state(), MODEL_NOT_STAGED)
         self.assertEqual(absent_engine.loads, 0)
@@ -832,7 +1009,7 @@ class DirectRuntimeTests(unittest.TestCase):
         with patch(
             "sam_worker.runtime._STARTUP_LOGGER.info"
         ) as startup_log:
-            ready = SamWorkerRuntime(
+            ready = fake_runtime(
                 ReadyEngine([]),
                 MODEL_STAGED_NOT_LOADED,
             )
@@ -857,7 +1034,7 @@ class DirectRuntimeTests(unittest.TestCase):
         with patch(
             "sam_worker.runtime._STARTUP_LOGGER.info"
         ) as startup_log:
-            blocked = SamWorkerRuntime(
+            blocked = fake_runtime(
                 BlockedEngine([]),
                 MODEL_STAGED_NOT_LOADED,
             )
@@ -951,7 +1128,7 @@ class DirectRuntimeTests(unittest.TestCase):
                     }
                 ]
 
-        runtime = SamWorkerRuntime(SlowEngine([]), MODEL_LOADED_READY)
+        runtime = fake_runtime(SlowEngine([]), MODEL_LOADED_READY)
         self.assertTrue(runtime.try_admit())
         result: list[Mapping[str, Any]] = []
         thread = threading.Thread(
@@ -1499,15 +1676,47 @@ except ModuleNotFoundError:
     "pinned FastAPI/httpx test intentions are not installed on this bare host",
 )
 class DirectHttpTests(unittest.TestCase):
+    def test_authorization_bound_worker_digest_mismatch_never_invokes_engine(
+        self,
+    ) -> None:
+        class CountingEngine(FakeEngine):
+            def __init__(self) -> None:
+                super().__init__([])
+                self.segment_calls = 0
+
+            def segment(
+                self, validated: Any
+            ) -> Sequence[Mapping[str, Any]]:
+                self.segment_calls += 1
+                return super().segment(validated)
+
+        engine = CountingEngine()
+        runtime = SamWorkerRuntime(
+            engine,
+            MODEL_LOADED_READY,
+            TEST_WORKER_IMAGE_DIGEST,
+        )
+        changed = request()
+        changed["workerImageDigest"] = "sha256:" + "e" * 64
+        with TestClient(create_app(runtime)) as client:
+            response = client.post(
+                "/v1/masks",
+                content=json.dumps(changed, separators=(",", ":")),
+                headers={"content-type": "application/json"},
+            )
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.json()["error"]["code"], "REQUEST_INVALID")
+        self.assertEqual(engine.segment_calls, 0)
+
     def test_health_is_redacted_and_nonready_until_model_is_ready(self) -> None:
-        ready = SamWorkerRuntime(FakeEngine([]), MODEL_LOADED_READY)
+        ready = fake_runtime(FakeEngine([]), MODEL_LOADED_READY)
         with TestClient(create_app(ready)) as client:
             response = client.get("/ping")
             self.assertEqual(response.status_code, 200)
             self.assertEqual(
                 response.json(),
                 {
-                    "contractVersion": "sam-runpod-direct-hosting-v1",
+                    "contractVersion": "sam-runpod-direct-hosting-v2",
                     "processAlive": True,
                     "contractLoaded": True,
                     "state": "model-loaded-ready",
@@ -1523,7 +1732,7 @@ class DirectHttpTests(unittest.TestCase):
             self.assertNotIn("retry-after", response.headers)
 
         for state in (MODEL_NOT_STAGED, STARTUP_BLOCKED):
-            with TestClient(create_app(SamWorkerRuntime(FakeEngine([]), state))) as client:
+            with TestClient(create_app(fake_runtime(FakeEngine([]), state))) as client:
                 response = client.get("/ping")
                 self.assertEqual(response.status_code, 503)
                 self.assertEqual(response.json()["state"], state)
@@ -1542,7 +1751,7 @@ class DirectHttpTests(unittest.TestCase):
                     "WORKER_NOT_READY",
                 )
 
-        unknown = SamWorkerRuntime(FakeEngine([]), MODEL_NOT_STAGED)
+        unknown = fake_runtime(FakeEngine([]), MODEL_NOT_STAGED)
         with unknown._state_lock:
             unknown._state = "/private/unknown-startup-value"
         with TestClient(create_app(unknown)) as client:
@@ -1575,7 +1784,7 @@ class DirectHttpTests(unittest.TestCase):
                 if not finish_loading.wait(2):
                     raise RuntimeError("test loader timed out")
 
-        loading = SamWorkerRuntime(LoadingEngine([]), MODEL_STAGED_NOT_LOADED)
+        loading = fake_runtime(LoadingEngine([]), MODEL_STAGED_NOT_LOADED)
         with TestClient(create_app(loading)) as client:
             self.assertTrue(loading_started.wait(1))
             response = client.get("/ping")
@@ -1612,7 +1821,7 @@ class DirectHttpTests(unittest.TestCase):
                     "/private/model/checkpoint.pt CUDA startup exception"
                 )
 
-        blocked = SamWorkerRuntime(BlockedEngine([]), MODEL_STAGED_NOT_LOADED)
+        blocked = fake_runtime(BlockedEngine([]), MODEL_STAGED_NOT_LOADED)
         with TestClient(create_app(blocked)) as client:
             self.assertTrue(blocked_loading_started.wait(1))
             response = client.get("/ping")
@@ -1647,7 +1856,7 @@ class DirectHttpTests(unittest.TestCase):
             "predictedIou": 0.9,
             "stabilityScore": 0.9,
         }
-        runtime = SamWorkerRuntime(FakeEngine([candidate]), MODEL_LOADED_READY)
+        runtime = fake_runtime(FakeEngine([candidate]), MODEL_LOADED_READY)
         with TestClient(create_app(runtime), follow_redirects=False) as client:
             valid = request()
             response = client.post(
@@ -1706,7 +1915,7 @@ class DirectHttpTests(unittest.TestCase):
                 400,
             )
             encoded = json.dumps(valid, separators=(",", ":"))
-            duplicate = '{"contractVersion":"sam-mask-v1",' + encoded[1:]
+            duplicate = '{"contractVersion":"sam-mask-v2",' + encoded[1:]
             self.assertEqual(
                 client.post(
                     "/v1/masks",
@@ -1742,7 +1951,7 @@ class DirectHttpTests(unittest.TestCase):
             )
 
     def test_overload_rejects_before_calling_asgi_receive(self) -> None:
-        runtime = SamWorkerRuntime(FakeEngine([]), MODEL_LOADED_READY)
+        runtime = fake_runtime(FakeEngine([]), MODEL_LOADED_READY)
         application = create_app(runtime)
         self.assertTrue(runtime.try_admit())
         messages: list[Mapping[str, Any]] = []
@@ -1797,7 +2006,7 @@ class DirectHttpTests(unittest.TestCase):
                     }
                 ]
 
-        runtime = SamWorkerRuntime(SlowEngine([]), MODEL_LOADED_READY)
+        runtime = fake_runtime(SlowEngine([]), MODEL_LOADED_READY)
         with TestClient(create_app(runtime)) as client:
             first: list[Any] = []
             thread = threading.Thread(
@@ -1832,7 +2041,7 @@ class DirectHttpTests(unittest.TestCase):
                     "/private/model/checkpoint.pt CUDA secret exception detail"
                 )
 
-        runtime = SamWorkerRuntime(RaisingEngine([]), MODEL_LOADED_READY)
+        runtime = fake_runtime(RaisingEngine([]), MODEL_LOADED_READY)
         with TestClient(create_app(runtime), raise_server_exceptions=False) as client:
             response = client.post(
                 "/v1/masks",
@@ -1957,15 +2166,12 @@ class StaticSourceTests(unittest.TestCase):
         )
         self.assertIn("AS acquisition", dockerfile)
         self.assertIn("AS runtime", dockerfile)
-        self.assertIn("ARG FABRICA_GIT_SHA=unavailable", dockerfile)
+        self.assertIn("ARG FABRICA_GIT_SHA\n", dockerfile)
         self.assertIn("value != '0' * 40", dockerfile)
-        self.assertLess(
-            dockerfile.index("value == 'unavailable'"),
-            dockerfile.index("LABEL org.opencontainers.image.source"),
-        )
-        self.assertIn("git-sha40-or-unavailable-v1", dockerfile)
+        self.assertNotIn("unavailable", dockerfile)
+        self.assertIn("required-git-sha40-v1", dockerfile)
         self.assertIn(
-            'io.fabrica.image-use="health-only-non-promotable-v1"',
+            'io.fabrica.image-use="pinned-digest-deployment-only-v1"',
             dockerfile,
         )
         reviewed_manifest = json.loads(
@@ -1995,13 +2201,19 @@ class StaticSourceTests(unittest.TestCase):
                     "${FABRICA_GIT_SHA}"
                 ),
                 "io.fabrica.source-revision-contract": (
-                    "git-sha40-or-unavailable-v1"
+                    "required-git-sha40-v1"
                 ),
                 "io.fabrica.image-use": (
-                    "health-only-non-promotable-v1"
+                    "pinned-digest-deployment-only-v1"
                 ),
                 "io.fabrica.build-contract.version": (
-                    "fabrica-sam-runpod-github-v1"
+                    "fabrica-sam-ghcr-linux-amd64-v1"
+                ),
+                "io.fabrica.sam.worker-image-digest-env": (
+                    "SAM_WORKER_IMAGE_DIGEST"
+                ),
+                "io.fabrica.sam.worker-image-object": (
+                    "linux-amd64-image-manifest-v1"
                 ),
                 "io.fabrica.sam.repository-commit": (
                     reviewed_manifest["repository"]["commit"]
@@ -2025,7 +2237,7 @@ class StaticSourceTests(unittest.TestCase):
                     DIRECT_HOSTING_PROFILE_SHA256
                 ),
                 "io.fabrica.sam.direct-adapter-profile-sha256": (
-                    "c114b8b0bc3030ef2d7df524c88bd1710c9e6bc264d186c6b9e8ee7845718747"
+                    "1e6795c970fcfa9443b850f27149e237daf63ffa668cd5094189936453467e28"
                 ),
                 "io.fabrica.sam.runtime-adapter-profile-sha256": (
                     adapter_profile["profileSha256"]
@@ -2464,7 +2676,7 @@ class StaticSourceTests(unittest.TestCase):
                 for line in dockerfile.splitlines()
                 if line.startswith("ARG ")
             ],
-            ["ARG FABRICA_GIT_SHA=unavailable"],
+            ["ARG FABRICA_GIT_SHA"],
         )
         for source in (dockerfile, acquisition_source):
             for forbidden in (
@@ -2510,7 +2722,6 @@ class StaticSourceTests(unittest.TestCase):
             "fabrica-build-gate: source-revision"
         )
         for value in (
-            "unavailable",
             "1" * 40,
             "0123456789abcdef0123456789abcdef01234567",
         ):
@@ -2524,6 +2735,7 @@ class StaticSourceTests(unittest.TestCase):
             "1" * 41,
             "A" * 40,
             "g" * 40,
+            "unavailable",
             " unavailable",
             "unavailable ",
             "refs/heads/main",

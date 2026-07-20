@@ -34,33 +34,33 @@ import {
 } from '../src/sam/sam-mask-validation.js';
 import { parsePngChunks } from '../src/security/raster-container.js';
 import {
-  consumeSamRunPodDirectV2DispatchCapability,
-  createSamRunPodDirectV2Adapter,
-  deriveSamRunPodDirectV2Endpoint,
-  type SamRunPodDirectV2TransportPort,
-} from '../src/server/sam-runpod-direct-v2-adapter.js';
+  consumeSamRunPodDirectV3DispatchCapability,
+  createSamRunPodDirectV3Adapter,
+  deriveSamRunPodDirectV3Endpoint,
+  type SamRunPodDirectV3TransportPort,
+} from '../src/server/sam-runpod-direct-v3-adapter.js';
 import {
   SAM_DETERMINISTIC_DIRECT_FAKE_IDENTITY,
-  createDeterministicSamRunPodDirectV2Transport,
-} from '../src/server/sam-runpod-direct-v2-deterministic-fake-transport.js';
+  createDeterministicSamRunPodDirectV3Transport,
+} from '../src/server/sam-runpod-direct-v3-deterministic-fake-transport.js';
 import {
-  assertSamRunPodDirectV2EndpointUrl,
-  createSamRunPodDirectV2NativeFetchTransport,
-} from '../src/server/sam-runpod-direct-v2-native-fetch-transport.js';
+  assertSamRunPodDirectV3EndpointUrl,
+  createSamRunPodDirectV3NativeFetchTransport,
+} from '../src/server/sam-runpod-direct-v3-native-fetch-transport.js';
 import {
   RUNPOD_DIRECT_DOCUMENTATION_EXPIRES_AT_MS,
   RUNPOD_DIRECT_DOCUMENTATION_RETRIEVED_AT,
   RUNPOD_DIRECT_DOCUMENTATION_RETRIEVED_AT_MS,
   RUNPOD_DIRECT_DOCUMENTATION_EXPIRES_AT,
-  SAM_RUNPOD_DIRECT_ADAPTER_PROFILE_V2,
-  SAM_RUNPOD_DIRECT_ADAPTER_PROFILE_V2_SHA256,
-  SAM_RUNPOD_DIRECT_AUTHORIZATION_PROFILE_V2,
-  SAM_RUNPOD_DIRECT_AUTHORIZATION_PROFILE_V2_SHA256,
+  SAM_RUNPOD_DIRECT_ADAPTER_PROFILE_V3,
+  SAM_RUNPOD_DIRECT_ADAPTER_PROFILE_V3_SHA256,
+  SAM_RUNPOD_DIRECT_AUTHORIZATION_PROFILE_V3,
+  SAM_RUNPOD_DIRECT_AUTHORIZATION_PROFILE_V3_SHA256,
   SAM_RUNPOD_DIRECT_HOSTING_PROFILE,
   SAM_RUNPOD_DIRECT_HOSTING_PROFILE_SHA256,
-  SamRunPodDirectV2AuthorizationSchema,
-  type SamRunPodDirectV2Authorization,
-} from '../src/server/sam-runpod-direct-v2-profiles.js';
+  SamRunPodDirectV3AuthorizationSchema,
+  type SamRunPodDirectV3Authorization,
+} from '../src/server/sam-runpod-direct-v3-profiles.js';
 
 const packageRoot = resolve(import.meta.dirname, '..');
 const fixture = readFileSync(
@@ -124,26 +124,27 @@ const liveIdentity = {
   checkpointUrl:
     'https://dl.fbaipublicfiles.com/segment_anything_2/092824/sam2.1_hiera_base_plus.pt',
   checkpointSha256: '1'.repeat(64),
+  workerImageDigest: `sha256:${'2'.repeat(64)}`,
 } as const;
 const nativeImageDigest = `sha256:${'2'.repeat(64)}` as const;
 let authorizationCounter = 1;
 
 const createDirectAuthorization = (
   request: SamMaskRequest,
-  overrides?: Partial<SamRunPodDirectV2Authorization>,
-): SamRunPodDirectV2Authorization => {
+  overrides?: Partial<SamRunPodDirectV3Authorization>,
+): SamRunPodDirectV3Authorization => {
   const counter = authorizationCounter;
   authorizationCounter += 1;
-  return SamRunPodDirectV2AuthorizationSchema.parse({
-    kind: 'single-fixture-sam-runpod-direct-v2',
+  return SamRunPodDirectV3AuthorizationSchema.parse({
+    kind: 'single-fixture-sam-runpod-direct-v3',
     authorizationId: `08dbe0ed-f7c0-4b55-b615-${counter.toString(16).padStart(12, '0')}`,
     endpointId: 'future-direct-endpoint',
     imageDigest: nativeImageDigest,
     secretReferenceName: 'RUNPOD_API_KEY',
     executionIdentity: liveIdentity,
     hostingProfileSha256: SAM_RUNPOD_DIRECT_HOSTING_PROFILE_SHA256,
-    adapterProfileSha256: SAM_RUNPOD_DIRECT_ADAPTER_PROFILE_V2_SHA256,
-    authorizationProfileSha256: SAM_RUNPOD_DIRECT_AUTHORIZATION_PROFILE_V2_SHA256,
+    adapterProfileSha256: SAM_RUNPOD_DIRECT_ADAPTER_PROFILE_V3_SHA256,
+    authorizationProfileSha256: SAM_RUNPOD_DIRECT_AUTHORIZATION_PROFILE_V3_SHA256,
     documentationEvidence: {
       retrievedAt: RUNPOD_DIRECT_DOCUMENTATION_RETRIEVED_AT,
       expiresAt: RUNPOD_DIRECT_DOCUMENTATION_EXPIRES_AT,
@@ -219,34 +220,40 @@ describe('SAM mask protocol', () => {
         };
       };
     };
-    expect(vectors.vectorVersion).toBe(2);
+    expect(vectors.vectorVersion).toBe(4);
     expect(vectors.directHosting.profile).toEqual(SAM_RUNPOD_DIRECT_HOSTING_PROFILE);
     expect(vectors.directHosting.sha256).toBe(SAM_RUNPOD_DIRECT_HOSTING_PROFILE_SHA256);
-    expect(SAM_RUNPOD_DIRECT_HOSTING_PROFILE.profileVersion).toBe('sam-runpod-direct-hosting-v1');
+    expect(SAM_RUNPOD_DIRECT_HOSTING_PROFILE.profileVersion).toBe('sam-runpod-direct-hosting-v2');
+    expect(SAM_RUNPOD_DIRECT_ADAPTER_PROFILE_V3.profileVersion).toBe(
+      'sam-runpod-direct-adapter-v3',
+    );
+    expect(SAM_RUNPOD_DIRECT_AUTHORIZATION_PROFILE_V3.profileVersion).toBe(
+      'sam-runpod-direct-authorization-v3',
+    );
     expect(SAM_RUNPOD_DIRECT_HOSTING_PROFILE.health.states['model-staged-not-loaded']).toEqual({
       status: 204,
       body: 'empty',
       inferenceReady: false,
     });
     expect(SAM_RUNPOD_DIRECT_HOSTING_PROFILE_SHA256).toBe(
-      '2e5d64b6741802f7963fa678d174fca92a367a32672764fae5831c3131702f3a',
+      '872054e82fc13e771fa65381e2db1f19dfb2dd609584574e8c532ed8eb82fa18',
     );
-    expect(SAM_RUNPOD_DIRECT_ADAPTER_PROFILE_V2_SHA256).toBe(
-      'c114b8b0bc3030ef2d7df524c88bd1710c9e6bc264d186c6b9e8ee7845718747',
+    expect(SAM_RUNPOD_DIRECT_ADAPTER_PROFILE_V3_SHA256).toBe(
+      '1e6795c970fcfa9443b850f27149e237daf63ffa668cd5094189936453467e28',
     );
-    expect(SAM_RUNPOD_DIRECT_AUTHORIZATION_PROFILE_V2_SHA256).toBe(
-      'c1ab605534b23b8aa6be2433b333696eeed9f13e1f87be76a49e60a26bc7509e',
+    expect(SAM_RUNPOD_DIRECT_AUTHORIZATION_PROFILE_V3_SHA256).toBe(
+      '194272140ae7e717a69f122f6a3e7b1083c80a5f3022f12ffd73ca0016183492',
     );
     expect(sha256Hex(Buffer.from(canonicalizeJson(vectors.directHosting.profile), 'utf8'))).toBe(
       SAM_RUNPOD_DIRECT_HOSTING_PROFILE_SHA256,
     );
     expect(
-      sha256Hex(Buffer.from(canonicalizeJson(SAM_RUNPOD_DIRECT_ADAPTER_PROFILE_V2), 'utf8')),
-    ).toBe(SAM_RUNPOD_DIRECT_ADAPTER_PROFILE_V2_SHA256);
+      sha256Hex(Buffer.from(canonicalizeJson(SAM_RUNPOD_DIRECT_ADAPTER_PROFILE_V3), 'utf8')),
+    ).toBe(SAM_RUNPOD_DIRECT_ADAPTER_PROFILE_V3_SHA256);
     expect(
-      sha256Hex(Buffer.from(canonicalizeJson(SAM_RUNPOD_DIRECT_AUTHORIZATION_PROFILE_V2), 'utf8')),
-    ).toBe(SAM_RUNPOD_DIRECT_AUTHORIZATION_PROFILE_V2_SHA256);
-    expect(SAM_RUNPOD_DIRECT_AUTHORIZATION_PROFILE_V2.activation).toMatchObject({
+      sha256Hex(Buffer.from(canonicalizeJson(SAM_RUNPOD_DIRECT_AUTHORIZATION_PROFILE_V3), 'utf8')),
+    ).toBe(SAM_RUNPOD_DIRECT_AUTHORIZATION_PROFILE_V3_SHA256);
+    expect(SAM_RUNPOD_DIRECT_AUTHORIZATION_PROFILE_V3.activation).toMatchObject({
       clientDispatchMaximum: 1,
       applicationInferenceMaximum: 1,
       providerBillingGuarantee: false,
@@ -387,8 +394,8 @@ describe('SAM mask protocol', () => {
 
   it('validates all response identities, mask digests, flags, accounting and ordering', async () => {
     const request = createRequest();
-    const transport = createDeterministicSamRunPodDirectV2Transport();
-    const response = await createSamRunPodDirectV2Adapter({
+    const transport = createDeterministicSamRunPodDirectV3Transport();
+    const response = await createSamRunPodDirectV3Adapter({
       endpointId: 'fake-sam-test-one',
       expectedExecutionIdentity: SAM_DETERMINISTIC_DIRECT_FAKE_IDENTITY,
       transport,
@@ -550,8 +557,8 @@ describe('SAM cutout and server boundary', () => {
 
   it('rejects duplicate dispatch and treats timeout/cancellation as indeterminate', async () => {
     const request = createRequest();
-    const duplicateTransport = createDeterministicSamRunPodDirectV2Transport();
-    const adapter = createSamRunPodDirectV2Adapter({
+    const duplicateTransport = createDeterministicSamRunPodDirectV3Transport();
+    const adapter = createSamRunPodDirectV3Adapter({
       endpointId: 'fake-sam-duplicate',
       expectedExecutionIdentity: SAM_DETERMINISTIC_DIRECT_FAKE_IDENTITY,
       transport: duplicateTransport,
@@ -564,10 +571,10 @@ describe('SAM cutout and server boundary', () => {
     expect(duplicateTransport.getCallCount()).toBe(1);
 
     const timeoutRequest = createRequest();
-    const timeoutAdapter = createSamRunPodDirectV2Adapter({
+    const timeoutAdapter = createSamRunPodDirectV3Adapter({
       endpointId: 'fake-sam-timeout',
       expectedExecutionIdentity: SAM_DETERMINISTIC_DIRECT_FAKE_IDENTITY,
-      transport: createDeterministicSamRunPodDirectV2Transport({ waitForAbort: true }),
+      transport: createDeterministicSamRunPodDirectV3Transport({ waitForAbort: true }),
       fakeTimeoutMs: 5,
     });
     await expect(timeoutAdapter.generate(timeoutRequest)).rejects.toMatchObject({
@@ -576,10 +583,10 @@ describe('SAM cutout and server boundary', () => {
     });
 
     const cancellationRequest = createRequest();
-    const cancellationAdapter = createSamRunPodDirectV2Adapter({
+    const cancellationAdapter = createSamRunPodDirectV3Adapter({
       endpointId: 'fake-sam-cancel',
       expectedExecutionIdentity: SAM_DETERMINISTIC_DIRECT_FAKE_IDENTITY,
-      transport: createDeterministicSamRunPodDirectV2Transport({ waitForAbort: true }),
+      transport: createDeterministicSamRunPodDirectV3Transport({ waitForAbort: true }),
       fakeTimeoutMs: 1_000,
     });
     const controller = new AbortController();
@@ -590,8 +597,8 @@ describe('SAM cutout and server boundary', () => {
     await expect(pending).rejects.toMatchObject({ reason: 'INDETERMINATE', retryable: false });
 
     const preCancelledRequest = createRequest();
-    const preCancelledTransport = createDeterministicSamRunPodDirectV2Transport();
-    const preCancelledAdapter = createSamRunPodDirectV2Adapter({
+    const preCancelledTransport = createDeterministicSamRunPodDirectV3Transport();
+    const preCancelledAdapter = createSamRunPodDirectV3Adapter({
       endpointId: 'fake-sam-pre-cancel',
       expectedExecutionIdentity: SAM_DETERMINISTIC_DIRECT_FAKE_IDENTITY,
       transport: preCancelledTransport,
@@ -609,8 +616,8 @@ describe('SAM cutout and server boundary', () => {
   it('accepts only a direct response and maps strict status outcomes without retry', async () => {
     const telemetry: unknown[] = [];
     const request = createRequest();
-    const transport = createDeterministicSamRunPodDirectV2Transport();
-    const completed = await createSamRunPodDirectV2Adapter({
+    const transport = createDeterministicSamRunPodDirectV3Transport();
+    const completed = await createSamRunPodDirectV3Adapter({
       endpointId: 'fake-sam-direct-response',
       expectedExecutionIdentity: SAM_DETERMINISTIC_DIRECT_FAKE_IDENTITY,
       transport,
@@ -634,21 +641,21 @@ describe('SAM cutout and server boundary', () => {
 
     for (const status of [400, 404, 409, 413, 415, 422, 429] as const) {
       await expect(
-        createSamRunPodDirectV2Adapter({
+        createSamRunPodDirectV3Adapter({
           endpointId: `fake-sam-direct-http-${status}`,
           expectedExecutionIdentity: SAM_DETERMINISTIC_DIRECT_FAKE_IDENTITY,
-          transport: createDeterministicSamRunPodDirectV2Transport({ status }),
+          transport: createDeterministicSamRunPodDirectV3Transport({ status }),
         }).generate(createRequest()),
       ).rejects.toMatchObject({ reason: 'PROVIDER_FAILURE', retryable: false });
     }
     for (const status of [500, 502, 503, 504] as const) {
-      const oneCall = createDeterministicSamRunPodDirectV2Transport({
+      const oneCall = createDeterministicSamRunPodDirectV3Transport({
         status,
         contentType: 'text/plain',
         bodyText: 'malformed gateway body',
       });
       await expect(
-        createSamRunPodDirectV2Adapter({
+        createSamRunPodDirectV3Adapter({
           endpointId: `fake-sam-direct-http-${status}`,
           expectedExecutionIdentity: SAM_DETERMINISTIC_DIRECT_FAKE_IDENTITY,
           transport: oneCall,
@@ -668,31 +675,31 @@ describe('SAM cutout and server boundary', () => {
       return { ...merged, responseSha256: canonicalResponseSha256(merged) };
     };
     for (const invalidTransport of [
-      createDeterministicSamRunPodDirectV2Transport({ status: 201 }),
-      createDeterministicSamRunPodDirectV2Transport({ contentType: 'text/json' }),
-      createDeterministicSamRunPodDirectV2Transport({
+      createDeterministicSamRunPodDirectV3Transport({ status: 201 }),
+      createDeterministicSamRunPodDirectV3Transport({ contentType: 'text/json' }),
+      createDeterministicSamRunPodDirectV3Transport({
         bodyText: JSON.stringify({
           id: 'legacy-queue-job',
           status: 'COMPLETED',
           output: completed,
         }),
       }),
-      createDeterministicSamRunPodDirectV2Transport({
+      createDeterministicSamRunPodDirectV3Transport({
         responseBody: (response) => ({ ...response, unknown: true }),
       }),
-      createDeterministicSamRunPodDirectV2Transport({
+      createDeterministicSamRunPodDirectV3Transport({
         responseBody: (response) =>
           resign(response, {
             requestId: '00000000-0000-0000-0000-000000000001',
           }),
       }),
-      createDeterministicSamRunPodDirectV2Transport({
+      createDeterministicSamRunPodDirectV3Transport({
         responseBody: (response) =>
           resign(response, {
             sourceSha256: '0'.repeat(64),
           }),
       }),
-      createDeterministicSamRunPodDirectV2Transport({
+      createDeterministicSamRunPodDirectV3Transport({
         responseBody: (response) =>
           resign(response, {
             executionIdentity: {
@@ -701,12 +708,12 @@ describe('SAM cutout and server boundary', () => {
             },
           }),
       }),
-      createDeterministicSamRunPodDirectV2Transport({
+      createDeterministicSamRunPodDirectV3Transport({
         bodyText: 'x'.repeat(SAM_LIMITS.responseJsonBytes + 1),
       }),
     ]) {
       await expect(
-        createSamRunPodDirectV2Adapter({
+        createSamRunPodDirectV3Adapter({
           endpointId: `fake-sam-invalid-response-${identityCounter}`,
           expectedExecutionIdentity: SAM_DETERMINISTIC_DIRECT_FAKE_IDENTITY,
           transport: invalidTransport,
@@ -716,10 +723,10 @@ describe('SAM cutout and server boundary', () => {
     }
 
     await expect(
-      createSamRunPodDirectV2Adapter({
+      createSamRunPodDirectV3Adapter({
         endpointId: 'fake-sam-connection-loss',
         expectedExecutionIdentity: SAM_DETERMINISTIC_DIRECT_FAKE_IDENTITY,
-        transport: createDeterministicSamRunPodDirectV2Transport({
+        transport: createDeterministicSamRunPodDirectV3Transport({
           throwAfterDispatch: true,
         }),
       }).generate(createRequest()),
@@ -734,17 +741,22 @@ describe('SAM cutout and server boundary', () => {
       }),
     ).toThrow();
     expect(() =>
-      SamRunPodDirectV2AuthorizationSchema.parse({
+      SamRunPodDirectV3AuthorizationSchema.parse({
         kind: 'single-fixture-sam-runpod-v1',
       }),
     ).toThrow();
+    expect(() =>
+      createDirectAuthorization(createRequest(), {
+        imageDigest: `sha256:${'3'.repeat(64)}`,
+      }),
+    ).toThrow(/worker image identities/u);
 
     let transportCalls = 0;
-    const localFailureTransport: SamRunPodDirectV2TransportPort = {
-      transportKind: 'native-fetch-direct-v2',
+    const localFailureTransport: SamRunPodDirectV3TransportPort = {
+      transportKind: 'native-fetch-direct-v3',
       secretReferenceName: 'RUNPOD_API_KEY',
       async dispatch(transportRequest) {
-        consumeSamRunPodDirectV2DispatchCapability(transportRequest, 'native-fetch-direct-v2');
+        consumeSamRunPodDirectV3DispatchCapability(transportRequest, 'native-fetch-direct-v3');
         expect(transportRequest.endpoint).toBe(
           'https://future-direct-endpoint.api.runpod.ai/v1/masks',
         );
@@ -754,6 +766,7 @@ describe('SAM cutout and server boundary', () => {
         expect(body).not.toHaveProperty('input');
         expect(body).not.toHaveProperty('policy');
         expect(body).not.toHaveProperty('endpoint');
+        expect(body.workerImageDigest).toBe(authorization.imageDigest);
         transportCalls += 1;
         return {
           status: 400,
@@ -765,7 +778,7 @@ describe('SAM cutout and server boundary', () => {
     const request = createRequest();
     const authorization = createDirectAuthorization(request);
     expect(() =>
-      createSamRunPodDirectV2Adapter({
+      createSamRunPodDirectV3Adapter({
         endpointId: authorization.endpointId,
         expectedExecutionIdentity: liveIdentity,
         transport: localFailureTransport,
@@ -778,11 +791,11 @@ describe('SAM cutout and server boundary', () => {
       }),
     ).toThrow();
     const nativeAdapter = (
-      liveAuthorization: SamRunPodDirectV2Authorization,
-      transport: SamRunPodDirectV2TransportPort = localFailureTransport,
+      liveAuthorization: SamRunPodDirectV3Authorization,
+      transport: SamRunPodDirectV3TransportPort = localFailureTransport,
       nowMs: () => number = () => RUNPOD_DIRECT_DOCUMENTATION_RETRIEVED_AT_MS + 1,
     ) =>
-      createSamRunPodDirectV2Adapter({
+      createSamRunPodDirectV3Adapter({
         endpointId: liveAuthorization.endpointId,
         expectedExecutionIdentity: liveIdentity,
         transport,
@@ -792,7 +805,7 @@ describe('SAM cutout and server boundary', () => {
       });
 
     expect(() =>
-      createSamRunPodDirectV2Adapter({
+      createSamRunPodDirectV3Adapter({
         endpointId: authorization.endpointId,
         expectedExecutionIdentity: liveIdentity,
         transport: localFailureTransport,
@@ -801,8 +814,23 @@ describe('SAM cutout and server boundary', () => {
         nowMs: () => RUNPOD_DIRECT_DOCUMENTATION_RETRIEVED_AT_MS + 1,
       }),
     ).toThrow();
+    expect(transportCalls).toBe(0);
     expect(() =>
-      createSamRunPodDirectV2Adapter({
+      createSamRunPodDirectV3Adapter({
+        endpointId: authorization.endpointId,
+        expectedExecutionIdentity: {
+          ...liveIdentity,
+          workerImageDigest: `sha256:${'3'.repeat(64)}`,
+        },
+        transport: localFailureTransport,
+        authorization,
+        configuredImageDigest: authorization.imageDigest,
+        nowMs: () => RUNPOD_DIRECT_DOCUMENTATION_RETRIEVED_AT_MS + 1,
+      }),
+    ).toThrow();
+    expect(transportCalls).toBe(0);
+    expect(() =>
+      createSamRunPodDirectV3Adapter({
         endpointId: authorization.endpointId,
         expectedExecutionIdentity: liveIdentity,
         transport: localFailureTransport,
@@ -823,10 +851,10 @@ describe('SAM cutout and server boundary', () => {
     ).toThrow();
     const fakeAfterEvidenceExpiryRequest = createRequest();
     await expect(
-      createSamRunPodDirectV2Adapter({
+      createSamRunPodDirectV3Adapter({
         endpointId: 'fake-remains-provider-free',
         expectedExecutionIdentity: SAM_DETERMINISTIC_DIRECT_FAKE_IDENTITY,
-        transport: createDeterministicSamRunPodDirectV2Transport(),
+        transport: createDeterministicSamRunPodDirectV3Transport(),
         nowMs: () => RUNPOD_DIRECT_DOCUMENTATION_EXPIRES_AT_MS + 1,
       }).generate(fakeAfterEvidenceExpiryRequest),
     ).resolves.toMatchObject({
@@ -887,9 +915,9 @@ describe('SAM cutout and server boundary', () => {
       `a${'b'.repeat(63)}`,
       'two.labels',
     ]) {
-      expect(() => deriveSamRunPodDirectV2Endpoint(endpointId)).toThrow();
+      expect(() => deriveSamRunPodDirectV3Endpoint(endpointId)).toThrow();
     }
-    expect(deriveSamRunPodDirectV2Endpoint('a')).toBe('https://a.api.runpod.ai/v1/masks');
+    expect(deriveSamRunPodDirectV3Endpoint('a')).toBe('https://a.api.runpod.ai/v1/masks');
     for (const url of [
       'http://valid.api.runpod.ai/v1/masks',
       'https://user@valid.api.runpod.ai/v1/masks',
@@ -899,7 +927,7 @@ describe('SAM cutout and server boundary', () => {
       'https://valid.api.runpod.ai/v1/masks/',
       'https://valid.example.com/v1/masks',
     ]) {
-      expect(() => assertSamRunPodDirectV2EndpointUrl(url)).toThrow();
+      expect(() => assertSamRunPodDirectV3EndpointUrl(url)).toThrow();
     }
 
     const request = createRequest();
@@ -937,20 +965,23 @@ describe('SAM cutout and server boundary', () => {
       const headers = new Headers(init?.headers);
       expect(headers.get('authorization')).toBe('Bearer server-only-test-key');
       expect(headers.get('content-type')).toBe('application/json');
-      expect(JSON.parse(String(init?.body))).toEqual(request);
+      expect(JSON.parse(String(init?.body))).toEqual({
+        ...request,
+        workerImageDigest: authorization.imageDigest,
+      });
       expect(JSON.parse(String(init?.body))).not.toHaveProperty('input');
       return new Response(JSON.stringify(liveResponse), {
         status: 200,
         headers: { 'content-type': 'application/json' },
       });
     };
-    const transport = createSamRunPodDirectV2NativeFetchTransport({
+    const transport = createSamRunPodDirectV3NativeFetchTransport({
       apiKey: 'server-only-test-key',
       secretReferenceName: 'RUNPOD_API_KEY',
       fetchImplementation,
     });
     const authorization = createDirectAuthorization(request);
-    const response = await createSamRunPodDirectV2Adapter({
+    const response = await createSamRunPodDirectV3Adapter({
       endpointId: authorization.endpointId,
       expectedExecutionIdentity: liveIdentity,
       transport,
@@ -961,9 +992,68 @@ describe('SAM cutout and server boundary', () => {
     expect(response).toEqual(liveResponse);
     expect(fetchCalls).toBe(1);
 
+    const mismatchedRequest = createRequest();
+    const mismatchedProcessed = postprocessSamMasks(mismatchedRequest, [
+      {
+        mask: rectangle(
+          mismatchedRequest.source.width,
+          mismatchedRequest.source.height,
+          10,
+          10,
+          100,
+          100,
+        ),
+        predictedIou: 0.9,
+        stabilityScore: 0.95,
+      },
+    ]);
+    const mismatchedUnsigned: Omit<SamMaskResponse, 'responseSha256'> = {
+      contractVersion: SAM_MASK_CONTRACT_VERSION,
+      requestId: mismatchedRequest.requestId,
+      workspaceId: mismatchedRequest.workspaceId,
+      jobId: mismatchedRequest.jobId,
+      attemptId: mismatchedRequest.attemptId,
+      sourceSha256: mismatchedRequest.source.sha256,
+      executionIdentity: {
+        ...liveIdentity,
+        workerImageDigest: `sha256:${'3'.repeat(64)}`,
+      },
+      timing: { inferenceMs: 1, totalMs: 1 },
+      filterSummary: mismatchedProcessed.filterSummary,
+      candidateCount: mismatchedProcessed.candidates.length,
+      candidates: mismatchedProcessed.candidates,
+    };
+    const mismatchedAuthorization = createDirectAuthorization(mismatchedRequest);
+    let mismatchedResponseCalls = 0;
+    const mismatchedTransport = createSamRunPodDirectV3NativeFetchTransport({
+      apiKey: 'server-only-test-key',
+      secretReferenceName: 'RUNPOD_API_KEY',
+      fetchImplementation: async () => {
+        mismatchedResponseCalls += 1;
+        return new Response(
+          JSON.stringify({
+            ...mismatchedUnsigned,
+            responseSha256: canonicalResponseSha256(mismatchedUnsigned),
+          }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        );
+      },
+    });
+    await expect(
+      createSamRunPodDirectV3Adapter({
+        endpointId: mismatchedAuthorization.endpointId,
+        expectedExecutionIdentity: liveIdentity,
+        transport: mismatchedTransport,
+        authorization: mismatchedAuthorization,
+        configuredImageDigest: mismatchedAuthorization.imageDigest,
+        nowMs: () => RUNPOD_DIRECT_DOCUMENTATION_RETRIEVED_AT_MS + 1,
+      }).generate(mismatchedRequest),
+    ).rejects.toMatchObject({ reason: 'RESPONSE_INVALID', retryable: false });
+    expect(mismatchedResponseCalls).toBe(1);
+
     await expect(
       transport.dispatch({
-        endpoint: deriveSamRunPodDirectV2Endpoint('foreign-capability'),
+        endpoint: deriveSamRunPodDirectV3Endpoint('foreign-capability'),
         method: 'POST',
         requestBodyText: canonicalizeJson(createRequest()),
         signal: new AbortController().signal,
@@ -977,7 +1067,7 @@ describe('SAM cutout and server boundary', () => {
     const lostRequest = createRequest();
     const lostAuthorization = createDirectAuthorization(lostRequest);
     let lostCalls = 0;
-    const lostTransport = createSamRunPodDirectV2NativeFetchTransport({
+    const lostTransport = createSamRunPodDirectV3NativeFetchTransport({
       apiKey: 'server-only-test-key',
       secretReferenceName: 'RUNPOD_API_KEY',
       fetchImplementation: async () => {
@@ -986,7 +1076,7 @@ describe('SAM cutout and server boundary', () => {
       },
     });
     await expect(
-      createSamRunPodDirectV2Adapter({
+      createSamRunPodDirectV3Adapter({
         endpointId: lostAuthorization.endpointId,
         expectedExecutionIdentity: liveIdentity,
         transport: lostTransport,
@@ -999,7 +1089,7 @@ describe('SAM cutout and server boundary', () => {
 
     const truncatedRequest = createRequest();
     const truncatedAuthorization = createDirectAuthorization(truncatedRequest);
-    const truncatedTransport = createSamRunPodDirectV2NativeFetchTransport({
+    const truncatedTransport = createSamRunPodDirectV3NativeFetchTransport({
       apiKey: 'server-only-test-key',
       secretReferenceName: 'RUNPOD_API_KEY',
       fetchImplementation: async () =>
@@ -1014,7 +1104,7 @@ describe('SAM cutout and server boundary', () => {
         ),
     });
     await expect(
-      createSamRunPodDirectV2Adapter({
+      createSamRunPodDirectV3Adapter({
         endpointId: truncatedAuthorization.endpointId,
         expectedExecutionIdentity: liveIdentity,
         transport: truncatedTransport,
@@ -1029,7 +1119,7 @@ describe('SAM cutout and server boundary', () => {
       clientWallTimeoutMs: 5,
     });
     let timeoutCalls = 0;
-    const timeoutTransport = createSamRunPodDirectV2NativeFetchTransport({
+    const timeoutTransport = createSamRunPodDirectV3NativeFetchTransport({
       apiKey: 'server-only-test-key',
       secretReferenceName: 'RUNPOD_API_KEY',
       fetchImplementation: async (_url, init) => {
@@ -1043,7 +1133,7 @@ describe('SAM cutout and server boundary', () => {
       },
     });
     await expect(
-      createSamRunPodDirectV2Adapter({
+      createSamRunPodDirectV3Adapter({
         endpointId: timeoutAuthorization.endpointId,
         expectedExecutionIdentity: liveIdentity,
         transport: timeoutTransport,
@@ -1058,8 +1148,8 @@ describe('SAM cutout and server boundary', () => {
   it('keeps native endpoint, secret reference, image bytes and adapter out of the public graph', () => {
     expect(publicBannerAi).toHaveProperty('SamMaskRequestSchema');
     expect(publicBannerAi).not.toHaveProperty('RUNPOD_API_KEY_REFERENCE');
-    expect(publicBannerAi).not.toHaveProperty('createSamRunPodDirectV2Adapter');
-    expect(publicBannerAi).not.toHaveProperty('createSamRunPodDirectV2NativeFetchTransport');
+    expect(publicBannerAi).not.toHaveProperty('createSamRunPodDirectV3Adapter');
+    expect(publicBannerAi).not.toHaveProperty('createSamRunPodDirectV3NativeFetchTransport');
     expect(publicBannerAi).not.toHaveProperty('materializeSamMaskCutout');
 
     const collect = (directory: string): readonly string[] =>
@@ -1075,7 +1165,7 @@ describe('SAM cutout and server boundary', () => {
       .map((path) => readFileSync(path, 'utf8'))
       .join('\n');
     const adapterSource = readFileSync(
-      join(packageRoot, 'src/server/sam-runpod-direct-v2-adapter.ts'),
+      join(packageRoot, 'src/server/sam-runpod-direct-v3-adapter.ts'),
       'utf8',
     );
     expect(serverSources).not.toMatch(/qwen.*(?:xBps|yBps|widthBps|heightBps)/iu);
@@ -1095,17 +1185,17 @@ describe('SAM cutout and server boundary', () => {
     ]) {
       expect(existsSync(join(packageRoot, 'src/server', removed))).toBe(false);
     }
-    expect(SAM_RUNPOD_DIRECT_ADAPTER_PROFILE_V2.response.maximumBytes).toBe(
+    expect(SAM_RUNPOD_DIRECT_ADAPTER_PROFILE_V3.response.maximumBytes).toBe(
       SAM_LIMITS.responseJsonBytes,
     );
   });
 
   it('allows selection by immutable candidate ID without semantic labels or geometry mutation', async () => {
     const request = createRequest();
-    const response = await createSamRunPodDirectV2Adapter({
+    const response = await createSamRunPodDirectV3Adapter({
       endpointId: 'fake-sam-selection',
       expectedExecutionIdentity: SAM_DETERMINISTIC_DIRECT_FAKE_IDENTITY,
-      transport: createDeterministicSamRunPodDirectV2Transport(),
+      transport: createDeterministicSamRunPodDirectV3Transport(),
     }).generate(request);
     const before = JSON.stringify(response.candidates);
     const proposalOnlySelection = { candidateIds: [response.candidates[0]!.candidateId] };

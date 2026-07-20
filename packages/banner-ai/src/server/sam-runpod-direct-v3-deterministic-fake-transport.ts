@@ -11,13 +11,13 @@ import { canonicalResponseSha256 } from '../sam/sam-mask-rle.js';
 import { parseAndVerifySamMaskRequest } from '../sam/sam-mask-validation.js';
 import { canonicalizeJson } from '../scene/canonical-scene-json.js';
 import {
-  consumeSamRunPodDirectV2DispatchCapability,
-  deriveSamRunPodDirectV2Endpoint,
-  type SamRunPodDirectV2TransportPort,
-  type SamRunPodDirectV2TransportRequest,
-  type SamRunPodDirectV2TransportResponse,
-} from './sam-runpod-direct-v2-adapter.js';
-import { SamRunPodDirectEndpointIdSchema } from './sam-runpod-direct-v2-profiles.js';
+  consumeSamRunPodDirectV3DispatchCapability,
+  deriveSamRunPodDirectV3Endpoint,
+  type SamRunPodDirectV3TransportPort,
+  type SamRunPodDirectV3TransportRequest,
+  type SamRunPodDirectV3TransportResponse,
+} from './sam-runpod-direct-v3-adapter.js';
+import { SamRunPodDirectEndpointIdSchema } from './sam-runpod-direct-v3-profiles.js';
 
 export const SAM_DETERMINISTIC_DIRECT_FAKE_IDENTITY: z.infer<
   typeof SamFakeExecutionIdentitySchema
@@ -75,7 +75,7 @@ const defaultMasks = (request: SamMaskRequest): readonly SamRawMaskCandidate[] =
   ];
 };
 
-export const createDeterministicSamRunPodDirectV2Transport = (input?: {
+export const createDeterministicSamRunPodDirectV3Transport = (input?: {
   readonly rawCandidates?: (request: SamMaskRequest) => readonly SamRawMaskCandidate[];
   readonly waitForAbort?: boolean;
   readonly throwAfterDispatch?: boolean;
@@ -83,7 +83,7 @@ export const createDeterministicSamRunPodDirectV2Transport = (input?: {
   readonly contentType?: string | null;
   readonly bodyText?: string;
   readonly responseBody?: (response: SamMaskResponse) => unknown;
-}): SamRunPodDirectV2TransportPort & {
+}): SamRunPodDirectV3TransportPort & {
   readonly getCallCount: () => number;
   readonly getLastRequestBodyText: () => string | null;
   readonly networkCalls: 0;
@@ -91,22 +91,22 @@ export const createDeterministicSamRunPodDirectV2Transport = (input?: {
   let callCount = 0;
   let lastRequestBodyText: string | null = null;
   return Object.freeze({
-    transportKind: 'deterministic-fake-direct-v2' as const,
+    transportKind: 'deterministic-fake-direct-v3' as const,
     secretReferenceName: null,
     networkCalls: 0 as const,
     getCallCount: () => callCount,
     getLastRequestBodyText: () => lastRequestBodyText,
     async dispatch(
-      request: SamRunPodDirectV2TransportRequest,
-    ): Promise<SamRunPodDirectV2TransportResponse> {
-      consumeSamRunPodDirectV2DispatchCapability(request, 'deterministic-fake-direct-v2');
+      request: SamRunPodDirectV3TransportRequest,
+    ): Promise<SamRunPodDirectV3TransportResponse> {
+      consumeSamRunPodDirectV3DispatchCapability(request, 'deterministic-fake-direct-v3');
       const match =
         /^https:\/\/([a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)\.api\.runpod\.ai\/v1\/masks$/u.exec(
           request.endpoint,
         );
       const endpointId = SamRunPodDirectEndpointIdSchema.parse(match?.[1]);
       if (
-        request.endpoint !== deriveSamRunPodDirectV2Endpoint(endpointId) ||
+        request.endpoint !== deriveSamRunPodDirectV3Endpoint(endpointId) ||
         request.method !== 'POST'
       ) {
         throw new TypeError('Deterministic SAM direct transport received a foreign boundary.');
@@ -117,7 +117,7 @@ export const createDeterministicSamRunPodDirectV2Transport = (input?: {
         throw new TypeError('Deterministic direct post-dispatch connection loss.');
       }
       if (input?.waitForAbort === true) {
-        return new Promise<SamRunPodDirectV2TransportResponse>((_resolve, reject) => {
+        return new Promise<SamRunPodDirectV3TransportResponse>((_resolve, reject) => {
           const abort = () => reject(new DOMException('Deterministic abort.', 'AbortError'));
           if (request.signal.aborted) abort();
           else request.signal.addEventListener('abort', abort, { once: true });

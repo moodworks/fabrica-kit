@@ -260,6 +260,7 @@ class ReviewedManifestTests(unittest.TestCase):
                 "licenses",
                 "dependencies",
                 "baseImage",
+                "deploymentImage",
                 "manifestSha256",
             },
         )

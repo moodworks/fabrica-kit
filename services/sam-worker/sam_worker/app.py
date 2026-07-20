@@ -228,6 +228,8 @@ def create_app(runtime: SamWorkerRuntime) -> FastAPI:
                 validated = parse_request(value)
             except ContractError:
                 return _json_response(400, "REQUEST_INVALID")
+            if not runtime.request_identity_matches(validated):
+                return _json_response(400, "REQUEST_INVALID")
             if await request.is_disconnected():
                 return _json_response(400, "REQUEST_INVALID")
 

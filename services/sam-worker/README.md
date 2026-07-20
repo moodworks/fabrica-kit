@@ -11,6 +11,15 @@ the container port, `PORT`, and `PORT_HEALTH` to `8000`:
 - one process, one model instance, and one admitted inference request
 - no startup-time or request-time download
 
+Stage 1 now prepares a separately authorized manual GHCR publication path at
+`ghcr.io/moodworks/fabrica-sam-worker`. It does not publish, deploy, or change the
+existing endpoint. A future deployment must use the registry-proven Linux/AMD64
+platform image-manifest reference
+`ghcr.io/moodworks/fabrica-sam-worker@sha256:<digest>` and independently set
+`SAM_WORKER_IMAGE_DIGEST` to that same digest. Missing, malformed, uppercase, zero, or
+mismatched values fail before model loading or inference. See
+`docs/operations/sam-worker-ghcr-publication.md`.
+
 This milestone established a reproducible GitHub build source. A later, separately
 authorized first GitHub build attempt reached the immutable-base package-metadata gate
 and stopped there. A subsequent authorized RunPod build
@@ -82,7 +91,7 @@ load nor a final image digest in advance. It reuses the existing endpoint and gr
 
 `artifact-manifest.json` is the executable source of truth. Its self-digest is:
 
-`06c8701c61cb7ccdeb1f67d4c06f095368bd0d410a2905b1733583a2df51fca4`
+`085ddd290b17b6931ea026c274610d9f6c49bad49a5fd372e846a2060b9ac5c4`
 
 | Artifact                | Exact identity                                                                                                          |
 | ----------------------- | ----------------------------------------------------------------------------------------------------------------------- |
@@ -246,9 +255,14 @@ health exercise.
 
 ## Readiness
 
-Startup verifies all staged artifact, dependency, overlay, loader, config, source, and
+Startup first captures and validates the required `SAM_WORKER_IMAGE_DIGEST`, then
+verifies all staged artifact, dependency, overlay, loader, config, source, and
 checkpoint identities before importing torch or SAM. It then constructs and loads
-exactly one model instance. Readiness becomes green only after load succeeds.
+exactly one model instance. Readiness becomes green only after load succeeds. The
+authorization-bound request digest must equal this captured configuration before the
+engine is invoked. A live response injects the trusted digest into
+`executionIdentity.workerImageDigest`; deterministic fake identities do not claim an
+OCI image identity.
 
 | State                     | `GET /ping` | Body                 | `inferenceReady` |
 | ------------------------- | ----------: | -------------------- | ---------------- |
@@ -274,11 +288,11 @@ values are never interpolated and no exception trace is attached.
 The active profile digests are:
 
 - hosting:
-  `2e5d64b6741802f7963fa678d174fca92a367a32672764fae5831c3131702f3a`
+  `872054e82fc13e771fa65381e2db1f19dfb2dd609584574e8c532ed8eb82fa18`
 - direct transport adapter:
-  `c114b8b0bc3030ef2d7df524c88bd1710c9e6bc264d186c6b9e8ee7845718747`
+  `1e6795c970fcfa9443b850f27149e237daf63ffa668cd5094189936453467e28`
 - direct authorization:
-  `c1ab605534b23b8aa6be2433b333696eeed9f13e1f87be76a49e60a26bc7509e`
+  `194272140ae7e717a69f122f6a3e7b1083c80a5f3022f12ffd73ca0016183492`
 - runtime selected-config adapter:
   `f03c378caa5b9ba7979d67ffe958dfd9ca65cc823a10d728faed8c612937b7bf`
 
@@ -288,22 +302,19 @@ The image labels bind the non-secret source repository, supplied Git revision, S
 commit/model/config/checkpoint, artifact manifest, three active profiles, build
 contract, and:
 
-`io.fabrica.image-use=health-only-non-promotable-v1`
+`io.fabrica.image-use=pinned-digest-deployment-only-v1`
 
-The only build argument is `FABRICA_GIT_SHA`. It accepts either a real lowercase,
-nonzero 40-hex Git SHA or the exact sentinel `unavailable`. RunPod's documented
-GitHub integration does not provide a reviewed automatic SHA/build-argument contract,
-so `unavailable` is the honest default. It is not a SHA and makes no revision claim.
-The Dockerfile and build inputs define or copy no API key, credential, token, or
-Docker secret. None may enter a build argument, layer, or label, and the exact
-health-only console configuration injects none.
+The only build argument is the mandatory `FABRICA_GIT_SHA`. It accepts exactly a
+lowercase, nonzero 40-hex Git SHA; there is no default or sentinel. The manual workflow
+passes the exact checked-out commit and the post-push validator requires the same
+revision in the image config label. The Dockerfile and build inputs define or copy no
+API key, credential, token, or Docker secret. None may enter a build argument, layer,
+or label.
 
-Any completed image from this source is health-only and non-promotable even when a real
-SHA is supplied. A real SHA improves provenance but does not satisfy the later image
-inventory, model-load, GPU-health, or inference promotion gates. The first two
-authorized builds stopped before image completion. The later `63f3ad7b4` registry tag
-is recorded only as a tag because the supplied evidence did not include its immutable
-image digest.
+The deployable identity is never the commit tag or image config digest. It is only the
+registry-verified Linux/AMD64 platform image-manifest digest. BuildKit provenance and
+SBOM generation are disabled for this workflow, and raw registry validation still
+classifies any root index before resolving and proving its platform manifest.
 
 ## Provider-free verification
 

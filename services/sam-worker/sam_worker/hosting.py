@@ -8,10 +8,10 @@ from typing import Any, Dict
 from .protocol import canonical_json
 
 DIRECT_HOSTING_PROFILE: Dict[str, Any] = {
-    "profileVersion": "sam-runpod-direct-hosting-v1",
-    "workerHostingVersion": "sam-worker-fastapi-direct-v1",
+    "profileVersion": "sam-runpod-direct-hosting-v2",
+    "workerHostingVersion": "sam-worker-fastapi-direct-v2",
     "provider": "runpod-serverless-load-balancer",
-    "protocolContractVersion": "sam-mask-v1",
+    "protocolContractVersion": "sam-mask-v2",
     "routes": {
         "health": {"method": "GET", "path": "/ping"},
         "inference": {"method": "POST", "path": "/v1/masks"},
@@ -42,8 +42,8 @@ DIRECT_HOSTING_PROFILE: Dict[str, Any] = {
             },
         },
     },
-    "requestEnvelope": "bare-sam-mask-v1",
-    "responseEnvelope": "bare-sam-mask-v1",
+    "requestEnvelope": "bare-sam-mask-v2",
+    "responseEnvelope": "bare-sam-mask-v2",
     "endpointHostTemplate": "https://{endpointId}.api.runpod.ai/v1/masks",
     "endpointIdSyntax": "dns-label-lowercase-v1",
     "requestLifecycle": {
@@ -77,6 +77,15 @@ DIRECT_HOSTING_PROFILE: Dict[str, Any] = {
         "providerProcessingMaximumMs": 330_000,
         "clientSemantics": "single-wall-timeout-indeterminate-after-dispatch",
     },
+    "workerImageIdentity": {
+        "platform": "linux/amd64",
+        "objectType": "oci-or-docker-v2-image-manifest",
+        "trustedConfiguration": "SAM_WORKER_IMAGE_DIGEST",
+        "authorizationRequestField": "workerImageDigest",
+        "responseField": "executionIdentity.workerImageDigest",
+        "mismatchBehavior": "fail-before-inference-or-result-acceptance",
+        "trustStrength": "environment-bound-not-hardware-backed",
+    },
     "documentationEvidence": {
         "retrievedAt": "2026-07-18T13:15:50Z",
         "expiresAt": "2026-08-18T13:15:50Z",
@@ -90,7 +99,7 @@ DIRECT_HOSTING_PROFILE: Dict[str, Any] = {
 }
 
 DIRECT_HOSTING_PROFILE_SHA256 = (
-    "2e5d64b6741802f7963fa678d174fca92a367a32672764fae5831c3131702f3a"
+    "872054e82fc13e771fa65381e2db1f19dfb2dd609584574e8c532ed8eb82fa18"
 )
 
 if (

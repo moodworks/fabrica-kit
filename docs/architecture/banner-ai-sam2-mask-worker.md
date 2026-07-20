@@ -1,7 +1,7 @@
 # Banner AI SAM 2.1 mask worker
 
 Status: reviewed health-only GitHub release; inference inactive
-Contract: `sam-mask-v1`
+Contract: `sam-mask-v2`
 RunPod evidence retrieved: 2026-07-18T13:15:50Z
 RunPod evidence expires: 2026-08-18T13:15:50Z (fail closed)
 
@@ -179,7 +179,7 @@ does not depend on live provider evidence and remains available after expiry.
 
 The tracked `services/sam-worker/artifact-manifest.json` is a closed,
 self-digesting contract with reviewed SHA-256
-`06c8701c61cb7ccdeb1f67d4c06f095368bd0d410a2905b1733583a2df51fca4`.
+`085ddd290b17b6931ea026c274610d9f6c49bad49a5fd372e846a2060b9ac5c4`.
 It records `artifactExecutionOccurred=false` and `modelInferenceOccurred=false`.
 
 | Artifact                   | Exact observed identity                                                                                                                                                                                                                                                                                            |
@@ -326,7 +326,7 @@ runtime, or undocumented third-party kernel scratch space.
 server-owned normalized RGBA PNG
         |
         v
-TypeScript closed request + direct-v2 execution authorization
+TypeScript closed request + direct-v3 adapter execution authorization
         |
         +--> deterministic fake transport (zero network; fake identity only)
         |
@@ -373,15 +373,15 @@ must be `/ping`. The existing staging endpoint supplies `PORT=8000` and
 The only routes are exact `GET /ping` and `POST /v1/masks`. Query strings, trailing-path
 variants, redirects, framework documentation, OpenAPI, Redoc, CORS, and administrative
 or debug routes are absent. Inference accepts one unencoded `application/json` header
-and a bare closed `sam-mask-v1` request. It rejects queue `{id,input}` envelopes, URLs,
+and a bare closed `sam-mask-v2` request. It rejects queue `{id,input}` envelopes, URLs,
 duplicate JSON keys, invalid UTF-8 or BOMs, non-finite JSON numbers, unknown fields, and
-an over-limit body before contract parsing. It returns one bare closed `sam-mask-v1`
+an over-limit body before contract parsing. It returns one bare closed `sam-mask-v2`
 response, never a provider job envelope.
 
 Before inference, the worker validates:
 
 - a closed request and every closed nested object;
-- canonical lowercase UUID identities and `sam-mask-v1`;
+- canonical lowercase UUID identities and `sam-mask-v2`;
 - canonical padded RFC 4648 Base64;
 - byte count and exact source SHA-256;
 - PNG signature, chunk CRCs and ordering, no trailing or unknown chunks;
@@ -545,15 +545,20 @@ caches. A later authorized image inventory must assess them before promotion;
 
 OCI labels bind the source repository, supplied revision, SAM commit/model/config and
 config digest, checkpoint digest, artifact manifest, hosting/direct/runtime profile
-digests, and build contract. The only build argument is `FABRICA_GIT_SHA`: a lowercase
-nonzero 40-hex SHA or the exact sentinel `unavailable`. The sentinel is not a SHA and
-makes no revision claim. No official GitHub integration contract is assumed to inject
-one automatically. The Dockerfile/build defines or copies no secret or provider key;
-none may enter a build argument, layer, or label. The image label
-`io.fabrica.image-use=health-only-non-promotable-v1` is mandatory. This milestone's
-image remains non-promotable even if a real SHA is later supplied; the repository
-worker source is not independently manifest-hashed as a complete source bundle, and
-image inventory/model-load/GPU-health gates remain.
+digests, and build contract. The only build argument is mandatory
+`FABRICA_GIT_SHA`, exactly one lowercase nonzero 40-hex commit; there is no default or
+sentinel. The manual GHCR workflow supplies the exact checked-out commit and the
+post-push validator requires the same value in the image config revision label. The
+Dockerfile/build defines or copies no secret or provider key; none may enter a build
+argument, layer, or label. The image label
+`io.fabrica.image-use=pinned-digest-deployment-only-v1` forbids tag-based deployment.
+
+BuildKit provenance and SBOM output are explicitly disabled for this single-platform
+workflow. Its returned root digest is still unclassified until raw GHCR bytes,
+`Docker-Content-Digest`, media type, manifest descriptors, config digest and size,
+Linux/AMD64 config fields, and source labels are verified. A root OCI index or Docker
+manifest list is never accepted as the deployment identity; exactly one Linux/AMD64
+child image manifest must be fetched and independently proven.
 
 A bounded provider-free `git ls-files -z` test continues to reject tracked
 model/checkpoint/archive/wheel suffixes and exact artifact basenames and checks that no
@@ -563,7 +568,7 @@ downloaded binary reaches Banner AI package exports or web source.
 
 The server configuration contains one lowercase DNS-label endpoint ID. The adapter
 derives exactly `https://<endpoint-id>.api.runpod.ai/v1/masks`; request/browser data
-cannot supply an endpoint. It sends one canonical bare `sam-mask-v1` JSON body containing
+cannot supply an endpoint. It sends one canonical bare `sam-mask-v2` JSON body containing
 normalized PNG bytes, never a wrapper or remote image URL.
 
 `RUNPOD_API_KEY` is a server-only reference. Its value is captured only inside the
@@ -597,22 +602,23 @@ Live construction and dispatch require all of:
 - one configured endpoint ID;
 - the server-owned `RUNPOD_API_KEY` reference and nonempty server-supplied value;
 - exact reviewed model/config/checkpoint identity with a non-placeholder digest;
-- a single-use, unexpired `single-fixture-sam-runpod-direct-v2` authorization matching
+- a single-use, unexpired `single-fixture-sam-runpod-direct-v3` authorization matching
   source byte count, dimensions, digest, endpoint, limits, authorization ID, and
   automatic mode;
 - an independently supplied, nonzero `sha256:<64-lowercase-hex>` image digest that must
-  equal the authorization image digest before a dispatch claim;
+  equal the authorization image digest and live expected identity before a dispatch
+  claim; the native adapter adds this bound value to the closed worker request;
 - a `clientWallTimeoutMs` no greater than the provider-documented 330,000 ms processing
   ceiling, plus an exact positive micro-USD cost cap;
 - exact minimum mask area, maximum candidate count, and
   `fabrica-binary-rle-v1` output identity;
 - the exact documentation retrieval/expiry tuple and all three reviewed profiles:
   - direct hosting SHA-256
-    `2e5d64b6741802f7963fa678d174fca92a367a32672764fae5831c3131702f3a`;
-  - direct adapter V2 SHA-256
-    `c114b8b0bc3030ef2d7df524c88bd1710c9e6bc264d186c6b9e8ee7845718747`;
-  - direct authorization V2 SHA-256
-    `c1ab605534b23b8aa6be2433b333696eeed9f13e1f87be76a49e60a26bc7509e`.
+    `872054e82fc13e771fa65381e2db1f19dfb2dd609584574e8c532ed8eb82fa18`;
+  - direct adapter V3 SHA-256
+    `1e6795c970fcfa9443b850f27149e237daf63ffa668cd5094189936453467e28`;
+  - direct authorization V3 SHA-256
+    `194272140ae7e717a69f122f6a3e7b1083c80a5f3022f12ffd73ca0016183492`.
 
 The authorization says `clientDispatchMaximum=1`,
 `applicationInferenceMaximum=1`, `clientRetryCount=0`, and `pollCount=0`. It explicitly
@@ -661,13 +667,22 @@ The application never relies on that outer maximum. Its stricter hard limits are
 | Total returned binary RLE       |                    8,000,000 bytes |
 | Bare worker response JSON       |                   12,000,000 bytes |
 
-The strict response repeats request/workspace/job/attempt/source identity, exact execution
-identity, integer timings, exact filter accounting, count, ordered candidates, and a
-response digest. The fake execution union contains only fake engine identity,
-definition digest, and `NOT_SAM_OUTPUT`; it cannot claim Meta model/config/checkpoint
-identity. The live union contains only the exact reviewed Meta identity. It remains
-unconstructable in this milestone because no built image digest, endpoint, GPU/model
-health evidence, or execution authorization exists.
+The strict response repeats request/workspace/job/attempt/source identity, exact
+execution identity, integer timings, exact filter accounting, count, ordered
+candidates, and a response digest. The fake execution union contains only fake engine
+identity, definition digest, and `NOT_SAM_OUTPUT`; it cannot claim Meta
+model/config/checkpoint or deployed OCI identity. The live union contains the exact
+reviewed Meta identity plus `workerImageDigest`. At startup the worker captures only
+the required `SAM_WORKER_IMAGE_DIGEST`; missing, uppercase, zero, malformed, tag-like,
+or otherwise unresolved input fails closed before model load. Before engine invocation
+the worker compares the authorization-bound request value to that captured digest,
+injects the trusted value into the live response identity, and the caller compares it
+to its independently configured expectation before accepting results.
+
+This is environment-bound identity, not hardware-backed attestation. The exact trust
+chain is GHCR platform image manifest → RunPod `repository@digest` image reference →
+independently configured worker digest → authorization-bound caller expectation →
+strict live response equality.
 
 ## Mask encoding and deterministic filtering
 
@@ -813,14 +828,12 @@ redacted `503` covers every other not-ready state. It may return `200` only afte
 If health does not reach `200` within the explicit cost/time authorization, stop and
 scale back to zero without inference.
 
-The image remains labeled
-`io.fabrica.image-use=health-only-non-promotable-v1`. Supplying a real
-`FABRICA_GIT_SHA` improves source provenance but does not promote the image. The
-literal `unavailable` default is not a SHA and makes no revision claim. Before any
-promotion or inference authorization, a later review must record the actual final image
-digest, exact base Python patch, installed/base filesystem inventory, base-retained
-tools and caches, non-root/read-only inventory, successful one-model load, redacted
-logs, GPU health, and all profile/manifest identities.
+The prepared successor image is labeled
+`io.fabrica.image-use=pinned-digest-deployment-only-v1` and requires an exact
+`FABRICA_GIT_SHA`. Before any future deployment or inference authorization, a
+separately authorized GHCR publication must record and prove the Linux/AMD64 platform
+image-manifest digest. The existing health-only RunPod image and endpoint version 11
+remain untouched and cannot inherit this identity.
 
 A later inference exercise remains outside this milestone and still requires a new,
 unexpired, single-use authorization bound to the endpoint, immutable image digest,

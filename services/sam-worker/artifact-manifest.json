@@ -208,5 +208,15 @@
     "osConfigObservation": "Ubuntu 22.04",
     "runtimeAssertionStatus": "deferred-no-image-layer-pull-or-execution"
   },
-  "manifestSha256": "06c8701c61cb7ccdeb1f67d4c06f095368bd0d410a2905b1733583a2df51fca4"
+  "deploymentImage": {
+    "repository": "ghcr.io/moodworks/fabrica-sam-worker",
+    "platform": "linux/amd64",
+    "requiredObject": "oci-or-docker-v2-image-manifest",
+    "immutableReferenceFormat": "ghcr.io/moodworks/fabrica-sam-worker@sha256:<64-lowercase-hex>",
+    "runtimeEnvironment": "SAM_WORKER_IMAGE_DIGEST",
+    "buildKitProvenance": "disabled",
+    "buildKitSbom": "disabled",
+    "trustStrength": "environment-bound-not-hardware-backed"
+  },
+  "manifestSha256": "085ddd290b17b6931ea026c274610d9f6c49bad49a5fd372e846a2060b9ac5c4"
 }

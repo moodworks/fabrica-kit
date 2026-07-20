@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import threading
 from pathlib import Path
 from typing import Any
@@ -22,7 +23,12 @@ from .engine import (
     SOURCE_ROOT,
     WHEELHOUSE_MANIFEST_PATH,
 )
-from .protocol import ValidatedRequest, build_response
+from .protocol import (
+    ContractError,
+    ValidatedRequest,
+    build_response,
+    worker_image_digest,
+)
 
 MODEL_NOT_STAGED = "model-not-staged"
 MODEL_STAGED_NOT_LOADED = "model-staged-not-loaded"
@@ -43,6 +49,7 @@ STARTUP_STATE_LOG_MESSAGES = {
     STARTUP_BLOCKED: "fabrica-sam-startup-state: startup-blocked",
 }
 _STARTUP_LOGGER = logging.getLogger("uvicorn.error")
+WORKER_IMAGE_DIGEST_ENVIRONMENT = "SAM_WORKER_IMAGE_DIGEST"
 
 
 def _log_startup_state(state: str) -> None:
@@ -52,14 +59,34 @@ def _log_startup_state(state: str) -> None:
 class SamWorkerRuntime:
     """Own one engine, one cached readiness state, and one admission permit."""
 
-    def __init__(self, engine: Any, initial_state: str) -> None:
+    def __init__(
+        self,
+        engine: Any,
+        initial_state: str,
+        trusted_worker_image_digest: str,
+    ) -> None:
         if initial_state not in READINESS_STATES:
             raise ValueError("SAM worker initial readiness state is invalid.")
+        try:
+            self.__worker_image_digest = worker_image_digest(
+                trusted_worker_image_digest,
+                "trusted worker image digest",
+            )
+        except ContractError as error:
+            raise ValueError(
+                "SAM worker image digest configuration is invalid."
+            ) from error
         self.engine = engine
         self._state = initial_state
         self._state_lock = threading.Lock()
         self._startup_started = False
         self._inference_permit = threading.Lock()
+
+    @property
+    def worker_image_digest(self) -> str:
+        """Return the immutable worker image identity captured at startup."""
+
+        return self.__worker_image_digest
 
     def readiness_state(self) -> str:
         with self._state_lock:
@@ -94,12 +121,36 @@ class SamWorkerRuntime:
         """Release only after the blocking engine call and response construction finish."""
 
         try:
-            return build_response(validated, self.engine)
+            return build_response(
+                validated,
+                self.engine,
+                self.worker_image_digest,
+            )
         finally:
             self.release_admission()
 
+    def request_identity_matches(self, validated: ValidatedRequest) -> bool:
+        return (
+            validated.request["workerImageDigest"]
+            == self.worker_image_digest
+        )
+
+
+def configured_worker_image_digest() -> str:
+    raw_digest = os.environ.get(WORKER_IMAGE_DIGEST_ENVIRONMENT)
+    try:
+        return worker_image_digest(
+            raw_digest,
+            WORKER_IMAGE_DIGEST_ENVIRONMENT,
+        )
+    except ContractError as error:
+        raise RuntimeError(
+            "SAM worker image digest configuration is invalid."
+        ) from error
+
 
 def create_production_runtime() -> SamWorkerRuntime:
+    configured_digest = configured_worker_image_digest()
     runtime_license_paths = (
         LICENSE_ROOT / "LICENSE",
         LICENSE_ROOT / "LICENSE_cctorch",
@@ -144,6 +195,7 @@ def create_production_runtime() -> SamWorkerRuntime:
     runtime = SamWorkerRuntime(
         ProductionSamEngine(),
         state,
+        configured_digest,
     )
     _log_startup_state(state)
     return runtime
