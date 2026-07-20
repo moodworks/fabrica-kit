@@ -81,6 +81,99 @@ class ImageContentBoundaryTests(unittest.TestCase):
         self.assertEqual(result.stderr, "")
         self.assertEqual(CLI.stat().st_mode & 0o111, 0o111)
 
+    def test_real_entrypoint_leaves_clean_tree_without_bytecode(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self.copy_boundary_inputs(root)
+            copied_cli = root / CLI.relative_to(ROOT)
+            copied_cli.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(CLI, copied_cli)
+
+            for command in (
+                ("git", "init", "--quiet"),
+                (
+                    "git",
+                    "config",
+                    "user.email",
+                    "fixture@example.invalid",
+                ),
+                ("git", "config", "user.name", "Fixture"),
+                ("git", "add", "--all"),
+                (
+                    "git",
+                    "commit",
+                    "--quiet",
+                    "-m",
+                    "fixture baseline",
+                ),
+            ):
+                subprocess.run(
+                    command,
+                    cwd=root,
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                )
+
+            environment = dict(os.environ)
+            environment.pop("PYTHONDONTWRITEBYTECODE", None)
+            environment.pop("PYTHONPYCACHEPREFIX", None)
+            result = subprocess.run(
+                [sys.executable, str(copied_cli)],
+                cwd=root,
+                env=environment,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(
+                result.stdout,
+                (
+                    "sam-worker-image-content-boundary-ok "
+                    "context-files=21 reviewed-downloads=18\n"
+                ),
+            )
+            self.assertEqual(result.stderr, "")
+
+            status = subprocess.run(
+                (
+                    "git",
+                    "status",
+                    "--porcelain",
+                    "--untracked-files=all",
+                ),
+                cwd=root,
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            clean = subprocess.run(
+                ("git", "clean", "-ndx"),
+                cwd=root,
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(status.stdout, "")
+            self.assertEqual(status.stderr, "")
+            self.assertEqual(clean.stdout, "")
+            self.assertEqual(clean.stderr, "")
+            self.assertEqual(
+                list(root.rglob("__pycache__")),
+                [],
+            )
+            self.assertEqual(
+                [
+                    path
+                    for path in root.rglob("*")
+                    if path.suffix in {".pyc", ".pyo"}
+                ],
+                [],
+            )
+
     def test_context_is_exact_and_excludes_sensitive_or_unrelated_paths(
         self,
     ) -> None:
