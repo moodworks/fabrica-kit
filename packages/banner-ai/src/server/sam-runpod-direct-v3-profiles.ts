@@ -254,6 +254,9 @@ export const SamRunPodDirectEndpointIdSchema = z
   .string()
   .regex(/^(?=.{1,63}$)[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/u);
 
+export const deriveSamRunPodDirectV3Endpoint = (endpointIdInput: string): string =>
+  `https://${SamRunPodDirectEndpointIdSchema.parse(endpointIdInput)}.api.runpod.ai/v1/masks`;
+
 const DocumentationEvidenceSchema = z
   .strictObject({
     retrievedAt: z.literal(RUNPOD_DIRECT_DOCUMENTATION_RETRIEVED_AT),
