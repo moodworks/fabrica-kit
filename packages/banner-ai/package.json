@@ -16,6 +16,7 @@
     "benchmark:qwen:live": "node --import tsx src/server/qwen-four-fixture-benchmark-cli.ts --live",
     "benchmark:qwen:replay": "node --import tsx src/server/qwen-response-replay-cli.ts",
     "demo:sam-fake": "node --import tsx src/server/sam-fake-vertical-slice-cli.ts",
+    "demo:sam-visual-evaluation:fake": "node --import tsx src/server/sam-visual-evaluation-fake-cli.ts",
     "preflight:sam-first-inference:fake": "node --import tsx src/server/sam-first-inference-phase-a-cli.ts"
   },
   "dependencies": {
