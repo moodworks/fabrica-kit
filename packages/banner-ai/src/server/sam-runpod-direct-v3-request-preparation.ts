@@ -33,6 +33,8 @@ export const SAM_FIRST_INFERENCE_WORKER_IMAGE =
   `ghcr.io/moodworks/fabrica-sam-worker@${SAM_FIRST_INFERENCE_WORKER_IMAGE_DIGEST}` as const;
 export const SAM_FIRST_INFERENCE_CLIENT_TIMEOUT_MS = 330_000 as const;
 export const SAM_FIRST_INFERENCE_COST_MAXIMUM_MICRO_USD = 250_000 as const;
+export const SAM_FIRST_INFERENCE_CANONICAL_REQUEST_SHA256 =
+  '506e75d829f2494f34a58e9e9f4d610b9b0881a520ed815e7b38f62561815f80' as const;
 
 export const SAM_FIRST_INFERENCE_FIXTURE = Object.freeze({
   fixtureId: SAM_FIRST_INFERENCE_FIXTURE_ID,
@@ -272,6 +274,7 @@ export const assertSamFirstInferenceV3PreparedRequest = (
     state.request.limits.minMaskAreaPixels !==
       SAM_FIRST_INFERENCE_REQUEST_LIMITS.minMaskAreaPixels ||
     state.request.limits.maxCandidates !== SAM_FIRST_INFERENCE_REQUEST_LIMITS.maxCandidates ||
+    state.canonicalBodySha256 !== SAM_FIRST_INFERENCE_CANONICAL_REQUEST_SHA256 ||
     canonicalizeJson(state.expectedExecutionIdentity) !==
       canonicalizeJson(SAM_FIRST_INFERENCE_EXECUTION_IDENTITY)
   ) {

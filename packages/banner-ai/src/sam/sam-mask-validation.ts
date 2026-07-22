@@ -24,6 +24,13 @@ import {
 
 const digest = (bytes: Uint8Array): string => createHash('sha256').update(bytes).digest('hex');
 const utf8Bytes = (value: string): number => Buffer.byteLength(value, 'utf8');
+const strictlyValidatedResponses = new WeakMap<
+  object,
+  {
+    readonly request: SamMaskRequest;
+    readonly expectedExecutionKind: 'deterministic-fake' | 'meta-sam2.1';
+  }
+>();
 const POPCOUNT = Uint8Array.from({ length: 256 }, (_, value) => {
   let bits = value;
   let count = 0;
@@ -226,5 +233,35 @@ export const parseAndVerifySamMaskResponse = (input: {
   ) {
     throw new TypeError('SAM candidates are not in canonical deterministic order.');
   }
+  strictlyValidatedResponses.set(
+    response,
+    Object.freeze({
+      request: input.request,
+      expectedExecutionKind: input.expectedExecutionKind,
+    }),
+  );
   return response;
+};
+
+/**
+ * Proves that this exact immutable response object crossed the complete strict response boundary
+ * for this exact request. Structurally equivalent, reconstructed, or merely parsed objects do not
+ * acquire this process-local capability.
+ */
+export const assertSamMaskResponseWasStrictlyValidated = (input: {
+  readonly response: SamMaskResponse;
+  readonly request: SamMaskRequest;
+  readonly expectedExecutionKind: 'deterministic-fake' | 'meta-sam2.1';
+}): SamMaskResponse => {
+  const state = strictlyValidatedResponses.get(input.response);
+  if (
+    state === undefined ||
+    state.request !== input.request ||
+    state.expectedExecutionKind !== input.expectedExecutionKind
+  ) {
+    throw new TypeError(
+      'SAM response is raw, reconstructed, request-mismatched, or not strictly validated.',
+    );
+  }
+  return input.response;
 };
