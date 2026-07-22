@@ -3,6 +3,7 @@ import type { z } from 'zod';
 import {
   SAM_MASK_CONTRACT_VERSION,
   SamFakeExecutionIdentitySchema,
+  SamWorkerImageDigestSchema,
   type SamMaskRequest,
   type SamMaskResponse,
 } from '../sam/sam-mask-contracts.js';
@@ -134,7 +135,9 @@ export const createDeterministicSamRunPodDirectV3Transport = (input?: {
       ) {
         throw new TypeError('Deterministic SAM direct transport received a wrapped request.');
       }
-      const { request: parsed } = parseAndVerifySamMaskRequest(parsedInput);
+      const { workerImageDigest, ...baseRequest } = parsedInput as Record<string, unknown>;
+      if (workerImageDigest !== undefined) SamWorkerImageDigestSchema.parse(workerImageDigest);
+      const { request: parsed } = parseAndVerifySamMaskRequest(baseRequest);
       const result = postprocessSamMasks(parsed, (input?.rawCandidates ?? defaultMasks)(parsed));
       const unsigned: Omit<SamMaskResponse, 'responseSha256'> = {
         contractVersion: SAM_MASK_CONTRACT_VERSION,
