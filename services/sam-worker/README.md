@@ -1,5 +1,10 @@
 # SAM direct Load Balancer worker
 
+Current-state pointer (2026-07-23): earlier version-11 and health-only sections below remain
+historical. The reviewed version-12 immutable deployment, completed person evidence, and
+provider-free corpus-capacity boundary are summarized in
+[`../../docs/evaluation/banner-ai-sam-corpus-evaluation-handoff.md`](../../docs/evaluation/banner-ai-sam-corpus-evaluation-handoff.md).
+
 This service is the provider-neutral FastAPI worker for the reviewed
 `sam2.1_hiera_base_plus` deployment. The image defaults to a direct RunPod Load
 Balancer server on port 80. The MCP-authoritative existing staging endpoint overrides

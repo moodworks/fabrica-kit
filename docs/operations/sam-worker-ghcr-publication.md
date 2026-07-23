@@ -5,6 +5,10 @@ implementation and review do not publish a package, change RunPod, contact a wor
 or run inference. Public image availability is distribution only; it does not
 authorize `/ping`, `/v1/masks`, a worker wake-up, deployment, or inference.
 
+Current-state pointer (2026-07-23): the version-11 references below remain historical. The reviewed
+version-12 immutable identity and completed person evidence are recorded in
+[`../evaluation/banner-ai-sam-corpus-evaluation-handoff.md`](../evaluation/banner-ai-sam-corpus-evaluation-handoff.md).
+
 The deployment identity is the registry-proven Linux/AMD64 OCI or Docker schema-2
 image-manifest digest:
 
