@@ -589,6 +589,36 @@ class ProtocolTests(unittest.TestCase):
             automatic_points_per_batch(4096, 4096)
         self.assertEqual(AUTOMATIC_BATCH_WORKING_BYTES, 268_435_456)
 
+    def test_reviewed_four_fixture_automatic_capacity_matrix(self) -> None:
+        fixtures = (
+            ("person", 876, 221, 106_223_296, True),
+            ("product", 2_015, 900, 650_511_040, False),
+            ("text-heavy", 416, 522, 114_138_112, True),
+            ("no-text", 738, 255, 104_406_880, True),
+        )
+        self.assertEqual(AUTOMATIC_BATCH_WORKING_BYTES, 268_435_456)
+        for name, width, height, expected_one_point_peak, eligible in fixtures:
+            with self.subTest(fixture=name):
+                self.assertEqual(
+                    automatic_batch_peak_bytes(width, height, 1),
+                    expected_one_point_peak,
+                )
+                if eligible:
+                    self.assertLessEqual(
+                        expected_one_point_peak,
+                        AUTOMATIC_BATCH_WORKING_BYTES,
+                    )
+                    self.assertEqual(automatic_points_per_batch(width, height), 3)
+                else:
+                    self.assertGreater(
+                        expected_one_point_peak,
+                        AUTOMATIC_BATCH_WORKING_BYTES,
+                    )
+                    with self.assertRaisesRegex(
+                        ContractError, "cannot fit one worst-case batch"
+                    ):
+                        automatic_points_per_batch(width, height)
+
     def test_alternating_rle_refuses_before_official_list_materialization(self) -> None:
         alternating_mask = bytes(index % 2 for index in range(10))
         transition_count = sum(

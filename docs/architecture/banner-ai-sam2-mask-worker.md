@@ -5,6 +5,11 @@ Contract: `sam-mask-v2`
 RunPod evidence retrieved: 2026-07-18T13:15:50Z
 RunPod evidence expires: 2026-08-18T13:15:50Z (fail closed)
 
+Current-state pointer (2026-07-23): the version-11 material below is preserved as historical
+evidence. The reviewed endpoint is now version 12 with an immutable image, two completed person
+evaluations, and a provider-free remaining-corpus path. See
+[`../evaluation/banner-ai-sam-corpus-evaluation-handoff.md`](../evaluation/banner-ai-sam-corpus-evaluation-handoff.md).
+
 ## Decision and scope
 
 The main application remains JavaScript/TypeScript. A narrowly scoped Python service
