@@ -45,7 +45,7 @@ import { RUNPOD_API_KEY_REFERENCE } from '../src/server/sam-runpod-direct-v3-pro
 import { prepareSamFirstInferenceV3Request } from '../src/server/sam-runpod-direct-v3-request-preparation.js';
 import {
   SAM_TEXT_HEAVY_PRODUCTION_V3_AUTHORIZATION_LIFETIME_MS,
-  SAM_TEXT_HEAVY_PRODUCTION_V3_FROZEN_IDENTITY,
+  SAM_TEXT_HEAVY_PRODUCTION_V3_FROZEN_CORPUS_REQUEST_IDENTITY,
   SamTextHeavyProductionV3AuthorizationSchema,
   authorizeTestOnlySamTextHeavyProductionV3Execution,
   consumeSamTextHeavyProductionV3AuthorizedExecution,
@@ -67,12 +67,11 @@ import {
   inspectTestOnlySamTextHeavyProductionV3TransportFactory,
 } from '../src/server/sam-text-heavy-production-v3-control.js';
 import {
-  SAM_TEXT_HEAVY_PRODUCTION_V3_CANONICAL_CALL_CLAIM_SHA256,
-  SAM_TEXT_HEAVY_PRODUCTION_V3_CANONICAL_CALL_IDENTITY,
   SAM_TEXT_HEAVY_PRODUCTION_V3_CLAIM_ROOT,
   SAM_TEXT_HEAVY_PRODUCTION_V3_OUTPUT_ROOT,
-  SAM_TEXT_HEAVY_PRODUCTION_V3_REPOSITORY_SHA,
   createTestOnlySamTextHeavyProductionV3Root,
+  deriveSamTextHeavyProductionV3CanonicalCallEvidence,
+  deriveSamTextHeavyProductionV3CanonicalCallEvidenceFromRepositoryExecution,
   inspectSamTextHeavyProductionV3DurableReservation,
   inspectSamTextHeavyProductionV3OutputTarget,
   prepareTestOnlySamTextHeavyProductionV3OutputTarget,
@@ -81,6 +80,12 @@ import {
   type SamTextHeavyProductionV3DurableReservation,
   type SamTextHeavyProductionV3TestRoot,
 } from '../src/server/sam-text-heavy-production-v3-reservation.js';
+import { SAM_TEXT_HEAVY_PRODUCTION_V3_CORPUS_PROVENANCE_SHA } from '../src/server/sam-text-heavy-production-v3-repository-binding.js';
+import {
+  SAM_TEXT_HEAVY_PRODUCTION_V3_FAKE_EXPECTED_REPOSITORY_IDENTITY,
+  SAM_TEXT_HEAVY_PRODUCTION_V3_FAKE_OBSERVED_REPOSITORY_IDENTITY,
+  createValidTestOnlySamTextHeavyProductionV3RepositoryBinding,
+} from './sam-text-heavy-production-v3-test-helpers.js';
 
 const roots: string[] = [];
 let ordinal = 0;
@@ -88,6 +93,9 @@ let ordinal = 0;
 const freshRoot = async (): Promise<{
   readonly path: string;
   readonly capability: SamTextHeavyProductionV3TestRoot;
+  readonly repositoryBinding: ReturnType<
+    typeof createValidTestOnlySamTextHeavyProductionV3RepositoryBinding
+  >;
 }> => {
   const path = await mkdtemp(
     join(await realpath(tmpdir()), 'fabrica-sam-text-heavy-production-v3-test-root-'),
@@ -96,6 +104,7 @@ const freshRoot = async (): Promise<{
   return {
     path,
     capability: await createTestOnlySamTextHeavyProductionV3Root({ rootDirectory: path }),
+    repositoryBinding: createValidTestOnlySamTextHeavyProductionV3RepositoryBinding(),
   };
 };
 
@@ -114,6 +123,7 @@ const reserveFresh = async (): Promise<{
   const root = await freshRoot();
   const target = await prepareTestOnlySamTextHeavyProductionV3OutputTarget({
     root: root.capability,
+    repositoryBinding: root.repositoryBinding,
     nonce: nextNonce(),
   });
   const outputDirectory = inspectSamTextHeavyProductionV3OutputTarget(target).outputDirectory;
@@ -210,13 +220,15 @@ const fakeResponse = (
 };
 
 describe('SAM text-heavy production V3 frozen identity and inactive admission', () => {
-  it('binds the exact repository, fixture, request, deployment, model, and policy identity', () => {
+  it('binds corpus provenance, repository execution, fixture, request, deployment, model, and policy', () => {
     const fixture = SAM_CORPUS_EVALUATION_FIXTURES_V1['text-heavy'];
-    expect(SAM_TEXT_HEAVY_PRODUCTION_V3_REPOSITORY_SHA).toBe(
+    const repositoryBinding = createValidTestOnlySamTextHeavyProductionV3RepositoryBinding();
+    const canonicalCall = deriveSamTextHeavyProductionV3CanonicalCallEvidence(repositoryBinding);
+    expect(SAM_TEXT_HEAVY_PRODUCTION_V3_CORPUS_PROVENANCE_SHA).toBe(
       '524a708ed95972e39a994ad711e4202238094fc2',
     );
-    expect(SAM_TEXT_HEAVY_PRODUCTION_V3_FROZEN_IDENTITY).toMatchObject({
-      repositorySha: SAM_TEXT_HEAVY_PRODUCTION_V3_REPOSITORY_SHA,
+    expect(SAM_TEXT_HEAVY_PRODUCTION_V3_FROZEN_CORPUS_REQUEST_IDENTITY).toMatchObject({
+      corpusProvenanceSha: SAM_TEXT_HEAVY_PRODUCTION_V3_CORPUS_PROVENANCE_SHA,
       endpoint: {
         id: SAM_CORPUS_ENDPOINT_ID,
         version: SAM_CORPUS_ENDPOINT_VERSION,
@@ -276,8 +288,12 @@ describe('SAM text-heavy production V3 frozen identity and inactive admission', 
     expect(SAM_TEXT_HEAVY_PRODUCTION_V3_AUTHORIZATION_LIFETIME_MS).toBe(
       SAM_CORPUS_CLIENT_TIMEOUT_MS,
     );
-    expect(SAM_TEXT_HEAVY_PRODUCTION_V3_CANONICAL_CALL_IDENTITY).toMatchObject({
-      repositorySha: SAM_TEXT_HEAVY_PRODUCTION_V3_REPOSITORY_SHA,
+    expect(canonicalCall.identity).toMatchObject({
+      corpusProvenanceSha: SAM_TEXT_HEAVY_PRODUCTION_V3_CORPUS_PROVENANCE_SHA,
+      repositoryExecution: {
+        expected: SAM_TEXT_HEAVY_PRODUCTION_V3_FAKE_EXPECTED_REPOSITORY_IDENTITY,
+        observed: SAM_TEXT_HEAVY_PRODUCTION_V3_FAKE_OBSERVED_REPOSITORY_IDENTITY,
+      },
       endpointId: SAM_CORPUS_ENDPOINT_ID,
       endpointVersion: 12,
       workerImageDigest: SAM_CORPUS_WORKER_IMAGE_DIGEST,
@@ -286,7 +302,7 @@ describe('SAM text-heavy production V3 frozen identity and inactive admission', 
       canonicalRequestByteLength: 222_620,
       canonicalRequestSha256: 'a14354bb67685293a8aa3c2523db36506b2050d53f0dea90c4070bcdd015ee26',
     });
-    expect(SAM_TEXT_HEAVY_PRODUCTION_V3_CANONICAL_CALL_CLAIM_SHA256).toMatch(/^[0-9a-f]{64}$/u);
+    expect(canonicalCall.claimSha256).toMatch(/^[0-9a-f]{64}$/u);
     expect(SAM_TEXT_HEAVY_PRODUCTION_V3_OUTPUT_ROOT).toBe('/private/tmp');
     expect(SAM_TEXT_HEAVY_PRODUCTION_V3_CLAIM_ROOT).toBe(
       '/private/tmp/fabrica-sam-text-heavy-production-v3-claims',
@@ -378,10 +394,12 @@ describe('SAM text-heavy production V3 durable canonical-call claim', () => {
     const targets = await Promise.all([
       prepareTestOnlySamTextHeavyProductionV3OutputTarget({
         root: root.capability,
+        repositoryBinding: root.repositoryBinding,
         nonce: nextNonce(),
       }),
       prepareTestOnlySamTextHeavyProductionV3OutputTarget({
         root: root.capability,
+        repositoryBinding: root.repositoryBinding,
         nonce: nextNonce(),
       }),
     ]);
@@ -390,22 +408,22 @@ describe('SAM text-heavy production V3 durable canonical-call claim', () => {
     );
     expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(1);
     expect(results.filter((result) => result.status === 'rejected')).toHaveLength(1);
-    const files = await readdir(join(root.path, 'fabrica-sam-text-heavy-production-v3-claims'));
-    expect(files).toEqual([`${SAM_TEXT_HEAVY_PRODUCTION_V3_CANONICAL_CALL_CLAIM_SHA256}.json`]);
     const winner = results.find(
       (result): result is PromiseFulfilledResult<SamTextHeavyProductionV3DurableReservation> =>
         result.status === 'fulfilled',
     )!;
     const snapshot = inspectSamTextHeavyProductionV3DurableReservation(winner.value);
+    const files = await readdir(join(root.path, 'fabrica-sam-text-heavy-production-v3-claims'));
+    expect(files).toEqual([`${snapshot.canonicalCallClaimSha256}.json`]);
     const bytes = await readFile(snapshot.claimPath);
     const record = JSON.parse(bytes.toString('utf8')) as Record<string, unknown>;
     expect(sha256Hex(bytes)).toBe(snapshot.claimRecordSha256);
     expect(record).toEqual({
       schema: 'fabrica-sam-text-heavy-production-v3-durable-claim',
-      version: 1,
+      version: 2,
       status: 'claimed-before-authorization-and-dispatch',
-      canonicalCallIdentity: SAM_TEXT_HEAVY_PRODUCTION_V3_CANONICAL_CALL_IDENTITY,
-      canonicalCallClaimSha256: SAM_TEXT_HEAVY_PRODUCTION_V3_CANONICAL_CALL_CLAIM_SHA256,
+      canonicalCallIdentity: snapshot.canonicalCallIdentity,
+      canonicalCallClaimSha256: snapshot.canonicalCallClaimSha256,
       outputRootKind: 'test-only-temporary-root',
       outputDirectory: snapshot.outputDirectory,
     });
@@ -419,6 +437,7 @@ describe('SAM text-heavy production V3 durable canonical-call claim', () => {
       const root = await freshRoot();
       const target = await prepareTestOnlySamTextHeavyProductionV3OutputTarget({
         root: root.capability,
+        repositoryBinding: root.repositoryBinding,
         nonce: nextNonce(),
       });
       const snapshot = inspectSamTextHeavyProductionV3OutputTarget(target);
@@ -459,18 +478,21 @@ describe('SAM text-heavy production V3 durable canonical-call claim', () => {
     await expect(
       prepareTestOnlySamTextHeavyProductionV3OutputTarget({
         root: root.capability,
+        repositoryBinding: root.repositoryBinding,
         nonce,
       }),
     ).rejects.toThrow(/already exists/u);
     await expect(
       prepareTestOnlySamTextHeavyProductionV3OutputTarget({
         root: { purpose: 'test-only-sam-text-heavy-production-v3-root' },
+        repositoryBinding: root.repositoryBinding,
         nonce: nextNonce(),
       }),
     ).rejects.toThrow(/foreign/u);
     await expect(
       prepareTestOnlySamTextHeavyProductionV3OutputTarget({
         root: root.capability,
+        repositoryBinding: root.repositoryBinding,
         nonce: '../escape' as never,
       }),
     ).rejects.toThrow(/nonce is malformed/u);
@@ -492,6 +514,7 @@ describe('SAM text-heavy production V3 durable canonical-call claim', () => {
     await expect(
       prepareTestOnlySamTextHeavyProductionV3OutputTarget({
         root: reserved.root.capability,
+        repositoryBinding: reserved.root.repositoryBinding,
         nonce: nextNonce(),
       }).then(reserveSamTextHeavyProductionV3CanonicalCall),
     ).rejects.toThrow(/failed closed/u);
@@ -499,6 +522,14 @@ describe('SAM text-heavy production V3 durable canonical-call claim', () => {
 });
 
 type MutableRecord = Record<string | number, unknown>;
+
+const deepFreeze = <T>(value: T): T => {
+  if (typeof value === 'object' && value !== null && !Object.isFrozen(value)) {
+    for (const child of Object.values(value)) deepFreeze(child);
+    Object.freeze(value);
+  }
+  return value;
+};
 
 const primitivePaths = (value: unknown, prefix: readonly (string | number)[] = []) => {
   const paths: (readonly (string | number)[])[] = [];
@@ -526,32 +557,49 @@ const mutatePath = (value: unknown, path: readonly (string | number)[]): unknown
   return clone;
 };
 
-const schemaAuthorization = (): unknown => ({
-  kind: 'single-text-heavy-sam-production-v3',
-  authorizationId: 'f3ffffff-ffff-4fff-8fff-ffffffffffff',
-  environment: 'provider-free-native-boundary-test',
-  providerCallAuthority: false,
-  identity: structuredClone(SAM_TEXT_HEAVY_PRODUCTION_V3_FROZEN_IDENTITY),
-  output: {
-    rootKind: 'test-only-temporary-root',
-    outputDirectory: '/private/tmp/fabrica-sam-text-heavy-production-v3-fake-ffffffffffff',
-    canonicalCallClaimSha256: SAM_TEXT_HEAVY_PRODUCTION_V3_CANONICAL_CALL_CLAIM_SHA256,
-    claimRecordSha256: 'f'.repeat(64),
-  },
-  issuedAtMs: Date.parse('2026-07-23T12:00:00Z'),
-  expiresAtMs:
-    Date.parse('2026-07-23T12:00:00Z') + SAM_TEXT_HEAVY_PRODUCTION_V3_AUTHORIZATION_LIFETIME_MS,
-  executionAuthorized: true,
-  singleUse: true,
-});
+const referenceAuthorizationIdentity = () => {
+  const repositoryExecution = deriveSamTextHeavyProductionV3CanonicalCallEvidence(
+    createValidTestOnlySamTextHeavyProductionV3RepositoryBinding(),
+  ).identity.repositoryExecution;
+  return deepFreeze({
+    ...SAM_TEXT_HEAVY_PRODUCTION_V3_FROZEN_CORPUS_REQUEST_IDENTITY,
+    repositoryExecution,
+  });
+};
+
+const schemaAuthorization = (): unknown => {
+  const identity = referenceAuthorizationIdentity();
+  return {
+    kind: 'single-text-heavy-sam-production-v3',
+    authorizationId: 'f3ffffff-ffff-4fff-8fff-ffffffffffff',
+    environment: 'provider-free-native-boundary-test',
+    providerCallAuthority: false,
+    identity,
+    output: {
+      rootKind: 'test-only-temporary-root',
+      outputDirectory: '/private/tmp/fabrica-sam-text-heavy-production-v3-fake-ffffffffffff',
+      canonicalCallClaimSha256:
+        deriveSamTextHeavyProductionV3CanonicalCallEvidenceFromRepositoryExecution(
+          identity.repositoryExecution,
+        ).claimSha256,
+      claimRecordSha256: 'f'.repeat(64),
+    },
+    issuedAtMs: Date.parse('2026-07-23T12:00:00Z'),
+    expiresAtMs:
+      Date.parse('2026-07-23T12:00:00Z') + SAM_TEXT_HEAVY_PRODUCTION_V3_AUTHORIZATION_LIFETIME_MS,
+    executionAuthorized: true,
+    singleUse: true,
+  };
+};
 
 describe('SAM text-heavy production V3 fixture-exact authorization', () => {
   it('rejects a mutation of every primitive frozen-identity leaf', () => {
-    const paths = primitivePaths(SAM_TEXT_HEAVY_PRODUCTION_V3_FROZEN_IDENTITY);
+    const identity = referenceAuthorizationIdentity();
+    const paths = primitivePaths(identity);
     expect(paths.length).toBeGreaterThan(60);
     for (const path of paths) {
       const candidate = structuredClone(schemaAuthorization()) as MutableRecord;
-      candidate.identity = mutatePath(candidate.identity, path);
+      candidate.identity = deepFreeze(mutatePath(candidate.identity, path));
       expect(
         SamTextHeavyProductionV3AuthorizationSchema.safeParse(candidate).success,
         path.join('.'),
@@ -578,6 +626,7 @@ describe('SAM text-heavy production V3 fixture-exact authorization', () => {
     const final = path.at(-1)!;
     if (replacement === undefined) delete cursor[final];
     else cursor[final] = replacement;
+    candidate.identity = deepFreeze(identity);
     expect(SamTextHeavyProductionV3AuthorizationSchema.safeParse(candidate).success).toBe(false);
   });
 
@@ -663,6 +712,7 @@ describe('SAM text-heavy production V3 fixture-exact authorization', () => {
   ] as const)('fails the closed schema on %s', (_label, mutate) => {
     const value = structuredClone(schemaAuthorization()) as MutableRecord;
     mutate(value);
+    value.identity = deepFreeze(value.identity);
     expect(SamTextHeavyProductionV3AuthorizationSchema.safeParse(value).success).toBe(false);
   });
 
@@ -1106,6 +1156,7 @@ describe('SAM text-heavy production V3 exact-once provider-free control', () => 
   it('contains no environment, logging, public-export, or provider-fetch test escape hatch', async () => {
     const sourceRoot = join(process.cwd(), 'packages', 'banner-ai', 'src');
     const files = [
+      'server/sam-text-heavy-production-v3-repository-binding.ts',
       'server/sam-text-heavy-production-v3-reservation.ts',
       'server/sam-text-heavy-production-v3-authorization.ts',
       'server/sam-text-heavy-production-v3-control.ts',

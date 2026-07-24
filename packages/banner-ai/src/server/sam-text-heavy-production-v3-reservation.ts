@@ -11,36 +11,81 @@ import {
   SAM_CORPUS_EVALUATION_FIXTURES_V1,
   SAM_CORPUS_WORKER_IMAGE_DIGEST,
 } from './sam-corpus-evaluation-catalog-v1.js';
+import {
+  SAM_TEXT_HEAVY_PRODUCTION_V3_CORPUS_PROVENANCE_SHA,
+  SamTextHeavyProductionV3RepositoryExecutionEvidenceSchema,
+  assertSamTextHeavyProductionV3RepositoryBindingProvenance,
+  revalidateSamTextHeavyProductionV3RepositoryExecutionBinding,
+  type SamTextHeavyProductionV3RepositoryExecutionEvidence,
+  type SamTextHeavyProductionV3VerifiedRepositoryBinding,
+} from './sam-text-heavy-production-v3-repository-binding.js';
 
-export const SAM_TEXT_HEAVY_PRODUCTION_V3_REPOSITORY_SHA =
-  '524a708ed95972e39a994ad711e4202238094fc2' as const;
 export const SAM_TEXT_HEAVY_PRODUCTION_V3_OUTPUT_ROOT = '/private/tmp' as const;
 export const SAM_TEXT_HEAVY_PRODUCTION_V3_CLAIM_ROOT =
   '/private/tmp/fabrica-sam-text-heavy-production-v3-claims' as const;
 
 const textHeavy = SAM_CORPUS_EVALUATION_FIXTURES_V1['text-heavy'];
 const STAGING_SUFFIX = '.fabrica-sam-corpus-staging';
-const PRODUCTION_BASENAME = /^fabrica-sam-text-heavy-real-call-v3-[0-9]{2}-524a708ed959$/u;
+const PRODUCTION_BASENAME = /^fabrica-sam-text-heavy-real-call-v3-[0-9]{2}-corpus-524a708ed959$/u;
 const TEST_ROOT_BASENAME = /^fabrica-sam-text-heavy-production-v3-test-root-[A-Za-z0-9_-]+$/u;
 const TEST_OUTPUT_BASENAME = /^fabrica-sam-text-heavy-production-v3-fake-[0-9a-f]{12}$/u;
 
-export const SAM_TEXT_HEAVY_PRODUCTION_V3_CANONICAL_CALL_IDENTITY = Object.freeze({
-  repositorySha: SAM_TEXT_HEAVY_PRODUCTION_V3_REPOSITORY_SHA,
-  endpointId: SAM_CORPUS_ENDPOINT_ID,
-  endpointVersion: SAM_CORPUS_ENDPOINT_VERSION,
-  workerImageDigest: SAM_CORPUS_WORKER_IMAGE_DIGEST,
-  fixtureId: textHeavy.fixtureId,
-  requestId: textHeavy.identifiers.requestId,
-  workspaceId: textHeavy.identifiers.workspaceId,
-  jobId: textHeavy.identifiers.jobId,
-  attemptId: textHeavy.identifiers.attemptId,
-  canonicalRequestByteLength: textHeavy.canonicalRequest.byteLength,
-  canonicalRequestSha256: textHeavy.canonicalRequest.sha256,
-});
+export interface SamTextHeavyProductionV3CanonicalCallIdentity {
+  readonly corpusProvenanceSha: typeof SAM_TEXT_HEAVY_PRODUCTION_V3_CORPUS_PROVENANCE_SHA;
+  readonly repositoryExecution: SamTextHeavyProductionV3RepositoryExecutionEvidence;
+  readonly endpointId: typeof SAM_CORPUS_ENDPOINT_ID;
+  readonly endpointVersion: typeof SAM_CORPUS_ENDPOINT_VERSION;
+  readonly workerImageDigest: typeof SAM_CORPUS_WORKER_IMAGE_DIGEST;
+  readonly fixtureId: typeof textHeavy.fixtureId;
+  readonly requestId: typeof textHeavy.identifiers.requestId;
+  readonly workspaceId: typeof textHeavy.identifiers.workspaceId;
+  readonly jobId: typeof textHeavy.identifiers.jobId;
+  readonly attemptId: typeof textHeavy.identifiers.attemptId;
+  readonly canonicalRequestByteLength: typeof textHeavy.canonicalRequest.byteLength;
+  readonly canonicalRequestSha256: typeof textHeavy.canonicalRequest.sha256;
+}
 
-export const SAM_TEXT_HEAVY_PRODUCTION_V3_CANONICAL_CALL_CLAIM_SHA256 = createHash('sha256')
-  .update(canonicalizeJson(SAM_TEXT_HEAVY_PRODUCTION_V3_CANONICAL_CALL_IDENTITY))
-  .digest('hex');
+export interface SamTextHeavyProductionV3CanonicalCallEvidence {
+  readonly identity: SamTextHeavyProductionV3CanonicalCallIdentity;
+  readonly claimSha256: string;
+}
+
+export const deriveSamTextHeavyProductionV3CanonicalCallEvidenceFromRepositoryExecution = (
+  repositoryExecution: SamTextHeavyProductionV3RepositoryExecutionEvidence,
+): SamTextHeavyProductionV3CanonicalCallEvidence => {
+  const verifiedRepositoryExecution = (() => {
+    try {
+      return SamTextHeavyProductionV3RepositoryExecutionEvidenceSchema.parse(repositoryExecution);
+    } catch {
+      throw new TypeError('SAM text-heavy repository execution evidence failed closed.');
+    }
+  })();
+  const identity = Object.freeze({
+    corpusProvenanceSha: SAM_TEXT_HEAVY_PRODUCTION_V3_CORPUS_PROVENANCE_SHA,
+    repositoryExecution: verifiedRepositoryExecution,
+    endpointId: SAM_CORPUS_ENDPOINT_ID,
+    endpointVersion: SAM_CORPUS_ENDPOINT_VERSION,
+    workerImageDigest: SAM_CORPUS_WORKER_IMAGE_DIGEST,
+    fixtureId: textHeavy.fixtureId,
+    requestId: textHeavy.identifiers.requestId,
+    workspaceId: textHeavy.identifiers.workspaceId,
+    jobId: textHeavy.identifiers.jobId,
+    attemptId: textHeavy.identifiers.attemptId,
+    canonicalRequestByteLength: textHeavy.canonicalRequest.byteLength,
+    canonicalRequestSha256: textHeavy.canonicalRequest.sha256,
+  });
+  return Object.freeze({
+    identity,
+    claimSha256: createHash('sha256').update(canonicalizeJson(identity)).digest('hex'),
+  });
+};
+
+export const deriveSamTextHeavyProductionV3CanonicalCallEvidence = (
+  repositoryBinding: SamTextHeavyProductionV3VerifiedRepositoryBinding,
+): SamTextHeavyProductionV3CanonicalCallEvidence =>
+  deriveSamTextHeavyProductionV3CanonicalCallEvidenceFromRepositoryExecution(
+    revalidateSamTextHeavyProductionV3RepositoryExecutionBinding(repositoryBinding),
+  );
 
 export type SamTextHeavyProductionV3RootKind =
   'production-private-tmp' | 'test-only-temporary-root';
@@ -65,6 +110,8 @@ interface RootState {
 
 interface OutputTargetState extends RootState {
   readonly outputDirectory: string;
+  readonly repositoryBinding: SamTextHeavyProductionV3VerifiedRepositoryBinding;
+  readonly canonicalCall: SamTextHeavyProductionV3CanonicalCallEvidence;
   reservationAttempted: boolean;
   retired: boolean;
 }
@@ -75,6 +122,7 @@ interface DurableReservationState {
   readonly claimPath: string;
   readonly claimRecordText: string;
   readonly claimRecordSha256: string;
+  readonly canonicalCall: SamTextHeavyProductionV3CanonicalCallEvidence;
 }
 
 export interface SamTextHeavyProductionV3OutputTargetSnapshot {
@@ -82,6 +130,8 @@ export interface SamTextHeavyProductionV3OutputTargetSnapshot {
   readonly outputRoot: string;
   readonly claimRoot: string;
   readonly outputDirectory: string;
+  readonly canonicalCallIdentity: SamTextHeavyProductionV3CanonicalCallIdentity;
+  readonly canonicalCallClaimSha256: string;
   readonly reservationAttempted: boolean;
   readonly retired: boolean;
 }
@@ -92,6 +142,9 @@ export interface SamTextHeavyProductionV3DurableReservationSnapshot {
   readonly outputDirectory: string;
   readonly claimPath: string;
   readonly claimRecordSha256: string;
+  readonly canonicalCallIdentity: SamTextHeavyProductionV3CanonicalCallIdentity;
+  readonly canonicalCallClaimSha256: string;
+  readonly repositoryBinding: SamTextHeavyProductionV3VerifiedRepositoryBinding;
 }
 
 const testRoots = new WeakMap<object, RootState>();
@@ -202,7 +255,14 @@ const verifyClaimFile = async (
 const prepareOutputTarget = async (
   root: RootState,
   outputDirectory: string,
+  repositoryBinding: SamTextHeavyProductionV3VerifiedRepositoryBinding,
 ): Promise<SamTextHeavyProductionV3OutputTarget> => {
+  assertSamTextHeavyProductionV3RepositoryBindingProvenance(
+    repositoryBinding,
+    root.kind === 'production-private-tmp' ? 'production-local-git' : 'test-only-injected',
+  );
+  // Repository verification precedes filesystem inspection and process-local path reservation.
+  const canonicalCall = deriveSamTextHeavyProductionV3CanonicalCallEvidence(repositoryBinding);
   await assertRealDirectory(root.outputRoot, 'SAM text-heavy approved output root');
   assertExactAbsolutePath(outputDirectory, 'SAM text-heavy output path');
   const name = basename(outputDirectory);
@@ -227,6 +287,8 @@ const prepareOutputTarget = async (
   outputTargets.set(target, {
     ...root,
     outputDirectory,
+    repositoryBinding,
+    canonicalCall,
     reservationAttempted: false,
     retired: false,
   });
@@ -234,19 +296,26 @@ const prepareOutputTarget = async (
 };
 
 /** Production stays unselected until a caller supplies one exact approved future child. */
-export const prepareSamTextHeavyProductionV3OutputTarget = async (
-  outputDirectory: string,
-): Promise<SamTextHeavyProductionV3OutputTarget> =>
-  sanitizeFilesystemBoundary('SAM text-heavy production output preflight', () =>
-    prepareOutputTarget(
-      {
-        kind: 'production-private-tmp',
-        outputRoot: SAM_TEXT_HEAVY_PRODUCTION_V3_OUTPUT_ROOT,
-        claimRoot: SAM_TEXT_HEAVY_PRODUCTION_V3_CLAIM_ROOT,
-      },
-      outputDirectory,
-    ),
-  );
+export const prepareSamTextHeavyProductionV3OutputTarget = async (input: {
+  readonly outputDirectory: string;
+  readonly repositoryBinding: SamTextHeavyProductionV3VerifiedRepositoryBinding;
+}): Promise<SamTextHeavyProductionV3OutputTarget> =>
+  typeof input === 'object' &&
+  input !== null &&
+  JSON.stringify(Object.keys(input).toSorted()) ===
+    JSON.stringify(['outputDirectory', 'repositoryBinding'])
+    ? sanitizeFilesystemBoundary('SAM text-heavy production output preflight', () =>
+        prepareOutputTarget(
+          {
+            kind: 'production-private-tmp',
+            outputRoot: SAM_TEXT_HEAVY_PRODUCTION_V3_OUTPUT_ROOT,
+            claimRoot: SAM_TEXT_HEAVY_PRODUCTION_V3_CLAIM_ROOT,
+          },
+          input.outputDirectory,
+          input.repositoryBinding,
+        ),
+      )
+    : Promise.reject(new TypeError('SAM text-heavy production output input is not closed.'));
 
 export const createTestOnlySamTextHeavyProductionV3Root = async (input: {
   readonly rootDirectory: string;
@@ -283,15 +352,23 @@ export const createTestOnlySamTextHeavyProductionV3Root = async (input: {
 
 export const prepareTestOnlySamTextHeavyProductionV3OutputTarget = async (input: {
   readonly root: SamTextHeavyProductionV3TestRoot;
+  readonly repositoryBinding: SamTextHeavyProductionV3VerifiedRepositoryBinding;
   readonly nonce?: string;
 }): Promise<SamTextHeavyProductionV3OutputTarget> => {
   if (
     typeof input !== 'object' ||
     input === null ||
-    Object.keys(input).some((key) => key !== 'root' && key !== 'nonce')
+    Object.keys(input).some(
+      (key) => key !== 'root' && key !== 'repositoryBinding' && key !== 'nonce',
+    ) ||
+    !Object.hasOwn(input, 'repositoryBinding')
   ) {
     throw new TypeError('SAM text-heavy test output input is not closed.');
   }
+  assertSamTextHeavyProductionV3RepositoryBindingProvenance(
+    input.repositoryBinding,
+    'test-only-injected',
+  );
   const root = testRoots.get(input.root);
   if (root === undefined) throw new TypeError('SAM text-heavy test root is foreign.');
   const nonce = input.nonce ?? randomUUID().replaceAll('-', '').slice(0, 12);
@@ -302,6 +379,7 @@ export const prepareTestOnlySamTextHeavyProductionV3OutputTarget = async (input:
     prepareOutputTarget(
       root,
       join(root.outputRoot, `fabrica-sam-text-heavy-production-v3-fake-${nonce}`),
+      input.repositoryBinding,
     ),
   );
 };
@@ -318,6 +396,8 @@ export const inspectSamTextHeavyProductionV3OutputTarget = (
     outputRoot: state.outputRoot,
     claimRoot: state.claimRoot,
     outputDirectory: state.outputDirectory,
+    canonicalCallIdentity: state.canonicalCall.identity,
+    canonicalCallClaimSha256: state.canonicalCall.claimSha256,
     reservationAttempted: state.reservationAttempted,
     retired: state.retired,
   });
@@ -330,27 +410,34 @@ export const reserveSamTextHeavyProductionV3CanonicalCall = async (
   if (state === undefined || state.retired || state.reservationAttempted) {
     throw new TypeError('SAM text-heavy canonical call reservation was already attempted.');
   }
+  assertSamTextHeavyProductionV3RepositoryBindingProvenance(
+    state.repositoryBinding,
+    state.kind === 'production-private-tmp' ? 'production-local-git' : 'test-only-injected',
+  );
   // Irreversible process state changes before the first filesystem callback/side effect.
   state.reservationAttempted = true;
   return sanitizeFilesystemBoundary(
     'SAM text-heavy durable canonical-call reservation',
     async () => {
+      const canonicalCall = deriveSamTextHeavyProductionV3CanonicalCallEvidence(
+        state.repositoryBinding,
+      );
+      if (canonicalizeJson(canonicalCall) !== canonicalizeJson(state.canonicalCall)) {
+        throw new TypeError('SAM text-heavy repository binding drifted before durable claim.');
+      }
       await ensureClaimRoot(state);
       // Repeat the absence checks immediately before the durable claim. A caller cannot race an
       // output or V2 staging path into existence between target preparation and reservation.
       await assertRealDirectory(state.outputRoot, 'SAM text-heavy approved output root');
       await assertAbsent(state.outputDirectory);
       await assertAbsent(`${state.outputDirectory}${STAGING_SUFFIX}`);
-      const claimPath = join(
-        state.claimRoot,
-        `${SAM_TEXT_HEAVY_PRODUCTION_V3_CANONICAL_CALL_CLAIM_SHA256}.json`,
-      );
+      const claimPath = join(state.claimRoot, `${canonicalCall.claimSha256}.json`);
       const record = Object.freeze({
         schema: 'fabrica-sam-text-heavy-production-v3-durable-claim',
-        version: 1,
+        version: 2,
         status: 'claimed-before-authorization-and-dispatch',
-        canonicalCallIdentity: SAM_TEXT_HEAVY_PRODUCTION_V3_CANONICAL_CALL_IDENTITY,
-        canonicalCallClaimSha256: SAM_TEXT_HEAVY_PRODUCTION_V3_CANONICAL_CALL_CLAIM_SHA256,
+        canonicalCallIdentity: canonicalCall.identity,
+        canonicalCallClaimSha256: canonicalCall.claimSha256,
         outputRootKind: state.kind,
         outputDirectory: state.outputDirectory,
       });
@@ -390,6 +477,7 @@ export const reserveSamTextHeavyProductionV3CanonicalCall = async (
           claimPath,
           claimRecordText,
           claimRecordSha256: recordSha256,
+          canonicalCall,
         }),
       );
       return reservation;
@@ -410,6 +498,9 @@ export const inspectSamTextHeavyProductionV3DurableReservation = (
     outputDirectory: state.targetState.outputDirectory,
     claimPath: state.claimPath,
     claimRecordSha256: state.claimRecordSha256,
+    canonicalCallIdentity: state.canonicalCall.identity,
+    canonicalCallClaimSha256: state.canonicalCall.claimSha256,
+    repositoryBinding: state.targetState.repositoryBinding,
   });
 };
 

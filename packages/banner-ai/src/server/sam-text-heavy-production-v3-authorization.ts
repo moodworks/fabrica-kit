@@ -29,12 +29,19 @@ import {
   RUNPOD_DIRECT_METHOD,
 } from './sam-runpod-direct-v3-profiles.js';
 import {
-  SAM_TEXT_HEAVY_PRODUCTION_V3_CANONICAL_CALL_CLAIM_SHA256,
-  SAM_TEXT_HEAVY_PRODUCTION_V3_REPOSITORY_SHA,
+  deriveSamTextHeavyProductionV3CanonicalCallEvidenceFromRepositoryExecution,
   inspectSamTextHeavyProductionV3DurableReservation,
   type SamTextHeavyProductionV3DurableReservation,
   type SamTextHeavyProductionV3RootKind,
 } from './sam-text-heavy-production-v3-reservation.js';
+import {
+  SAM_TEXT_HEAVY_PRODUCTION_V3_CORPUS_PROVENANCE_SHA,
+  SamTextHeavyProductionV3RepositoryExecutionEvidenceSchema,
+  assertSamTextHeavyProductionV3RepositoryBindingProvenance,
+  revalidateSamTextHeavyProductionV3RepositoryExecutionBinding,
+  type SamTextHeavyProductionV3RepositoryExecutionEvidence,
+  type SamTextHeavyProductionV3VerifiedRepositoryBinding,
+} from './sam-text-heavy-production-v3-repository-binding.js';
 
 export const SAM_TEXT_HEAVY_PRODUCTION_V3_AUTHORIZATION_LIFETIME_MS = 330_000 as const;
 
@@ -51,8 +58,8 @@ if (
   throw new TypeError('SAM text-heavy production constants drifted from the reviewed catalog.');
 }
 
-export const SAM_TEXT_HEAVY_PRODUCTION_V3_FROZEN_IDENTITY = Object.freeze({
-  repositorySha: SAM_TEXT_HEAVY_PRODUCTION_V3_REPOSITORY_SHA,
+export const SAM_TEXT_HEAVY_PRODUCTION_V3_FROZEN_CORPUS_REQUEST_IDENTITY = Object.freeze({
+  corpusProvenanceSha: SAM_TEXT_HEAVY_PRODUCTION_V3_CORPUS_PROVENANCE_SHA,
   endpoint: Object.freeze({
     id: SAM_CORPUS_ENDPOINT_ID,
     version: SAM_CORPUS_ENDPOINT_VERSION,
@@ -121,11 +128,58 @@ export const SAM_TEXT_HEAVY_PRODUCTION_V3_FROZEN_IDENTITY = Object.freeze({
   }),
 });
 
+export interface SamTextHeavyProductionV3AuthorizationIdentity {
+  readonly corpusProvenanceSha: typeof SAM_TEXT_HEAVY_PRODUCTION_V3_CORPUS_PROVENANCE_SHA;
+  readonly repositoryExecution: SamTextHeavyProductionV3RepositoryExecutionEvidence;
+  readonly endpoint: (typeof SAM_TEXT_HEAVY_PRODUCTION_V3_FROZEN_CORPUS_REQUEST_IDENTITY)['endpoint'];
+  readonly workerImage: (typeof SAM_TEXT_HEAVY_PRODUCTION_V3_FROZEN_CORPUS_REQUEST_IDENTITY)['workerImage'];
+  readonly workerImageDigest: (typeof SAM_TEXT_HEAVY_PRODUCTION_V3_FROZEN_CORPUS_REQUEST_IDENTITY)['workerImageDigest'];
+  readonly fixture: (typeof SAM_TEXT_HEAVY_PRODUCTION_V3_FROZEN_CORPUS_REQUEST_IDENTITY)['fixture'];
+  readonly request: (typeof SAM_TEXT_HEAVY_PRODUCTION_V3_FROZEN_CORPUS_REQUEST_IDENTITY)['request'];
+  readonly executionIdentity: (typeof SAM_TEXT_HEAVY_PRODUCTION_V3_FROZEN_CORPUS_REQUEST_IDENTITY)['executionIdentity'];
+  readonly capacity: (typeof SAM_TEXT_HEAVY_PRODUCTION_V3_FROZEN_CORPUS_REQUEST_IDENTITY)['capacity'];
+  readonly policy: (typeof SAM_TEXT_HEAVY_PRODUCTION_V3_FROZEN_CORPUS_REQUEST_IDENTITY)['policy'];
+  readonly profiles: (typeof SAM_TEXT_HEAVY_PRODUCTION_V3_FROZEN_CORPUS_REQUEST_IDENTITY)['profiles'];
+  readonly localIdentityEvidenceSha256: (typeof SAM_TEXT_HEAVY_PRODUCTION_V3_FROZEN_CORPUS_REQUEST_IDENTITY)['localIdentityEvidenceSha256'];
+  readonly secretReferenceName: (typeof SAM_TEXT_HEAVY_PRODUCTION_V3_FROZEN_CORPUS_REQUEST_IDENTITY)['secretReferenceName'];
+  readonly documentationEvidence: (typeof SAM_TEXT_HEAVY_PRODUCTION_V3_FROZEN_CORPUS_REQUEST_IDENTITY)['documentationEvidence'];
+  readonly publication: (typeof SAM_TEXT_HEAVY_PRODUCTION_V3_FROZEN_CORPUS_REQUEST_IDENTITY)['publication'];
+  readonly review: (typeof SAM_TEXT_HEAVY_PRODUCTION_V3_FROZEN_CORPUS_REQUEST_IDENTITY)['review'];
+  readonly registries: (typeof SAM_TEXT_HEAVY_PRODUCTION_V3_FROZEN_CORPUS_REQUEST_IDENTITY)['registries'];
+  readonly activation: (typeof SAM_TEXT_HEAVY_PRODUCTION_V3_FROZEN_CORPUS_REQUEST_IDENTITY)['activation'];
+}
+
+const createAuthorizationIdentity = (
+  repositoryExecution: SamTextHeavyProductionV3RepositoryExecutionEvidence,
+): SamTextHeavyProductionV3AuthorizationIdentity =>
+  Object.freeze({
+    ...SAM_TEXT_HEAVY_PRODUCTION_V3_FROZEN_CORPUS_REQUEST_IDENTITY,
+    repositoryExecution,
+  });
+
+const isExactAuthorizationIdentity = (
+  input: unknown,
+): input is SamTextHeavyProductionV3AuthorizationIdentity => {
+  if (typeof input !== 'object' || input === null || Array.isArray(input)) return false;
+  const candidate = input as Record<string, unknown>;
+  const repositoryExecution = SamTextHeavyProductionV3RepositoryExecutionEvidenceSchema.safeParse(
+    candidate.repositoryExecution,
+  );
+  if (!repositoryExecution.success) return false;
+  const frozen = { ...candidate };
+  delete frozen.repositoryExecution;
+  return (
+    canonicalizeJson(frozen) ===
+      canonicalizeJson(SAM_TEXT_HEAVY_PRODUCTION_V3_FROZEN_CORPUS_REQUEST_IDENTITY) &&
+    candidate.corpusProvenanceSha === SAM_TEXT_HEAVY_PRODUCTION_V3_CORPUS_PROVENANCE_SHA
+  );
+};
+
 const OutputBindingSchema = z
   .strictObject({
     rootKind: z.enum(['production-private-tmp', 'test-only-temporary-root']),
     outputDirectory: z.string().min(1).max(1_024),
-    canonicalCallClaimSha256: z.literal(SAM_TEXT_HEAVY_PRODUCTION_V3_CANONICAL_CALL_CLAIM_SHA256),
+    canonicalCallClaimSha256: z.string().regex(/^[0-9a-f]{64}$/u),
     claimRecordSha256: z.string().regex(/^[0-9a-f]{64}$/u),
   })
   .readonly();
@@ -138,7 +192,7 @@ export const SamTextHeavyProductionV3AuthorizationSchema = z
       .regex(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u),
     environment: z.enum(['production-native', 'provider-free-native-boundary-test']),
     providerCallAuthority: z.boolean(),
-    identity: z.custom<typeof SAM_TEXT_HEAVY_PRODUCTION_V3_FROZEN_IDENTITY>(),
+    identity: z.custom<SamTextHeavyProductionV3AuthorizationIdentity>(isExactAuthorizationIdentity),
     output: OutputBindingSchema,
     issuedAtMs: z.int().min(0),
     expiresAtMs: z.int().min(1),
@@ -154,8 +208,10 @@ export const SamTextHeavyProductionV3AuthorizationSchema = z
         (production ? 'production-private-tmp' : 'test-only-temporary-root') ||
       authorization.expiresAtMs - authorization.issuedAtMs !==
         SAM_TEXT_HEAVY_PRODUCTION_V3_AUTHORIZATION_LIFETIME_MS ||
-      canonicalizeJson(authorization.identity) !==
-        canonicalizeJson(SAM_TEXT_HEAVY_PRODUCTION_V3_FROZEN_IDENTITY)
+      authorization.output.canonicalCallClaimSha256 !==
+        deriveSamTextHeavyProductionV3CanonicalCallEvidenceFromRepositoryExecution(
+          authorization.identity.repositoryExecution,
+        ).claimSha256
     ) {
       context.addIssue({
         code: 'custom',
@@ -190,6 +246,8 @@ interface AuthorizationState {
   readonly issuedAtMs: number;
   readonly expiresAtMs: number;
   readonly environment: SamTextHeavyProductionV3Authorization['environment'];
+  readonly identity: SamTextHeavyProductionV3AuthorizationIdentity;
+  readonly repositoryBinding: SamTextHeavyProductionV3VerifiedRepositoryBinding;
 }
 
 interface AuthorizedExecutionState {
@@ -198,6 +256,8 @@ interface AuthorizedExecutionState {
   readonly reservation: SamTextHeavyProductionV3DurableReservation;
   readonly outputDirectory: string;
   readonly environment: SamTextHeavyProductionV3Authorization['environment'];
+  readonly repositoryBinding: SamTextHeavyProductionV3VerifiedRepositoryBinding;
+  readonly repositoryExecutionEvidence: SamTextHeavyProductionV3RepositoryExecutionEvidence;
 }
 
 const testSources = new WeakMap<object, AuthorizationSourcesState>();
@@ -261,6 +321,10 @@ const mint = (
 ): SamTextHeavyProductionV3Authorization => {
   assertPreparedTextHeavy(prepared);
   const durable = inspectSamTextHeavyProductionV3DurableReservation(reservation);
+  assertSamTextHeavyProductionV3RepositoryBindingProvenance(
+    durable.repositoryBinding,
+    environment === 'production-native' ? 'production-local-git' : 'test-only-injected',
+  );
   const expectedRootKind =
     environment === 'production-native' ? 'production-private-tmp' : 'test-only-temporary-root';
   if (durable.rootKind !== expectedRootKind) {
@@ -274,6 +338,16 @@ const mint = (
   // These marks precede injected clock/UUID callbacks and make callback reentry fail closed.
   mintAttemptedPrepared.add(prepared);
   mintAttemptedReservations.add(reservation);
+  const repositoryExecution = revalidateSamTextHeavyProductionV3RepositoryExecutionBinding(
+    durable.repositoryBinding,
+  );
+  if (
+    canonicalizeJson(repositoryExecution) !==
+    canonicalizeJson(durable.canonicalCallIdentity.repositoryExecution)
+  ) {
+    throw new TypeError('SAM text-heavy repository binding drifted before authorization mint.');
+  }
+  const identity = createAuthorizationIdentity(repositoryExecution);
   const issuedAtMs = assertClock(readAuthorizationSource('clock', sources.nowMs));
   const expiresAtMs = issuedAtMs + SAM_TEXT_HEAVY_PRODUCTION_V3_AUTHORIZATION_LIFETIME_MS;
   if (
@@ -290,11 +364,11 @@ const mint = (
     authorizationId,
     environment,
     providerCallAuthority: environment === 'production-native',
-    identity: SAM_TEXT_HEAVY_PRODUCTION_V3_FROZEN_IDENTITY,
+    identity,
     output: {
       rootKind: durable.rootKind,
       outputDirectory: durable.outputDirectory,
-      canonicalCallClaimSha256: SAM_TEXT_HEAVY_PRODUCTION_V3_CANONICAL_CALL_CLAIM_SHA256,
+      canonicalCallClaimSha256: durable.canonicalCallClaimSha256,
       claimRecordSha256: durable.claimRecordSha256,
     },
     issuedAtMs,
@@ -313,6 +387,8 @@ const mint = (
       issuedAtMs,
       expiresAtMs,
       environment,
+      identity,
+      repositoryBinding: durable.repositoryBinding,
     }),
   );
   return authorization;
@@ -399,6 +475,8 @@ const validateAt = (input: {
       parsed.output.outputDirectory !== state.outputDirectory ||
       parsed.output.outputDirectory !== durable.outputDirectory ||
       parsed.output.claimRecordSha256 !== durable.claimRecordSha256 ||
+      canonicalizeJson(parsed.identity) !== canonicalizeJson(state.identity) ||
+      parsed.output.canonicalCallClaimSha256 !== durable.canonicalCallClaimSha256 ||
       parsed.issuedAtMs > nowMs ||
       nowMs >= parsed.expiresAtMs
     ) {
@@ -455,6 +533,15 @@ const claimAuthorization = (input: {
   }
   // Consumption precedes the injected validation clock and is never rolled back on failure.
   consumedAuthorizations.add(input.authorization);
+  const state = authorizationStates.get(input.authorization)!;
+  const repositoryExecution = revalidateSamTextHeavyProductionV3RepositoryExecutionBinding(
+    state.repositoryBinding,
+  );
+  if (
+    canonicalizeJson(repositoryExecution) !== canonicalizeJson(state.identity.repositoryExecution)
+  ) {
+    throw new TypeError('SAM text-heavy repository binding drifted before execution authority.');
+  }
 };
 
 const authorizeValidated = (input: {
@@ -474,6 +561,8 @@ const authorizeValidated = (input: {
       reservation: input.reservation,
       outputDirectory: state.outputDirectory,
       environment: state.environment,
+      repositoryBinding: state.repositoryBinding,
+      repositoryExecutionEvidence: state.identity.repositoryExecution,
     }),
   );
   return authorized;
@@ -510,5 +599,13 @@ export const consumeSamTextHeavyProductionV3AuthorizedExecution = (
     throw new TypeError('SAM text-heavy authorized execution is foreign or already consumed.');
   }
   consumedExecutions.add(authorized);
+  const repositoryExecution = revalidateSamTextHeavyProductionV3RepositoryExecutionBinding(
+    state.repositoryBinding,
+  );
+  if (
+    canonicalizeJson(repositoryExecution) !== canonicalizeJson(state.repositoryExecutionEvidence)
+  ) {
+    throw new TypeError('SAM text-heavy repository binding drifted before transport construction.');
+  }
   return state;
 };

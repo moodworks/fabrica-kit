@@ -48,9 +48,13 @@ import {
 } from './sam-runpod-direct-v3-profiles.js';
 import {
   consumeSamTextHeavyProductionV3AuthorizedExecution,
-  SAM_TEXT_HEAVY_PRODUCTION_V3_FROZEN_IDENTITY,
+  SAM_TEXT_HEAVY_PRODUCTION_V3_FROZEN_CORPUS_REQUEST_IDENTITY,
   type SamTextHeavyProductionV3AuthorizedExecution,
 } from './sam-text-heavy-production-v3-authorization.js';
+import {
+  revalidateSamTextHeavyProductionV3RepositoryExecutionBinding,
+  type SamTextHeavyProductionV3RepositoryExecutionEvidence,
+} from './sam-text-heavy-production-v3-repository-binding.js';
 import {
   retireSamTextHeavyProductionV3Output,
   verifyRetiredSamTextHeavyProductionV3DurableClaim,
@@ -630,6 +634,17 @@ type ConsumedTextHeavyExecution = ReturnType<
   typeof consumeSamTextHeavyProductionV3AuthorizedExecution
 >;
 
+const revalidateExactRepositoryExecution = (exact: ConsumedTextHeavyExecution): void => {
+  const repositoryExecution = revalidateSamTextHeavyProductionV3RepositoryExecutionBinding(
+    exact.repositoryBinding,
+  );
+  if (
+    canonicalizeJson(repositoryExecution) !== canonicalizeJson(exact.repositoryExecutionEvidence)
+  ) {
+    throw new TypeError('SAM text-heavy repository binding drifted during exact execution.');
+  }
+};
+
 const verifyExactPreconstructionBindings = (exact: ConsumedTextHeavyExecution) => {
   const preparedState = inspectSamCorpusPreparedRequestV1(exact.prepared);
   const entry = preparedState.catalogEntry;
@@ -641,6 +656,7 @@ const verifyExactPreconstructionBindings = (exact: ConsumedTextHeavyExecution) =
     1,
   );
   const binding = exact.authorization.identity;
+  const { repositoryExecution, ...corpusRequestBinding } = binding;
   const production = exact.environment === 'production-native';
   if (
     entry !== SAM_CORPUS_EVALUATION_FIXTURES_V1['text-heavy'] ||
@@ -652,8 +668,9 @@ const verifyExactPreconstructionBindings = (exact: ConsumedTextHeavyExecution) =
     canonicalRequestSha256 !== entry.canonicalRequest.sha256 ||
     exact.prepared.canonicalBodyByteLength !== canonicalBytes.byteLength ||
     exact.prepared.canonicalBodySha256 !== canonicalRequestSha256 ||
-    canonicalizeJson(binding) !== canonicalizeJson(SAM_TEXT_HEAVY_PRODUCTION_V3_FROZEN_IDENTITY) ||
-    binding.repositorySha !== SAM_TEXT_HEAVY_PRODUCTION_V3_FROZEN_IDENTITY.repositorySha ||
+    canonicalizeJson(corpusRequestBinding) !==
+      canonicalizeJson(SAM_TEXT_HEAVY_PRODUCTION_V3_FROZEN_CORPUS_REQUEST_IDENTITY) ||
+    canonicalizeJson(repositoryExecution) !== canonicalizeJson(exact.repositoryExecutionEvidence) ||
     binding.endpoint.id !== SAM_CORPUS_ENDPOINT_ID ||
     binding.endpoint.version !== SAM_CORPUS_ENDPOINT_VERSION ||
     binding.endpoint.method !== 'POST' ||
@@ -739,6 +756,7 @@ export interface SamTextHeavyProductionV3ExecutionResult {
   readonly classification: 'validated-real-sam-output' | 'provider-free-deterministic-fake';
   readonly canonicalRequestByteLength: number;
   readonly canonicalRequestSha256: string;
+  readonly repositoryExecutionEvidence: SamTextHeavyProductionV3RepositoryExecutionEvidence;
   readonly validatedResponseSha256: string;
   readonly artifacts: SamCorpusMaterializationResultV2;
   readonly reviewEvidence: SamCorpusVisualReviewEvidenceV1;
@@ -768,6 +786,7 @@ export interface SamTextHeavyProductionV3TestNativeBoundaryResult {
   readonly label: typeof SAM_CORPUS_FAKE_OUTPUT_LABEL;
   readonly canonicalRequestByteLength: number;
   readonly canonicalRequestSha256: string;
+  readonly repositoryExecutionEvidence: SamTextHeavyProductionV3RepositoryExecutionEvidence;
   readonly discardedSyntheticResponseSha256: string;
   readonly discardedSyntheticCandidateCount: number;
   readonly requestEvidence: SamTextHeavyProductionV3SanitizedNativeRequestEvidence;
@@ -814,6 +833,7 @@ export const executeTestOnlySamTextHeavyProductionV3NativeBoundary = async (inpu
     });
     const { preparedState, entry, canonicalBytes, canonicalRequestSha256 } =
       verifyExactPreconstructionBindings(exact);
+    revalidateExactRepositoryExecution(exact);
     const constructed = constructTestNativeBoundaryTransport(input.transportFactory);
     counters = constructed.state;
     const adapter = createSamRunPodDirectV3Adapter({
@@ -839,6 +859,7 @@ export const executeTestOnlySamTextHeavyProductionV3NativeBoundary = async (inpu
       label: SAM_CORPUS_FAKE_OUTPUT_LABEL,
       canonicalRequestByteLength: canonicalBytes.byteLength,
       canonicalRequestSha256,
+      repositoryExecutionEvidence: exact.repositoryExecutionEvidence,
       discardedSyntheticResponseSha256: response.responseSha256,
       discardedSyntheticCandidateCount: response.candidateCount,
       requestEvidence: constructed.state.capturedRequest,
@@ -895,6 +916,7 @@ export const executeSamTextHeavyProductionV3 = async (input: {
     });
     const { preparedState, entry, canonicalBytes, canonicalRequestSha256 } =
       verifyExactPreconstructionBindings(exact);
+    revalidateExactRepositoryExecution(exact);
     const constructed = constructTransport(exact.environment, input.transportFactory);
     counters = constructed.state;
     const adapterAuthorization = production
@@ -927,6 +949,8 @@ export const executeSamTextHeavyProductionV3 = async (input: {
       response,
       outputClassification,
     });
+    // A repository change while the one external outcome was pending cannot publish artifacts.
+    revalidateExactRepositoryExecution(exact);
     materializationCount = 1;
     const testState = testTransportFactories.get(input.transportFactory);
     if (testState?.outcome.kind === 'valid-deterministic-fake-with-output-race') {
@@ -962,6 +986,7 @@ export const executeSamTextHeavyProductionV3 = async (input: {
         : ('provider-free-deterministic-fake' as const),
       canonicalRequestByteLength: canonicalBytes.byteLength,
       canonicalRequestSha256,
+      repositoryExecutionEvidence: exact.repositoryExecutionEvidence,
       validatedResponseSha256: response.responseSha256,
       artifacts,
       reviewEvidence: bindSamCorpusVisualReviewEvidenceV1(artifacts),
