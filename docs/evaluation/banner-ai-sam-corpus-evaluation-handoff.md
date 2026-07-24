@@ -1,7 +1,7 @@
 # Banner AI SAM corpus-evaluation handoff
 
 Date: 2026-07-23  
-State: provider-free implementation; external execution inactive
+State: provider-free text-heavy production-V3 implementation; external execution inactive
 
 This is the current-state handoff for the additive SAM corpus-evaluation path. Earlier version-11,
 health-only, build, and publication records remain historical evidence; they are not rewritten by
@@ -97,12 +97,54 @@ integer scores from zero through four, always higher-is-better. It emits no aver
 score. SAM provides segmentation geometry only. Semantic ranking/naming, OCR, background
 reconstruction, and matte repair remain separate capabilities.
 
+## Text-heavy production V3 preparation
+
+The additive text-heavy-only production V3 stack is bound to repository state
+`524a708ed95972e39a994ad711e4202238094fc2`. It preserves the person V1 and corpus V1/V2 paths and
+does not add web, production-admission, general-admission, product, no-text, or corpus-batch wiring.
+All production registries remain empty and all broad activation flags remain false.
+
+The V3 preparation closes over `banner-text-heavy-v1` and independently rechecks, immediately
+before any transport construction, the canonical request (222,620 bytes; SHA-256
+`a14354bb67685293a8aa3c2523db36506b2050d53f0dea90c4070bcdd015ee26`), endpoint version 12,
+immutable worker image and digest, model/checkpoint/configuration profiles, source/oracle bindings,
+automatic-mode capacity (`114138112 <= 268435456` bytes), 330,000 ms timeout, 250,000 micro-USD
+incremental ceiling, and all exact-once/zero-retry limits.
+
+One opaque prepared object can mint one 330,000 ms text-heavy authorization only after a durable
+canonical-call claim has been exclusively created, file-synced, directory-synced, and reread with
+exact byte and SHA-256 verification. The claim key is independent of output selection and binds the
+repository, deployment, immutable image digest, fixture UUID quartet, and canonical request digest.
+The future production claim root must be the private, current-user-owned directory
+`/private/tmp/fabrica-sam-text-heavy-production-v3-claims`. A future output must be one fresh,
+absent, non-symlink direct child of `/private/tmp` with the reviewed V3 basename; no production
+output path was selected or created in this milestone. Claims, authorizations, execution
+capabilities, factories, and output paths are one-way consumed and are never released for retry,
+including indeterminate outcomes.
+
+The production transport factory accepts only a server-owned key value and the fixed secret
+reference, defers canonical native transport construction until every local guard and capability
+consumption has completed, and offers no caller-injected fetch implementation. The provider-free
+tests use separately branded, closed outcome descriptors. The native-composition test uses an
+internal dummy authorization value and internal fake fetch, returns only sanitized in-memory
+request evidence, is labeled `FAKE TEST OUTPUT — NOT SAM OUTPUT`, performs no materialization, and
+cannot enter the production executor. No environment variable, credential, provider, deployment,
+or external network access occurred; the new V3 tests make no network requests (the unchanged
+worker regression suite uses only its local fixture servers).
+
+Known 4xx failures, invalid responses, exact-timeout and lost-response indeterminate outcomes, and
+local publication races are sanitized without propagating raw bodies, headers, credentials, or
+underlying error causes. Every outcome permanently consumes the one dispatch claim and remains
+non-retryable. Successful provider-free materialization retains the dynamic `3 + 3N` rule and
+produces one single-use, provider-neutral visual-review capability.
+
 ## Next gates
 
 Repository integration requires a separate review, commit, push, and pull-request authorization.
-The next external gate is a fresh read-only version-12 immutable-identity preflight. Only after that
-preflight is GO may the owner separately authorize exactly one text-heavy native POST with its
-frozen canonical request and a fresh absent output directory. Such an authorization grants nothing
-to product or no-text and retains one dispatch/fetch, one materialization, zero retry/poll/health/
-`/ping`/queue requests, the reviewed timeout and cost ceiling, and
-`providerBillingGuarantee: false`.
+The next external gate is a fresh read-only version-12 immutable-identity preflight plus explicit
+selection of one valid, absent production output child. Only after that preflight is GO may the
+owner separately authorize exactly one text-heavy native POST with its frozen canonical request.
+Such an authorization grants nothing to product or no-text and retains one dispatch/fetch, one
+materialization, zero retry/poll/health/`/ping`/queue requests, the reviewed timeout and cost
+ceiling, and `providerBillingGuarantee: false`. This handoff does not mint that authorization or
+authorize the paid call.
