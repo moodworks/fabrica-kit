@@ -99,10 +99,33 @@ reconstruction, and matte repair remain separate capabilities.
 
 ## Text-heavy production V3 preparation
 
-The additive text-heavy-only production V3 stack is bound to repository state
-`524a708ed95972e39a994ad711e4202238094fc2`. It preserves the person V1 and corpus V1/V2 paths and
-does not add web, production-admission, general-admission, product, no-text, or corpus-batch wiring.
-All production registries remain empty and all broad activation flags remain false.
+The additive text-heavy-only production V3 stack retains corpus/request provenance
+`524a708ed95972e39a994ad711e4202238094fc2`. That object ID is named only as
+`corpusProvenanceSha`; it is not the executing merge, reviewed implementation, or repository HEAD.
+The stack preserves the person V1 and corpus V1/V2 paths and does not add web,
+production-admission, general-admission, product, no-text, or corpus-batch wiring. All production
+registries remain empty and all broad activation flags remain false.
+
+Executing code is instead bound after merge. A separately authorized invocation must supply an
+immutable expected executing merge, merge tree, first parent, reviewed implementation (the second
+parent), and reviewed implementation tree. A dependency-injected observer independently reads
+sanitized local Git evidence using fixed, read-only arguments and no fetch: HEAD and its tree,
+exact parent topology, the second-parent tree, local `main`, `origin/main`, the symbolic branch,
+tracked index/worktree state, and untracked-file state. Expected values are never derived from
+observed values. The binding requires exactly two parents, equal executing/reviewed trees, exact
+expected/observed object-ID equality, synchronized local and remote-tracking `main`, an attached
+`main` checkout, and a clean index/worktree with no untracked files. Missing, extra, mutable,
+malformed, ambiguous, or mismatched evidence fails with no raw Git error, output, environment, or
+filesystem detail.
+
+Observer provenance is part of the sanitized binding evidence. Production output preparation,
+claiming, and minting accept only `production-local-git`, while deterministic tests accept only
+`test-only-injected`; the private observer/binding capabilities cannot cross those boundaries. The
+production observer is anchored to the repository containing the executing module, uses a fixed
+Git executable with a closed minimal environment, disables replacement/graft behavior and lazy
+fetch, forbids all protocols, and rejects a top-level mismatch. Caller working directory,
+`GIT_DIR`-style redirection, inherited Git configuration, replacement refs, and partial-clone
+network behavior cannot select or rewrite the observed graph.
 
 The V3 preparation closes over `banner-text-heavy-v1` and independently rechecks, immediately
 before any transport construction, the canonical request (222,620 bytes; SHA-256
@@ -113,14 +136,21 @@ incremental ceiling, and all exact-once/zero-retry limits.
 
 One opaque prepared object can mint one 330,000 ms text-heavy authorization only after a durable
 canonical-call claim has been exclusively created, file-synced, directory-synced, and reread with
-exact byte and SHA-256 verification. The claim key is independent of output selection and binds the
-repository, deployment, immutable image digest, fixture UUID quartet, and canonical request digest.
+exact byte and SHA-256 verification. The runtime-derived claim key is independent of output
+selection and binds the explicit corpus provenance, independently verified expected/observed
+execution identity, deployment, immutable image digest, fixture UUID quartet, and canonical
+request digest. It is intentionally not a source-hardcoded future commit or merge SHA. Repository
+binding is verified before output-target process reservation and durable claim creation, again
+before minting, again during one-way authorization consumption, and again during one-way execution
+consumption immediately before transport construction. Drift after a claim or authorization is
+never dispatched and remains consumed according to the existing exact-once rules.
 The future production claim root must be the private, current-user-owned directory
 `/private/tmp/fabrica-sam-text-heavy-production-v3-claims`. A future output must be one fresh,
-absent, non-symlink direct child of `/private/tmp` with the reviewed V3 basename; no production
-output path was selected or created in this milestone. Claims, authorizations, execution
-capabilities, factories, and output paths are one-way consumed and are never released for retry,
-including indeterminate outcomes.
+absent, non-symlink direct child of `/private/tmp` named
+`fabrica-sam-text-heavy-real-call-v3-NN-corpus-524a708ed959`; no production output path was selected
+or created in this milestone. Claims, authorizations, execution capabilities, factories, and
+output paths are one-way consumed and are never released for retry, including indeterminate
+outcomes.
 
 The production transport factory accepts only a server-owned key value and the fixed secret
 reference, defers canonical native transport construction until every local guard and capability
@@ -140,10 +170,13 @@ produces one single-use, provider-neutral visual-review capability.
 
 ## Next gates
 
-Repository integration requires a separate review, commit, push, and pull-request authorization.
-The next external gate is a fresh read-only version-12 immutable-identity preflight plus explicit
-selection of one valid, absent production output child. Only after that preflight is GO may the
-owner separately authorize exactly one text-heavy native POST with its frozen canonical request.
+Repository integration requires a separate review, commit, push, pull-request, merge, and local
+synchronization authorization. The merged execution-binding preflight must then receive the exact
+post-merge expected identities independently, observe matching local Git state, and recompute the
+binding-aware production claim digest. The next external gate after that local result is GO is a
+fresh read-only version-12 immutable-deployment preflight; output-child selection remains a later,
+separately authorized gate. Only after all of those gates are GO may the owner separately authorize
+exactly one text-heavy native POST with its frozen canonical request.
 Such an authorization grants nothing to product or no-text and retains one dispatch/fetch, one
 materialization, zero retry/poll/health/`/ping`/queue requests, the reviewed timeout and cost
 ceiling, and `providerBillingGuarantee: false`. This handoff does not mint that authorization or

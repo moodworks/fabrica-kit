@@ -10,6 +10,7 @@ import {
   executeTestOnlySamTextHeavyProductionV3NativeBoundary,
   inspectTestOnlySamTextHeavyProductionV3NativeBoundaryFactory,
 } from '../src/server/sam-text-heavy-production-v3-control.js';
+import { inspectSamTextHeavyProductionV3RepositoryExecutionBinding } from '../src/server/sam-text-heavy-production-v3-repository-binding.js';
 import { createSamTextHeavyProductionV3TestContext } from './sam-text-heavy-production-v3-test-helpers.js';
 
 describe('SAM text-heavy production V3 test-only native boundary', () => {
@@ -28,6 +29,9 @@ describe('SAM text-heavy production V3 test-only native boundary', () => {
         label: SAM_CORPUS_FAKE_OUTPUT_LABEL,
         canonicalRequestByteLength: 222_620,
         canonicalRequestSha256: 'a14354bb67685293a8aa3c2523db36506b2050d53f0dea90c4070bcdd015ee26',
+        repositoryExecutionEvidence: inspectSamTextHeavyProductionV3RepositoryExecutionBinding(
+          context.repositoryBinding,
+        ),
         discardedSyntheticResponseSha256: expect.stringMatching(/^[0-9a-f]{64}$/u),
         discardedSyntheticCandidateCount: 1,
         requestEvidence: {
