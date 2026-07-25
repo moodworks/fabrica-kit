@@ -54,7 +54,8 @@ export const SAM_TEXT_HEAVY_PRODUCTION_V3_FAKE_OBSERVED_REPOSITORY_IDENTITY: Sam
   });
 
 export const SAM_TEXT_HEAVY_PRODUCTION_V3_FAKE_REFERENCE_CANONICAL_CLAIM_SHA256 =
-  '48d8bfaa9f376b278cbdf033c36678dcb282b20c4dc6670a154746075caca75c' as const;
+  // FAKE TEST OUTPUT — NOT SAM OUTPUT. This binds only test-injected repository evidence.
+  '34932b87f1a17b512e64c193ac96e42a0c79a09ab8e86ec2a9f27c2f8a396cae' as const;
 
 export const createValidTestOnlySamTextHeavyProductionV3RepositoryBinding = (
   observe: () => unknown = () => SAM_TEXT_HEAVY_PRODUCTION_V3_FAKE_OBSERVED_REPOSITORY_IDENTITY,
