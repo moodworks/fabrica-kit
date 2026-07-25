@@ -8,14 +8,10 @@ import { canonicalizeJson, sha256Hex } from '../scene/canonical-scene-json.js';
 import {
   SAM_CORPUS_CLIENT_TIMEOUT_MS,
   SAM_CORPUS_COST_MAXIMUM_MICRO_USD,
-  SAM_CORPUS_ENDPOINT_ID,
-  SAM_CORPUS_ENDPOINT_VERSION,
   SAM_CORPUS_EVALUATION_FIXTURES_V1,
   SAM_CORPUS_EXECUTION_IDENTITY,
   SAM_CORPUS_PROFILE_IDENTITIES,
   SAM_CORPUS_REQUEST_LIMITS,
-  SAM_CORPUS_WORKER_IMAGE,
-  SAM_CORPUS_WORKER_IMAGE_DIGEST,
   deriveSamAutomaticBatchPeakBytesV1,
   inspectSamCorpusPreparedRequestV1,
 } from './sam-corpus-evaluation-catalog-v1.js';
@@ -46,6 +42,11 @@ import {
   RUNPOD_DIRECT_DOCUMENTATION_RETRIEVED_AT,
   SamRunPodDirectV3AuthorizationSchema,
 } from './sam-runpod-direct-v3-profiles.js';
+import {
+  SAM_TEXT_HEAVY_RUNPOD_DEPLOYMENT_V1,
+  SAM_TEXT_HEAVY_RUNPOD_DEPLOYMENT_V1_CANONICAL_SHA256,
+  SAM_TEXT_HEAVY_RUNPOD_DEPLOYMENT_V1_WORKER_IMAGE_DIGEST,
+} from './sam-text-heavy-production-v3-deployment.js';
 import {
   consumeSamTextHeavyProductionV3AuthorizedExecution,
   SAM_TEXT_HEAVY_PRODUCTION_V3_FROZEN_CORPUS_REQUEST_IDENTITY,
@@ -361,7 +362,7 @@ const createSyntheticResponse = (
     throw new TypeError('SAM text-heavy test request body is malformed.');
   }
   const { workerImageDigest, ...baseRequest } = parsed as Record<string, unknown>;
-  if (workerImageDigest !== SAM_CORPUS_WORKER_IMAGE_DIGEST) {
+  if (workerImageDigest !== SAM_TEXT_HEAVY_RUNPOD_DEPLOYMENT_V1_WORKER_IMAGE_DIGEST) {
     throw new TypeError('SAM text-heavy test request image digest drifted.');
   }
   const { request } = parseAndVerifySamMaskRequest(baseRequest);
@@ -435,7 +436,8 @@ const constructTestNativeBoundaryTransport = (
     const body = init?.body;
     if (
       typeof requestInput !== 'string' ||
-      requestInput !== `https://${SAM_CORPUS_ENDPOINT_ID}.api.runpod.ai/v1/masks` ||
+      requestInput !==
+        `https://${SAM_TEXT_HEAVY_RUNPOD_DEPLOYMENT_V1.endpointId}.api.runpod.ai/v1/masks` ||
       init?.method !== 'POST' ||
       typeof headers !== 'object' ||
       headers === null ||
@@ -645,6 +647,17 @@ const revalidateExactRepositoryExecution = (exact: ConsumedTextHeavyExecution): 
   }
 };
 
+const revalidateExactDeploymentIdentity = (exact: ConsumedTextHeavyExecution): void => {
+  if (
+    canonicalizeJson(exact.authorization.identity.deploymentIdentity) !==
+      canonicalizeJson(SAM_TEXT_HEAVY_RUNPOD_DEPLOYMENT_V1) ||
+    exact.authorization.identity.deploymentIdentitySha256 !==
+      SAM_TEXT_HEAVY_RUNPOD_DEPLOYMENT_V1_CANONICAL_SHA256
+  ) {
+    throw new TypeError('SAM text-heavy deployment identity drifted at execution boundary.');
+  }
+};
+
 const verifyExactPreconstructionBindings = (exact: ConsumedTextHeavyExecution) => {
   const preparedState = inspectSamCorpusPreparedRequestV1(exact.prepared);
   const entry = preparedState.catalogEntry;
@@ -671,13 +684,12 @@ const verifyExactPreconstructionBindings = (exact: ConsumedTextHeavyExecution) =
     canonicalizeJson(corpusRequestBinding) !==
       canonicalizeJson(SAM_TEXT_HEAVY_PRODUCTION_V3_FROZEN_CORPUS_REQUEST_IDENTITY) ||
     canonicalizeJson(repositoryExecution) !== canonicalizeJson(exact.repositoryExecutionEvidence) ||
-    binding.endpoint.id !== SAM_CORPUS_ENDPOINT_ID ||
-    binding.endpoint.version !== SAM_CORPUS_ENDPOINT_VERSION ||
+    canonicalizeJson(binding.deploymentIdentity) !==
+      canonicalizeJson(SAM_TEXT_HEAVY_RUNPOD_DEPLOYMENT_V1) ||
+    binding.deploymentIdentitySha256 !== SAM_TEXT_HEAVY_RUNPOD_DEPLOYMENT_V1_CANONICAL_SHA256 ||
     binding.endpoint.method !== 'POST' ||
     binding.endpoint.path !== '/v1/masks' ||
     binding.endpoint.redirectCount !== 0 ||
-    binding.workerImage !== SAM_CORPUS_WORKER_IMAGE ||
-    binding.workerImageDigest !== SAM_CORPUS_WORKER_IMAGE_DIGEST ||
     canonicalizeJson(binding.fixture.source) !== canonicalizeJson(entry.normalized) ||
     canonicalizeJson(binding.fixture.humanOracle) !== canonicalizeJson(entry.humanOracle) ||
     canonicalizeJson(binding.request.identifiers) !== canonicalizeJson(entry.identifiers) ||
@@ -717,8 +729,8 @@ const createExactAdapterAuthorization = (
   SamRunPodDirectV3AuthorizationSchema.parse({
     kind: 'single-fixture-sam-runpod-direct-v3',
     authorizationId: exact.authorization.authorizationId,
-    endpointId: SAM_CORPUS_ENDPOINT_ID,
-    imageDigest: SAM_CORPUS_WORKER_IMAGE_DIGEST,
+    endpointId: SAM_TEXT_HEAVY_RUNPOD_DEPLOYMENT_V1.endpointId,
+    imageDigest: SAM_TEXT_HEAVY_RUNPOD_DEPLOYMENT_V1_WORKER_IMAGE_DIGEST,
     secretReferenceName: RUNPOD_API_KEY_REFERENCE,
     executionIdentity: SAM_CORPUS_EXECUTION_IDENTITY,
     hostingProfileSha256: exact.authorization.identity.profiles.hostingSha256,
@@ -834,14 +846,15 @@ export const executeTestOnlySamTextHeavyProductionV3NativeBoundary = async (inpu
     const { preparedState, entry, canonicalBytes, canonicalRequestSha256 } =
       verifyExactPreconstructionBindings(exact);
     revalidateExactRepositoryExecution(exact);
+    revalidateExactDeploymentIdentity(exact);
     const constructed = constructTestNativeBoundaryTransport(input.transportFactory);
     counters = constructed.state;
     const adapter = createSamRunPodDirectV3Adapter({
-      endpointId: SAM_CORPUS_ENDPOINT_ID,
+      endpointId: SAM_TEXT_HEAVY_RUNPOD_DEPLOYMENT_V1.endpointId,
       expectedExecutionIdentity: SAM_CORPUS_EXECUTION_IDENTITY,
       transport: constructed.transport,
       authorization: createExactAdapterAuthorization(exact, entry),
-      configuredImageDigest: SAM_CORPUS_WORKER_IMAGE_DIGEST,
+      configuredImageDigest: SAM_TEXT_HEAVY_RUNPOD_DEPLOYMENT_V1_WORKER_IMAGE_DIGEST,
       nowMs: () => exact.authorization.issuedAtMs,
     });
     const response = await adapter.dispatchPrepared(preparedState.directPrepared);
@@ -917,6 +930,7 @@ export const executeSamTextHeavyProductionV3 = async (input: {
     const { preparedState, entry, canonicalBytes, canonicalRequestSha256 } =
       verifyExactPreconstructionBindings(exact);
     revalidateExactRepositoryExecution(exact);
+    revalidateExactDeploymentIdentity(exact);
     const constructed = constructTransport(exact.environment, input.transportFactory);
     counters = constructed.state;
     const adapterAuthorization = production
@@ -929,7 +943,7 @@ export const executeSamTextHeavyProductionV3 = async (input: {
       throw new TypeError('SAM text-heavy authorization execution identity drifted.');
     }
     const adapter = createSamRunPodDirectV3Adapter({
-      endpointId: SAM_CORPUS_ENDPOINT_ID,
+      endpointId: SAM_TEXT_HEAVY_RUNPOD_DEPLOYMENT_V1.endpointId,
       expectedExecutionIdentity: production
         ? SAM_CORPUS_EXECUTION_IDENTITY
         : SAM_DETERMINISTIC_DIRECT_FAKE_IDENTITY,
@@ -937,13 +951,14 @@ export const executeSamTextHeavyProductionV3 = async (input: {
       ...(production
         ? {
             authorization: adapterAuthorization,
-            configuredImageDigest: SAM_CORPUS_WORKER_IMAGE_DIGEST,
+            configuredImageDigest: SAM_TEXT_HEAVY_RUNPOD_DEPLOYMENT_V1_WORKER_IMAGE_DIGEST,
             nowMs: Date.now,
           }
         : { fakeTimeoutMs: SAM_CORPUS_CLIENT_TIMEOUT_MS }),
     });
     const startedAt = performance.now();
     const response = await adapter.dispatchPrepared(preparedState.directPrepared);
+    revalidateExactDeploymentIdentity(exact);
     const validated = validateSamCorpusVisualResponseV2({
       prepared: exact.prepared,
       response,

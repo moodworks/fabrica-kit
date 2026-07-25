@@ -21,12 +21,8 @@ import { parseAndVerifySamMaskResponse } from '../src/sam/sam-mask-validation.js
 import { sha256Hex } from '../src/scene/canonical-scene-json.js';
 import {
   SAM_CORPUS_CLIENT_TIMEOUT_MS,
-  SAM_CORPUS_ENDPOINT_ID,
-  SAM_CORPUS_ENDPOINT_VERSION,
   SAM_CORPUS_EVALUATION_FIXTURES_V1,
   SAM_CORPUS_EXECUTION_IDENTITY,
-  SAM_CORPUS_WORKER_IMAGE,
-  SAM_CORPUS_WORKER_IMAGE_DIGEST,
   inspectSamCorpusPreparedRequestV1,
   prepareSamNoTextCorpusRequestV1,
   prepareSamProductCorpusRequestV1,
@@ -67,7 +63,13 @@ import {
   inspectTestOnlySamTextHeavyProductionV3TransportFactory,
 } from '../src/server/sam-text-heavy-production-v3-control.js';
 import {
+  SAM_TEXT_HEAVY_RUNPOD_DEPLOYMENT_V1,
+  SAM_TEXT_HEAVY_RUNPOD_DEPLOYMENT_V1_CANONICAL_SHA256,
+} from '../src/server/sam-text-heavy-production-v3-deployment.js';
+import {
   SAM_TEXT_HEAVY_PRODUCTION_V3_CLAIM_ROOT,
+  SAM_TEXT_HEAVY_PRODUCTION_V3_OUTPUT_NAMING_POLICY,
+  SAM_TEXT_HEAVY_PRODUCTION_V3_OUTPUT_NAMING_POLICY_SHA256,
   SAM_TEXT_HEAVY_PRODUCTION_V3_OUTPUT_ROOT,
   createTestOnlySamTextHeavyProductionV3Root,
   deriveSamTextHeavyProductionV3CanonicalCallEvidence,
@@ -229,16 +231,14 @@ describe('SAM text-heavy production V3 frozen identity and inactive admission', 
     );
     expect(SAM_TEXT_HEAVY_PRODUCTION_V3_FROZEN_CORPUS_REQUEST_IDENTITY).toMatchObject({
       corpusProvenanceSha: SAM_TEXT_HEAVY_PRODUCTION_V3_CORPUS_PROVENANCE_SHA,
+      deploymentIdentity: SAM_TEXT_HEAVY_RUNPOD_DEPLOYMENT_V1,
+      deploymentIdentitySha256: SAM_TEXT_HEAVY_RUNPOD_DEPLOYMENT_V1_CANONICAL_SHA256,
       endpoint: {
-        id: SAM_CORPUS_ENDPOINT_ID,
-        version: SAM_CORPUS_ENDPOINT_VERSION,
-        url: `https://${SAM_CORPUS_ENDPOINT_ID}.api.runpod.ai/v1/masks`,
+        url: `https://${SAM_TEXT_HEAVY_RUNPOD_DEPLOYMENT_V1.endpointId}.api.runpod.ai/v1/masks`,
         method: 'POST',
         path: '/v1/masks',
         redirectCount: 0,
       },
-      workerImage: SAM_CORPUS_WORKER_IMAGE,
-      workerImageDigest: SAM_CORPUS_WORKER_IMAGE_DIGEST,
       fixture: {
         key: 'text-heavy',
         id: fixture.fixtureId,
@@ -294,9 +294,10 @@ describe('SAM text-heavy production V3 frozen identity and inactive admission', 
         expected: SAM_TEXT_HEAVY_PRODUCTION_V3_FAKE_EXPECTED_REPOSITORY_IDENTITY,
         observed: SAM_TEXT_HEAVY_PRODUCTION_V3_FAKE_OBSERVED_REPOSITORY_IDENTITY,
       },
-      endpointId: SAM_CORPUS_ENDPOINT_ID,
-      endpointVersion: 12,
-      workerImageDigest: SAM_CORPUS_WORKER_IMAGE_DIGEST,
+      deploymentIdentity: SAM_TEXT_HEAVY_RUNPOD_DEPLOYMENT_V1,
+      deploymentIdentitySha256: SAM_TEXT_HEAVY_RUNPOD_DEPLOYMENT_V1_CANONICAL_SHA256,
+      outputNamingPolicy: SAM_TEXT_HEAVY_PRODUCTION_V3_OUTPUT_NAMING_POLICY,
+      outputNamingPolicySha256: SAM_TEXT_HEAVY_PRODUCTION_V3_OUTPUT_NAMING_POLICY_SHA256,
       fixtureId: fixture.fixtureId,
       ...fixture.identifiers,
       canonicalRequestByteLength: 222_620,
@@ -429,6 +430,37 @@ describe('SAM text-heavy production V3 durable canonical-call claim', () => {
     });
     expect(bytes.toString('utf8')).not.toMatch(/apiKey|credential|bearer|rawResponse|headers/iu);
     expect(await lstat(snapshot.claimPath)).toMatchObject({ mode: expect.any(Number) });
+  });
+
+  it.each([
+    'fabrica-sam-text-heavy-real-call-v3-00-corpus-524a708ed959',
+    'fabrica-sam-text-heavy-real-call-v3-00-524a708ed959',
+  ])('rescans and preserves potentially real prior state before claiming: %s', async (name) => {
+    const root = await freshRoot();
+    const target = await prepareTestOnlySamTextHeavyProductionV3OutputTarget({
+      root: root.capability,
+      repositoryBinding: root.repositoryBinding,
+      nonce: nextNonce(),
+    });
+    const snapshot = inspectSamTextHeavyProductionV3OutputTarget(target);
+    const priorStatePath = join(root.path, name);
+    await mkdir(priorStatePath);
+    const dormantFactory = createTestOnlySamTextHeavyProductionV3TransportFactory({
+      outcome: { kind: 'throw-after-dispatch' },
+    });
+    await expect(reserveSamTextHeavyProductionV3CanonicalCall(target)).rejects.toThrow(
+      /prior output state appeared before durable claim/u,
+    );
+    expect(await readdir(priorStatePath)).toEqual([]);
+    expect(await readdir(join(root.path, 'fabrica-sam-text-heavy-production-v3-claims'))).toEqual(
+      [],
+    );
+    await expect(lstat(snapshot.outputDirectory)).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(inspectTestOnlySamTextHeavyProductionV3TransportFactory(dormantFactory)).toEqual({
+      constructionCount: 0,
+      dispatchCount: 0,
+      fetchCount: 0,
+    });
   });
 
   it.each(['output', 'staging'] as const)(
@@ -608,14 +640,18 @@ describe('SAM text-heavy production V3 fixture-exact authorization', () => {
   });
 
   it.each([
-    ['endpoint version 11', ['endpoint', 'version'], 11],
-    ['endpoint version string', ['endpoint', 'version'], '12'],
-    ['mutable worker image tag', ['workerImage'], 'ghcr.io/moodworks/fabrica-sam-worker:latest'],
-    ['wrong worker digest', ['workerImageDigest'], `sha256:${'0'.repeat(64)}`],
+    ['endpoint version 11', ['deploymentIdentity', 'endpointVersion'], 11],
+    ['endpoint version string', ['deploymentIdentity', 'endpointVersion'], '12'],
+    [
+      'mutable worker image tag',
+      ['deploymentIdentity', 'workerImage'],
+      'ghcr.io/moodworks/fabrica-sam-worker:latest',
+    ],
+    ['wrong deployment digest', ['deploymentIdentitySha256'], `${'0'.repeat(64)}`],
     ['health route', ['endpoint', 'path'], '/ping'],
     ['wrong endpoint URL route', ['endpoint', 'url'], 'https://sawwuq4u7oiftj.api.runpod.ai/ping'],
     ['wrong method', ['endpoint', 'method'], 'GET'],
-    ['missing endpoint version', ['endpoint', 'version'], undefined],
+    ['missing endpoint version', ['deploymentIdentity', 'endpointVersion'], undefined],
     ['string source byte length', ['fixture', 'source', 'byteLength'], '166461'],
     ['string timeout', ['policy', 'clientWallTimeoutMs'], '330000'],
   ] as const)('names and rejects %s', (_label, path, replacement) => {
@@ -1157,6 +1193,7 @@ describe('SAM text-heavy production V3 exact-once provider-free control', () => 
     const sourceRoot = join(process.cwd(), 'packages', 'banner-ai', 'src');
     const files = [
       'server/sam-text-heavy-production-v3-repository-binding.ts',
+      'server/sam-text-heavy-production-v3-deployment.ts',
       'server/sam-text-heavy-production-v3-reservation.ts',
       'server/sam-text-heavy-production-v3-authorization.ts',
       'server/sam-text-heavy-production-v3-control.ts',

@@ -329,6 +329,7 @@ describe('SAM text-heavy production V3 closed repository execution binding', () 
       await Promise.all(
         [
           'sam-text-heavy-production-v3-repository-binding.ts',
+          'sam-text-heavy-production-v3-deployment.ts',
           'sam-text-heavy-production-v3-reservation.ts',
           'sam-text-heavy-production-v3-authorization.ts',
           'sam-text-heavy-production-v3-control.ts',
@@ -433,11 +434,8 @@ describe('SAM text-heavy production V3 repository-binding integration', () => {
   it('rejects test-observer provenance from production output, claim, and mint boundaries', async () => {
     const root = await createRoot();
     const { binding, observer } = verifyFakeBinding();
-    const invalidProductionSentinel =
-      '/private/tmp/TEST_ONLY_INVALID_SAM_TEXT_HEAVY_V3_OUTPUT_SENTINEL';
     await expect(
       prepareSamTextHeavyProductionV3OutputTarget({
-        outputDirectory: invalidProductionSentinel,
         repositoryBinding: binding,
       }),
     ).rejects.toThrow(/observer provenance failed closed/u);
@@ -497,7 +495,7 @@ describe('SAM text-heavy production V3 repository-binding integration', () => {
     const root = await createRoot();
     const valid = SAM_TEXT_HEAVY_PRODUCTION_V3_FAKE_OBSERVED_REPOSITORY_IDENTITY;
     const drift = frozenObserved({ originMainSha: 'a'.repeat(40) });
-    const { binding } = verifyFakeBinding({ observations: [valid, valid, valid, drift] });
+    const { binding } = verifyFakeBinding({ observations: [valid, valid, valid, valid, drift] });
     const target = await prepareTestOnlySamTextHeavyProductionV3OutputTarget({
       root: root.root,
       repositoryBinding: binding,
@@ -535,7 +533,7 @@ describe('SAM text-heavy production V3 repository-binding integration', () => {
     const valid = SAM_TEXT_HEAVY_PRODUCTION_V3_FAKE_OBSERVED_REPOSITORY_IDENTITY;
     const drift = frozenObserved({ worktreeClean: false });
     const { binding } = verifyFakeBinding({
-      observations: [valid, valid, valid, valid, valid, drift],
+      observations: [valid, valid, valid, valid, valid, valid, drift],
     });
     const target = await prepareTestOnlySamTextHeavyProductionV3OutputTarget({
       root: root.root,

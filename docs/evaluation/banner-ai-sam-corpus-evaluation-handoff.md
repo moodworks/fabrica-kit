@@ -1,7 +1,7 @@
 # Banner AI SAM corpus-evaluation handoff
 
-Date: 2026-07-23  
-State: provider-free text-heavy production-V3 implementation; external execution inactive
+Date: 2026-07-24
+State: uncommitted provider-free text-heavy production-V3 repair; external execution inactive
 
 This is the current-state handoff for the additive SAM corpus-evaluation path. Earlier version-11,
 health-only, build, and publication records remain historical evidence; they are not rewritten by
@@ -10,16 +10,38 @@ production-admission, web-route, corpus-batch, or paid-call authority.
 
 ## Current reviewed deployment identity
 
-The successful control-plane preflight identified the existing endpoint as:
+The closed repository identity `fabrica-sam-text-heavy-runpod-deployment-v1` encodes the expected
+deployment as one strict, deeply immutable object:
 
-| Binding                   | Reviewed value                                                                                                 |
-| ------------------------- | -------------------------------------------------------------------------------------------------------------- |
-| Endpoint                  | `sawwuq4u7oiftj`                                                                                               |
-| Endpoint version          | `12`                                                                                                           |
-| Worker image              | `ghcr.io/moodworks/fabrica-sam-worker@sha256:5f6058eb5f626ada2ce9ad3e9f105cd12b601f614df83265ab8479c8403ae7a8` |
-| Minimum / maximum workers | `0 / 1`                                                                                                        |
-| GPUs per worker           | `1`                                                                                                            |
-| Published port            | `8000/http`                                                                                                    |
+| Closed field      | Expected literal                                                                                               |
+| ----------------- | -------------------------------------------------------------------------------------------------------------- |
+| Schema / version  | `fabrica-sam-text-heavy-runpod-deployment-v1` / integer `1`                                                    |
+| Endpoint ID       | `sawwuq4u7oiftj`                                                                                               |
+| Endpoint name     | `fabrica-sam21-baseplus-build3`                                                                                |
+| Endpoint type     | `LOAD_BALANCING`                                                                                               |
+| Endpoint version  | integer `12`                                                                                                   |
+| Worker image      | `ghcr.io/moodworks/fabrica-sam-worker@sha256:5f6058eb5f626ada2ce9ad3e9f105cd12b601f614df83265ab8479c8403ae7a8` |
+| Minimum workers   | integer `0`                                                                                                    |
+| Maximum workers   | integer `1`                                                                                                    |
+| GPU count         | integer `1`                                                                                                    |
+| Ports             | exact ordered singleton tuple `["8000/http"]`                                                                  |
+| Template identity | `{ "state": "absent" }`                                                                                        |
+
+Its deterministic canonical SHA-256 is
+`3dc9365383ee512316e8883503071243d6b35dfae489967008ab7396c19b72dd`. The full object and
+digest are embedded in both the frozen authorization identity and canonical-call claim identity,
+so every field is cryptographically bound. No caller override, partial merge, default, optional
+required field, mutable image tag, environment substitution, or independent text-heavy V3
+deployment constant exists.
+
+The pure observation boundary accepts only a separate strict sanitized semantic object. Its exact
+comparison establishes field equality only and always returns
+`semantic-only-no-observation-authority` with `productionEvidence: false`; caller-supplied
+provenance keys are rejected. A later trusted control-plane preflight must independently establish
+and retain observation provenance around this comparison. Expected values always come from the
+frozen repository object, never from observed values. This module performs no credential access,
+HTTP, deployment mutation, or raw-response parsing, and it does not claim that RunPod exposes the
+repository-bound model, checkpoint, SAM commit, profile, corpus, or Git identities.
 
 The model remains Meta SAM 2.1 base-plus at repository commit
 `05d9e57fb3945b10c861046c1e6749e2bfc258e3`, config
@@ -129,10 +151,11 @@ network behavior cannot select or rewrite the observed graph.
 
 The V3 preparation closes over `banner-text-heavy-v1` and independently rechecks, immediately
 before any transport construction, the canonical request (222,620 bytes; SHA-256
-`a14354bb67685293a8aa3c2523db36506b2050d53f0dea90c4070bcdd015ee26`), endpoint version 12,
-immutable worker image and digest, model/checkpoint/configuration profiles, source/oracle bindings,
+`a14354bb67685293a8aa3c2523db36506b2050d53f0dea90c4070bcdd015ee26`), the complete closed
+deployment identity and digest, model/checkpoint/configuration profiles, source/oracle bindings,
 automatic-mode capacity (`114138112 <= 268435456` bytes), 330,000 ms timeout, 250,000 micro-USD
-incremental ceiling, and all exact-once/zero-retry limits.
+incremental ceiling, and all exact-once/zero-retry limits. It rechecks the deployment identity at
+the post-response pre-materialization boundary as well.
 
 One opaque prepared object can mint one 330,000 ms text-heavy authorization only after a durable
 canonical-call claim has been exclusively created, file-synced, directory-synced, and reread with
@@ -148,9 +171,16 @@ The future production claim root must be the private, current-user-owned directo
 `/private/tmp/fabrica-sam-text-heavy-production-v3-claims`. A future output must be one fresh,
 absent, non-symlink direct child of `/private/tmp` named
 `fabrica-sam-text-heavy-real-call-v3-NN-corpus-524a708ed959`; no production output path was selected
-or created in this milestone. Claims, authorizations, execution capabilities, factories, and
-output paths are one-way consumed and are never released for retry, including indeterminate
-outcomes.
+or created in this milestone. The `524a708ed959` suffix is derived only from the first 12
+hexadecimal characters of the explicitly labelled corpus provenance SHA
+`524a708ed95972e39a994ad711e4202238094fc2`; reviewed-implementation, executing-merge, and generic
+repository identities cannot affect it. Production preparation accepts only a verified repository
+binding, derives the basename internally, and accepts no caller root, basename, sequence,
+provenance, prefix, or suffix. A read-only fixed-root scan recognizes both the canonical namespace
+and the conflicting legacy `fabrica-sam-text-heavy-real-call-v3-NN-524a708ed959` namespace,
+including staging names, and refuses any matching prior state without choosing a later `NN`.
+Claims, authorizations, execution capabilities, factories, and output paths are one-way consumed
+and are never released for retry, including indeterminate outcomes.
 
 The production transport factory accepts only a server-owned key value and the fixed secret
 reference, defers canonical native transport construction until every local guard and capability

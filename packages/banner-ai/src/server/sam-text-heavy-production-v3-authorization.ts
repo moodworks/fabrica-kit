@@ -7,15 +7,11 @@ import { canonicalizeJson } from '../scene/canonical-scene-json.js';
 import {
   SAM_CORPUS_CLIENT_TIMEOUT_MS,
   SAM_CORPUS_COST_MAXIMUM_MICRO_USD,
-  SAM_CORPUS_ENDPOINT_ID,
-  SAM_CORPUS_ENDPOINT_VERSION,
   SAM_CORPUS_EVALUATION_FIXTURES_V1,
   SAM_CORPUS_EXECUTION_IDENTITY,
   SAM_CORPUS_LOCAL_IDENTITY_EVIDENCE_SHA256,
   SAM_CORPUS_PROFILE_IDENTITIES,
   SAM_CORPUS_REQUEST_LIMITS,
-  SAM_CORPUS_WORKER_IMAGE,
-  SAM_CORPUS_WORKER_IMAGE_DIGEST,
   inspectSamCorpusPreparedRequestV1,
   type SamCorpusPreparedRequestV1,
 } from './sam-corpus-evaluation-catalog-v1.js';
@@ -28,6 +24,10 @@ import {
   RUNPOD_DIRECT_MASK_PATH,
   RUNPOD_DIRECT_METHOD,
 } from './sam-runpod-direct-v3-profiles.js';
+import {
+  SAM_TEXT_HEAVY_RUNPOD_DEPLOYMENT_V1,
+  SAM_TEXT_HEAVY_RUNPOD_DEPLOYMENT_V1_CANONICAL_SHA256,
+} from './sam-text-heavy-production-v3-deployment.js';
 import {
   deriveSamTextHeavyProductionV3CanonicalCallEvidenceFromRepositoryExecution,
   inspectSamTextHeavyProductionV3DurableReservation,
@@ -60,16 +60,14 @@ if (
 
 export const SAM_TEXT_HEAVY_PRODUCTION_V3_FROZEN_CORPUS_REQUEST_IDENTITY = Object.freeze({
   corpusProvenanceSha: SAM_TEXT_HEAVY_PRODUCTION_V3_CORPUS_PROVENANCE_SHA,
+  deploymentIdentity: SAM_TEXT_HEAVY_RUNPOD_DEPLOYMENT_V1,
+  deploymentIdentitySha256: SAM_TEXT_HEAVY_RUNPOD_DEPLOYMENT_V1_CANONICAL_SHA256,
   endpoint: Object.freeze({
-    id: SAM_CORPUS_ENDPOINT_ID,
-    version: SAM_CORPUS_ENDPOINT_VERSION,
-    url: `https://${SAM_CORPUS_ENDPOINT_ID}.api.runpod.ai${RUNPOD_DIRECT_MASK_PATH}`,
+    url: `https://${SAM_TEXT_HEAVY_RUNPOD_DEPLOYMENT_V1.endpointId}.api.runpod.ai${RUNPOD_DIRECT_MASK_PATH}`,
     method: RUNPOD_DIRECT_METHOD,
     path: RUNPOD_DIRECT_MASK_PATH,
     redirectCount: 0 as const,
   }),
-  workerImage: SAM_CORPUS_WORKER_IMAGE,
-  workerImageDigest: SAM_CORPUS_WORKER_IMAGE_DIGEST,
   fixture: Object.freeze({
     key: textHeavy.fixtureKey,
     id: textHeavy.fixtureId,
@@ -131,9 +129,9 @@ export const SAM_TEXT_HEAVY_PRODUCTION_V3_FROZEN_CORPUS_REQUEST_IDENTITY = Objec
 export interface SamTextHeavyProductionV3AuthorizationIdentity {
   readonly corpusProvenanceSha: typeof SAM_TEXT_HEAVY_PRODUCTION_V3_CORPUS_PROVENANCE_SHA;
   readonly repositoryExecution: SamTextHeavyProductionV3RepositoryExecutionEvidence;
+  readonly deploymentIdentity: (typeof SAM_TEXT_HEAVY_PRODUCTION_V3_FROZEN_CORPUS_REQUEST_IDENTITY)['deploymentIdentity'];
+  readonly deploymentIdentitySha256: (typeof SAM_TEXT_HEAVY_PRODUCTION_V3_FROZEN_CORPUS_REQUEST_IDENTITY)['deploymentIdentitySha256'];
   readonly endpoint: (typeof SAM_TEXT_HEAVY_PRODUCTION_V3_FROZEN_CORPUS_REQUEST_IDENTITY)['endpoint'];
-  readonly workerImage: (typeof SAM_TEXT_HEAVY_PRODUCTION_V3_FROZEN_CORPUS_REQUEST_IDENTITY)['workerImage'];
-  readonly workerImageDigest: (typeof SAM_TEXT_HEAVY_PRODUCTION_V3_FROZEN_CORPUS_REQUEST_IDENTITY)['workerImageDigest'];
   readonly fixture: (typeof SAM_TEXT_HEAVY_PRODUCTION_V3_FROZEN_CORPUS_REQUEST_IDENTITY)['fixture'];
   readonly request: (typeof SAM_TEXT_HEAVY_PRODUCTION_V3_FROZEN_CORPUS_REQUEST_IDENTITY)['request'];
   readonly executionIdentity: (typeof SAM_TEXT_HEAVY_PRODUCTION_V3_FROZEN_CORPUS_REQUEST_IDENTITY)['executionIdentity'];
