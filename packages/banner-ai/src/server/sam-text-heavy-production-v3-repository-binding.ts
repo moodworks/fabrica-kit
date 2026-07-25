@@ -134,7 +134,48 @@ interface VerifiedRepositoryBindingState {
 const repositoryObservers = new WeakMap<object, RepositoryObserverState>();
 const verifiedRepositoryBindings = new WeakMap<object, VerifiedRepositoryBindingState>();
 
-const EXECUTING_MODULE_REPOSITORY_ROOT = (() => {
+export const SAM_TEXT_HEAVY_PRODUCTION_V3_REPOSITORY_OBSERVATION_ERROR_CODE =
+  'SAM_TEXT_HEAVY_PRODUCTION_V3_REPOSITORY_OBSERVATION_FAILED' as const;
+export const SAM_TEXT_HEAVY_PRODUCTION_V3_REPOSITORY_BINDING_ERROR_CODE =
+  'SAM_TEXT_HEAVY_PRODUCTION_V3_REPOSITORY_BINDING_FAILED' as const;
+
+type RepositoryBoundaryErrorCode =
+  | typeof SAM_TEXT_HEAVY_PRODUCTION_V3_REPOSITORY_OBSERVATION_ERROR_CODE
+  | typeof SAM_TEXT_HEAVY_PRODUCTION_V3_REPOSITORY_BINDING_ERROR_CODE;
+
+const closedRepositoryBoundaryErrors = new WeakSet<object>();
+
+const createClosedRepositoryBoundaryError = (
+  code: RepositoryBoundaryErrorCode,
+  message: string,
+): TypeError & Readonly<{ code: RepositoryBoundaryErrorCode }> => {
+  const error = new TypeError(message) as TypeError & { code: RepositoryBoundaryErrorCode };
+  Object.defineProperty(error, 'code', {
+    configurable: false,
+    enumerable: true,
+    value: code,
+    writable: false,
+  });
+  Reflect.deleteProperty(error, 'stack');
+  closedRepositoryBoundaryErrors.add(error);
+  return Object.freeze(error);
+};
+
+const throwClosedRepositoryObservationError = (): never => {
+  throw createClosedRepositoryBoundaryError(
+    SAM_TEXT_HEAVY_PRODUCTION_V3_REPOSITORY_OBSERVATION_ERROR_CODE,
+    'SAM text-heavy Git observation failed closed.',
+  );
+};
+
+const throwClosedRepositoryBindingError = (): never => {
+  throw createClosedRepositoryBoundaryError(
+    SAM_TEXT_HEAVY_PRODUCTION_V3_REPOSITORY_BINDING_ERROR_CODE,
+    'SAM text-heavy repository execution binding failed closed.',
+  );
+};
+
+const EXECUTING_MODULE_REPOSITORY_ROOT = ((): string => {
   try {
     const root = realpathSync(resolve(dirname(fileURLToPath(import.meta.url)), '../../../..'));
     if (root.includes('\0') || root.includes('\n')) {
@@ -142,13 +183,14 @@ const EXECUTING_MODULE_REPOSITORY_ROOT = (() => {
     }
     return root;
   } catch {
-    throw new TypeError('SAM text-heavy executing repository root failed closed.');
+    return throwClosedRepositoryObservationError();
   }
 })();
 const GIT_EXECUTABLE = '/usr/bin/git';
 const GIT_ENVIRONMENT = Object.freeze({
   LANG: 'C',
   LC_ALL: 'C',
+  TMPDIR: '/tmp',
   GIT_ASKPASS: '/usr/bin/false',
   GIT_CONFIG_GLOBAL: '/dev/null',
   GIT_CONFIG_NOSYSTEM: '1',
@@ -228,10 +270,25 @@ const GIT_REPLACEMENT_REFS_ARGS = Object.freeze([
   'refs/replace/',
 ] as const);
 const GIT_COMMON_DIRECTORY_ARGS = Object.freeze(['rev-parse', '--git-common-dir'] as const);
+const GIT_SHALLOW_REPOSITORY_ARGS = Object.freeze([
+  'rev-parse',
+  '--is-shallow-repository',
+] as const);
 
-const runGit = (args: readonly string[], allowedStatuses: readonly number[]) => {
+type ClosedGitResult = Readonly<{ status: number; stdout: string }>;
+type ClosedGitCommand = (
+  args: readonly string[],
+  allowedStatuses: readonly number[],
+) => ClosedGitResult;
+
+const runGitAtRepositoryRoot = (
+  repositoryRoot: string,
+  args: readonly string[],
+  allowedStatuses: readonly number[],
+): ClosedGitResult => {
   const result = spawnSync(GIT_EXECUTABLE, [...GIT_COMMON_ARGUMENTS, ...args], {
     ...GIT_COMMON_OPTIONS,
+    cwd: repositoryRoot,
     shell: false,
   });
   if (
@@ -242,20 +299,26 @@ const runGit = (args: readonly string[], allowedStatuses: readonly number[]) => 
   ) {
     throw new TypeError('Git observation failed.');
   }
-  return result;
+  return Object.freeze({ status: result.status, stdout: result.stdout });
 };
 
-const runGitText = (args: readonly string[]): string => runGit(args, [0]).stdout;
+const createClosedGitCommand =
+  (repositoryRoot: string): ClosedGitCommand =>
+  (args, allowedStatuses) =>
+    runGitAtRepositoryRoot(repositoryRoot, args, allowedStatuses);
 
-const readExactGitObjectId = (args: readonly string[]): string => {
-  const output = runGitText(args);
+const runGitText = (runGit: ClosedGitCommand, args: readonly string[]): string =>
+  runGit(args, [0]).stdout;
+
+const readExactGitObjectId = (runGit: ClosedGitCommand, args: readonly string[]): string => {
+  const output = runGitText(runGit, args);
   if (!/^[0-9a-f]{40}\n$/u.test(output)) {
     throw new TypeError('Git object identity was not one exact object ID.');
   }
   return output.slice(0, -1);
 };
 
-const runGitStatus = (args: readonly string[]): 0 | 1 => {
+const runGitStatus = (runGit: ClosedGitCommand, args: readonly string[]): 0 | 1 => {
   const result = runGit(args, [0, 1]);
   if (result.stdout !== '') {
     throw new TypeError('Git status observation was ambiguous.');
@@ -263,7 +326,9 @@ const runGitStatus = (args: readonly string[]): 0 | 1 => {
   return result.status as 0 | 1;
 };
 
-const observeCurrentBranch = (): {
+const observeCurrentBranch = (
+  runGit: ClosedGitCommand,
+): {
   readonly headDetached: boolean;
   readonly currentBranchIsMain: boolean;
 } => {
@@ -283,15 +348,17 @@ const observeCurrentBranch = (): {
   });
 };
 
-const assertNoLegacyGrafts = (): void => {
-  const output = runGitText(GIT_COMMON_DIRECTORY_ARGS);
+const observeGitCommonDirectory = (runGit: ClosedGitCommand, repositoryRoot: string): string => {
+  const output = runGitText(runGit, GIT_COMMON_DIRECTORY_ARGS);
   if (!/^[^\0\n]+\n$/u.test(output)) {
     throw new TypeError('Git common-directory observation was ambiguous.');
   }
-  const commonDirectory = resolve(EXECUTING_MODULE_REPOSITORY_ROOT, output.slice(0, -1));
+  return resolve(repositoryRoot, output.slice(0, -1));
+};
+
+const assertPathAbsent = (path: string, forbiddenMessage: string): void => {
   try {
-    lstatSync(join(commonDirectory, 'info', 'grafts'));
-    throw new TypeError('Legacy Git grafts are forbidden.');
+    lstatSync(path);
   } catch (error) {
     if (
       typeof error !== 'object' ||
@@ -299,25 +366,39 @@ const assertNoLegacyGrafts = (): void => {
       !('code' in error) ||
       error.code !== 'ENOENT'
     ) {
-      throw new TypeError('Legacy Git graft observation failed closed.');
+      throw new TypeError('Git repository metadata observation failed closed.');
     }
+    return;
   }
+  throw new TypeError(forbiddenMessage);
 };
 
-const observeProductionRepository = (): SamTextHeavyProductionV3ObservedRepositoryIdentity => {
+const assertRepositoryIsNotShallow = (runGit: ClosedGitCommand, commonDirectory: string): void => {
+  if (runGitText(runGit, GIT_SHALLOW_REPOSITORY_ARGS) !== 'false\n') {
+    throw new TypeError('Shallow Git history is forbidden.');
+  }
+  assertPathAbsent(join(commonDirectory, 'shallow'), 'Shallow Git metadata is forbidden.');
+};
+
+const observeRepository = (
+  repositoryRoot: string,
+  runGit: ClosedGitCommand,
+): SamTextHeavyProductionV3ObservedRepositoryIdentity => {
   if (
-    runGitText(GIT_INSIDE_WORK_TREE_ARGS) !== 'true\n' ||
-    runGitText(GIT_TOP_LEVEL_ARGS) !== `${EXECUTING_MODULE_REPOSITORY_ROOT}\n`
+    runGitText(runGit, GIT_INSIDE_WORK_TREE_ARGS) !== 'true\n' ||
+    runGitText(runGit, GIT_TOP_LEVEL_ARGS) !== `${repositoryRoot}\n`
   ) {
     throw new TypeError('Git worktree could not be resolved.');
   }
-  if (runGitText(GIT_REPLACEMENT_REFS_ARGS) !== '') {
+  const commonDirectory = observeGitCommonDirectory(runGit, repositoryRoot);
+  assertRepositoryIsNotShallow(runGit, commonDirectory);
+  if (runGitText(runGit, GIT_REPLACEMENT_REFS_ARGS) !== '') {
     throw new TypeError('Git replacement refs are forbidden.');
   }
-  assertNoLegacyGrafts();
-  const headSha = readExactGitObjectId(GIT_HEAD_ARGS);
-  const headTreeSha = readExactGitObjectId(GIT_HEAD_TREE_ARGS);
-  const parentsOutput = runGitText(GIT_HEAD_PARENTS_ARGS);
+  assertPathAbsent(join(commonDirectory, 'info', 'grafts'), 'Legacy Git grafts are forbidden.');
+  const headSha = readExactGitObjectId(runGit, GIT_HEAD_ARGS);
+  const headTreeSha = readExactGitObjectId(runGit, GIT_HEAD_TREE_ARGS);
+  const parentsOutput = runGitText(runGit, GIT_HEAD_PARENTS_ARGS);
   if (!/^[0-9a-f]{40}(?: [0-9a-f]{40})*\n$/u.test(parentsOutput)) {
     throw new TypeError('Git parent observation was ambiguous.');
   }
@@ -325,8 +406,8 @@ const observeProductionRepository = (): SamTextHeavyProductionV3ObservedReposito
   if (listedHead !== headSha) {
     throw new TypeError('Git HEAD and parent observation disagreed.');
   }
-  const branch = observeCurrentBranch();
-  const untrackedOutput = runGitText(GIT_UNTRACKED_ARGS);
+  const branch = observeCurrentBranch(runGit);
+  const untrackedOutput = runGitText(runGit, GIT_UNTRACKED_ARGS);
   return SamTextHeavyProductionV3ObservedRepositoryIdentitySchema.parse(
     Object.freeze({
       headSha,
@@ -335,16 +416,22 @@ const observeProductionRepository = (): SamTextHeavyProductionV3ObservedReposito
       firstParentSha: parentShas[0] ?? null,
       secondParentSha: parentShas[1] ?? null,
       secondParentTreeSha:
-        parentShas.length >= 2 ? readExactGitObjectId(GIT_REVIEWED_TREE_ARGS) : null,
-      localMainSha: readExactGitObjectId(GIT_LOCAL_MAIN_ARGS),
-      originMainSha: readExactGitObjectId(GIT_ORIGIN_MAIN_ARGS),
+        parentShas.length >= 2 ? readExactGitObjectId(runGit, GIT_REVIEWED_TREE_ARGS) : null,
+      localMainSha: readExactGitObjectId(runGit, GIT_LOCAL_MAIN_ARGS),
+      originMainSha: readExactGitObjectId(runGit, GIT_ORIGIN_MAIN_ARGS),
       ...branch,
-      indexClean: runGitStatus(GIT_INDEX_CLEAN_ARGS) === 0,
-      worktreeClean: runGitStatus(GIT_WORKTREE_CLEAN_ARGS) === 0,
+      indexClean: runGitStatus(runGit, GIT_INDEX_CLEAN_ARGS) === 0,
+      worktreeClean: runGitStatus(runGit, GIT_WORKTREE_CLEAN_ARGS) === 0,
       untrackedFilesPresent: untrackedOutput !== '',
     }),
   );
 };
+
+const observeProductionRepository = (): SamTextHeavyProductionV3ObservedRepositoryIdentity =>
+  observeRepository(
+    EXECUTING_MODULE_REPOSITORY_ROOT,
+    createClosedGitCommand(EXECUTING_MODULE_REPOSITORY_ROOT),
+  );
 
 const createRepositoryObserver = (
   observe: () => unknown,
@@ -381,13 +468,100 @@ export const createTestOnlySamTextHeavyProductionV3RepositoryObserver = (input: 
   return createRepositoryObserver(input.observe, 'test-only-injected');
 };
 
+export type SamTextHeavyProductionV3TestOnlyLocalGitFault =
+  | 'missing-shallow-probe-output'
+  | 'malformed-shallow-probe-output'
+  | 'ambiguous-shallow-probe-output'
+  | 'unexpected-shallow-probe-output'
+  | 'shallow-probe-command-failure'
+  | 'unexpected-runtime-failure';
+
+const TEST_ONLY_LOCAL_GIT_FAULTS = Object.freeze([
+  'missing-shallow-probe-output',
+  'malformed-shallow-probe-output',
+  'ambiguous-shallow-probe-output',
+  'unexpected-shallow-probe-output',
+  'shallow-probe-command-failure',
+  'unexpected-runtime-failure',
+] as const);
+
+/**
+ * Exercises the production local-Git observer against an isolated repository fixture. Production
+ * callers cannot supply a repository root or command result, and this observer retains test-only
+ * provenance so every production output, claim, authorization, and transport boundary rejects it.
+ */
+export const createTestOnlySamTextHeavyProductionV3LocalGitRepositoryObserver = (input: {
+  readonly repositoryRoot: string;
+  readonly fault?: SamTextHeavyProductionV3TestOnlyLocalGitFault;
+}): SamTextHeavyProductionV3RepositoryObserver => {
+  let repositoryRootInput: string;
+  let fault: SamTextHeavyProductionV3TestOnlyLocalGitFault | undefined;
+  try {
+    repositoryRootInput = input.repositoryRoot;
+    fault = input.fault;
+  } catch {
+    return throwClosedRepositoryObservationError();
+  }
+  if (
+    typeof input !== 'object' ||
+    input === null ||
+    JSON.stringify(Object.keys(input).toSorted()) !==
+      JSON.stringify(fault === undefined ? ['repositoryRoot'] : ['fault', 'repositoryRoot']) ||
+    typeof repositoryRootInput !== 'string' ||
+    (fault !== undefined && !TEST_ONLY_LOCAL_GIT_FAULTS.includes(fault))
+  ) {
+    return throwClosedRepositoryObservationError();
+  }
+  let repositoryRoot: string;
+  try {
+    repositoryRoot = realpathSync(repositoryRootInput);
+    if (repositoryRoot.includes('\0') || repositoryRoot.includes('\n')) {
+      throw new TypeError('Test repository root was ambiguous.');
+    }
+  } catch {
+    return throwClosedRepositoryObservationError();
+  }
+  const fixedGitCommand = createClosedGitCommand(repositoryRoot);
+  const runGit: ClosedGitCommand = (args, allowedStatuses) => {
+    if (fault === 'unexpected-runtime-failure') {
+      throw new Error(`Unexpected observer runtime failure inside ${repositoryRoot}.`);
+    }
+    if (args !== GIT_SHALLOW_REPOSITORY_ARGS || fault === undefined) {
+      return fixedGitCommand(args, allowedStatuses);
+    }
+    switch (fault) {
+      case 'missing-shallow-probe-output':
+        return Object.freeze({ status: 0, stdout: '' });
+      case 'malformed-shallow-probe-output':
+        return Object.freeze({ status: 0, stdout: 'FALSE\n' });
+      case 'ambiguous-shallow-probe-output':
+        return Object.freeze({ status: 0, stdout: 'false\ntrue\n' });
+      case 'unexpected-shallow-probe-output':
+        return Object.freeze({ status: 0, stdout: 'unknown\n' });
+      case 'shallow-probe-command-failure':
+        throw new Error(
+          `Raw Git command, stderr, environment, and repository path must remain internal: ${repositoryRoot}`,
+        );
+      default:
+        return throwClosedRepositoryObservationError();
+    }
+  };
+  return createRepositoryObserver(
+    () => observeRepository(repositoryRoot, runGit),
+    'test-only-injected',
+  );
+};
+
 const parseExpectedIdentity = (
   input: unknown,
 ): SamTextHeavyProductionV3ExpectedRepositoryIdentity => {
   try {
     return SamTextHeavyProductionV3ExpectedRepositoryIdentitySchema.parse(input);
   } catch {
-    throw new TypeError('SAM text-heavy expected repository identity failed closed.');
+    throw createClosedRepositoryBoundaryError(
+      SAM_TEXT_HEAVY_PRODUCTION_V3_REPOSITORY_BINDING_ERROR_CODE,
+      'SAM text-heavy expected repository identity failed closed.',
+    );
   }
 };
 
@@ -396,17 +570,23 @@ const readObservedIdentity = (
 ): SamTextHeavyProductionV3ObservedRepositoryIdentity => {
   const state = repositoryObservers.get(observer);
   if (state === undefined) {
-    throw new TypeError('SAM text-heavy repository observer is foreign.');
+    throw createClosedRepositoryBoundaryError(
+      SAM_TEXT_HEAVY_PRODUCTION_V3_REPOSITORY_OBSERVATION_ERROR_CODE,
+      'SAM text-heavy repository observer is foreign.',
+    );
   }
   if (state.observationInProgress) {
-    throw new TypeError('SAM text-heavy repository observation reentry is forbidden.');
+    throw createClosedRepositoryBoundaryError(
+      SAM_TEXT_HEAVY_PRODUCTION_V3_REPOSITORY_OBSERVATION_ERROR_CODE,
+      'SAM text-heavy repository observation reentry is forbidden.',
+    );
   }
   state.observationInProgress = true;
   state.observationCount += 1;
   try {
     return SamTextHeavyProductionV3ObservedRepositoryIdentitySchema.parse(state.observe());
   } catch {
-    throw new TypeError('SAM text-heavy Git observation failed closed.');
+    return throwClosedRepositoryObservationError();
   } finally {
     state.observationInProgress = false;
   }
@@ -417,49 +597,83 @@ const assertExpectedObservedBinding = (
   observed: SamTextHeavyProductionV3ObservedRepositoryIdentity,
 ): void => {
   if (!expectedObservedRepositoryIdentityMatches(expected, observed)) {
-    throw new TypeError('SAM text-heavy repository execution binding failed closed.');
+    return throwClosedRepositoryBindingError();
   }
 };
 
 const revalidateState = (
   state: VerifiedRepositoryBindingState,
 ): SamTextHeavyProductionV3RepositoryExecutionEvidence => {
-  const observed = readObservedIdentity(state.observer);
-  assertExpectedObservedBinding(state.expected, observed);
-  const evidence = SamTextHeavyProductionV3RepositoryExecutionEvidenceSchema.parse(
-    Object.freeze({
-      schema: 'sam-text-heavy-production-v3-repository-execution-binding',
-      version: 2,
-      observerProvenance: state.observerProvenance,
-      expected: state.expected,
-      observed,
-    }),
-  );
-  state.evidence = evidence;
-  return evidence;
+  try {
+    const observed = readObservedIdentity(state.observer);
+    assertExpectedObservedBinding(state.expected, observed);
+    const evidence = SamTextHeavyProductionV3RepositoryExecutionEvidenceSchema.parse(
+      Object.freeze({
+        schema: 'sam-text-heavy-production-v3-repository-execution-binding',
+        version: 2,
+        observerProvenance: state.observerProvenance,
+        expected: state.expected,
+        observed,
+      }),
+    );
+    state.evidence = evidence;
+    return evidence;
+  } catch (error) {
+    if (typeof error === 'object' && error !== null && closedRepositoryBoundaryErrors.has(error)) {
+      throw error;
+    }
+    return throwClosedRepositoryBindingError();
+  }
+};
+
+const hasClosedRepositoryBindingInputShape = (
+  input: unknown,
+): input is Readonly<{
+  expected: SamTextHeavyProductionV3ExpectedRepositoryIdentity;
+  observer: SamTextHeavyProductionV3RepositoryObserver;
+}> => {
+  try {
+    return (
+      typeof input === 'object' &&
+      input !== null &&
+      JSON.stringify(Object.keys(input).toSorted()) === JSON.stringify(['expected', 'observer'])
+    );
+  } catch {
+    return false;
+  }
 };
 
 export const verifySamTextHeavyProductionV3RepositoryExecutionBinding = (input: {
   readonly expected: SamTextHeavyProductionV3ExpectedRepositoryIdentity;
   readonly observer: SamTextHeavyProductionV3RepositoryObserver;
 }): SamTextHeavyProductionV3VerifiedRepositoryBinding => {
-  if (
-    typeof input !== 'object' ||
-    input === null ||
-    JSON.stringify(Object.keys(input).toSorted()) !== JSON.stringify(['expected', 'observer'])
-  ) {
-    throw new TypeError('SAM text-heavy repository binding input is not closed.');
+  if (!hasClosedRepositoryBindingInputShape(input)) {
+    throw createClosedRepositoryBoundaryError(
+      SAM_TEXT_HEAVY_PRODUCTION_V3_REPOSITORY_BINDING_ERROR_CODE,
+      'SAM text-heavy repository binding input is not closed.',
+    );
   }
-  const observerState = repositoryObservers.get(input.observer);
+  let expectedInput: SamTextHeavyProductionV3ExpectedRepositoryIdentity;
+  let observerInput: SamTextHeavyProductionV3RepositoryObserver;
+  try {
+    expectedInput = input.expected;
+    observerInput = input.observer;
+  } catch {
+    return throwClosedRepositoryBindingError();
+  }
+  const observerState = repositoryObservers.get(observerInput);
   if (observerState === undefined) {
-    throw new TypeError('SAM text-heavy repository observer is foreign.');
+    throw createClosedRepositoryBoundaryError(
+      SAM_TEXT_HEAVY_PRODUCTION_V3_REPOSITORY_OBSERVATION_ERROR_CODE,
+      'SAM text-heavy repository observer is foreign.',
+    );
   }
   const binding = Object.freeze({
     purpose: 'verified-sam-text-heavy-production-v3-repository-binding' as const,
   });
   const state: VerifiedRepositoryBindingState = {
-    expected: parseExpectedIdentity(input.expected),
-    observer: input.observer,
+    expected: parseExpectedIdentity(expectedInput),
+    observer: observerInput,
     observerProvenance: observerState.provenance,
     evidence: null,
   };
@@ -473,7 +687,10 @@ export const revalidateSamTextHeavyProductionV3RepositoryExecutionBinding = (
 ): SamTextHeavyProductionV3RepositoryExecutionEvidence => {
   const state = verifiedRepositoryBindings.get(binding);
   if (state === undefined) {
-    throw new TypeError('SAM text-heavy repository binding is foreign.');
+    throw createClosedRepositoryBoundaryError(
+      SAM_TEXT_HEAVY_PRODUCTION_V3_REPOSITORY_BINDING_ERROR_CODE,
+      'SAM text-heavy repository binding is foreign.',
+    );
   }
   return revalidateState(state);
 };
@@ -483,7 +700,10 @@ export const inspectSamTextHeavyProductionV3RepositoryExecutionBinding = (
 ): SamTextHeavyProductionV3RepositoryExecutionEvidence => {
   const state = verifiedRepositoryBindings.get(binding);
   if (state?.evidence === null || state === undefined) {
-    throw new TypeError('SAM text-heavy repository binding is foreign or unverified.');
+    throw createClosedRepositoryBoundaryError(
+      SAM_TEXT_HEAVY_PRODUCTION_V3_REPOSITORY_BINDING_ERROR_CODE,
+      'SAM text-heavy repository binding is foreign or unverified.',
+    );
   }
   return state.evidence;
 };
@@ -494,7 +714,10 @@ export const assertSamTextHeavyProductionV3RepositoryBindingProvenance = (
 ): void => {
   const state = verifiedRepositoryBindings.get(binding);
   if (state === undefined || state.observerProvenance !== expectedProvenance) {
-    throw new TypeError('SAM text-heavy repository observer provenance failed closed.');
+    throw createClosedRepositoryBoundaryError(
+      SAM_TEXT_HEAVY_PRODUCTION_V3_REPOSITORY_BINDING_ERROR_CODE,
+      'SAM text-heavy repository observer provenance failed closed.',
+    );
   }
 };
 

@@ -1,12 +1,20 @@
 # Banner AI SAM corpus-evaluation handoff
 
-Date: 2026-07-24
-State: uncommitted provider-free text-heavy production-V3 repair; external execution inactive
+Date: 2026-07-25
+State: deployment-schema repair merged; preflight-guard repair in review; external execution inactive
 
 This is the current-state handoff for the additive SAM corpus-evaluation path. Earlier version-11,
 health-only, build, and publication records remain historical evidence; they are not rewritten by
 this document. This handoff grants no deployment, health, provider, credential, authorization,
 production-admission, web-route, corpus-batch, or paid-call authority.
+
+The deployment-schema repair was reviewed as implementation
+`d0f9f9bccffc35bc56bed98af7ec6f6ff5779be6` and merged through PR #10 as executing merge
+`f62233f6b6ce4204cbc828d15eb6905f7061fdb4`. The subsequent post-merge preflight stopped `NO-GO`
+before real production-claim derivation, credential access, or RunPod contact. The current
+`sam-text-heavy-preflight-repair-v3` repair is limited to closing the preflight findings in
+repository observation, canonical claim binding, observer-error sanitization, and this handoff
+state.
 
 ## Current reviewed deployment identity
 
@@ -128,17 +136,21 @@ The stack preserves the person V1 and corpus V1/V2 paths and does not add web,
 production-admission, general-admission, product, no-text, or corpus-batch wiring. All production
 registries remain empty and all broad activation flags remain false.
 
-Executing code is instead bound after merge. A separately authorized invocation must supply an
-immutable expected executing merge, merge tree, first parent, reviewed implementation (the second
-parent), and reviewed implementation tree. A dependency-injected observer independently reads
-sanitized local Git evidence using fixed, read-only arguments and no fetch: HEAD and its tree,
-exact parent topology, the second-parent tree, local `main`, `origin/main`, the symbolic branch,
-tracked index/worktree state, and untracked-file state. Expected values are never derived from
-observed values. The binding requires exactly two parents, equal executing/reviewed trees, exact
-expected/observed object-ID equality, synchronized local and remote-tracking `main`, an attached
-`main` checkout, and a clean index/worktree with no untracked files. Missing, extra, mutable,
-malformed, ambiguous, or mismatched evidence fails with no raw Git error, output, environment, or
-filesystem detail.
+The PR #10 execution is bound to executing merge
+`f62233f6b6ce4204cbc828d15eb6905f7061fdb4` and reviewed implementation
+`d0f9f9bccffc35bc56bed98af7ec6f6ff5779be6`; neither identity is interchangeable with corpus
+provenance. A separately authorized invocation must supply an immutable expected executing merge,
+merge tree, first parent, reviewed implementation (the second parent), and reviewed implementation
+tree. The production-local observer independently reads sanitized local Git evidence using fixed,
+read-only arguments and no fetch: the authoritative shallow-history probe and shallow metadata,
+HEAD and its tree, exact parent topology, the second-parent tree, local `main`, `origin/main`, the
+symbolic branch, tracked index/worktree state, and untracked-file state. Expected values are never
+derived from observed values. The binding requires non-shallow history, exactly two parents, equal
+executing/reviewed trees, exact expected/observed object-ID equality, synchronized local and
+remote-tracking `main`, an attached `main` checkout, and a clean index/worktree with no untracked
+files. Missing, extra, mutable, malformed, ambiguous, or mismatched evidence crosses the boundary
+only as a closed error code and stackless sanitized message, with no raw Git error, output,
+environment, command, or filesystem detail.
 
 Observer provenance is part of the sanitized binding evidence. Production output preparation,
 claiming, and minting accept only `production-local-git`, while deterministic tests accept only
@@ -200,13 +212,13 @@ produces one single-use, provider-neutral visual-review capability.
 
 ## Next gates
 
-Repository integration requires a separate review, commit, push, pull-request, merge, and local
-synchronization authorization. The merged execution-binding preflight must then receive the exact
-post-merge expected identities independently, observe matching local Git state, and recompute the
-binding-aware production claim digest. The next external gate after that local result is GO is a
-fresh read-only version-12 immutable-deployment preflight; output-child selection remains a later,
-separately authorized gate. Only after all of those gates are GO may the owner separately authorize
-exactly one text-heavy native POST with its frozen canonical request.
+The current `sam-text-heavy-preflight-repair-v3` repair is committed and awaiting independent
+approval. After approval, it must be merged through a normal pull request and locally synchronized.
+Its remaining gate after that integration is a fresh Sol session that repeats the complete post-merge
+local and two-request RunPod control-plane preflight against the new merge. That preflight may derive
+the binding-aware production claim digest only after all local guards pass, but it still must not select an output
+child or execute inference. Only after that separate preflight is `GO` may the owner consider a
+separately authorized paid-call gate.
 Such an authorization grants nothing to product or no-text and retains one dispatch/fetch, one
 materialization, zero retry/poll/health/`/ping`/queue requests, the reviewed timeout and cost
 ceiling, and `providerBillingGuarantee: false`. This handoff does not mint that authorization or

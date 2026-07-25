@@ -54,7 +54,7 @@ export const SAM_TEXT_HEAVY_PRODUCTION_V3_FAKE_OBSERVED_REPOSITORY_IDENTITY: Sam
   });
 
 export const SAM_TEXT_HEAVY_PRODUCTION_V3_FAKE_REFERENCE_CANONICAL_CLAIM_SHA256 =
-  // FAKE TEST OUTPUT — NOT SAM OUTPUT. This binds only test-injected repository evidence.
+  // FAKE TEST OUTPUT — NOT SAM OUTPUT. Historical test-injected evidence only.
   '34932b87f1a17b512e64c193ac96e42a0c79a09ab8e86ec2a9f27c2f8a396cae' as const;
 
 export const createValidTestOnlySamTextHeavyProductionV3RepositoryBinding = (
