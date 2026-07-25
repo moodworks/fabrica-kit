@@ -2,33 +2,20 @@ import { randomUUID } from 'node:crypto';
 
 import { z } from 'zod';
 
-import { SAM_MASK_CONTRACT_VERSION, SAM_MASK_ENCODING } from '../sam/sam-mask-contracts.js';
 import { canonicalizeJson } from '../scene/canonical-scene-json.js';
 import {
   SAM_CORPUS_CLIENT_TIMEOUT_MS,
   SAM_CORPUS_COST_MAXIMUM_MICRO_USD,
   SAM_CORPUS_EVALUATION_FIXTURES_V1,
-  SAM_CORPUS_EXECUTION_IDENTITY,
-  SAM_CORPUS_LOCAL_IDENTITY_EVIDENCE_SHA256,
-  SAM_CORPUS_PROFILE_IDENTITIES,
-  SAM_CORPUS_REQUEST_LIMITS,
   inspectSamCorpusPreparedRequestV1,
   type SamCorpusPreparedRequestV1,
 } from './sam-corpus-evaluation-catalog-v1.js';
 import {
-  RUNPOD_API_KEY_REFERENCE,
-  RUNPOD_DIRECT_DOCUMENTATION_EXPIRES_AT,
   RUNPOD_DIRECT_DOCUMENTATION_EXPIRES_AT_MS,
-  RUNPOD_DIRECT_DOCUMENTATION_RETRIEVED_AT,
   RUNPOD_DIRECT_DOCUMENTATION_RETRIEVED_AT_MS,
-  RUNPOD_DIRECT_MASK_PATH,
-  RUNPOD_DIRECT_METHOD,
 } from './sam-runpod-direct-v3-profiles.js';
 import {
-  SAM_TEXT_HEAVY_RUNPOD_DEPLOYMENT_V1,
-  SAM_TEXT_HEAVY_RUNPOD_DEPLOYMENT_V1_CANONICAL_SHA256,
-} from './sam-text-heavy-production-v3-deployment.js';
-import {
+  SAM_TEXT_HEAVY_PRODUCTION_V3_FROZEN_CORPUS_REQUEST_IDENTITY,
   deriveSamTextHeavyProductionV3CanonicalCallEvidenceFromRepositoryExecution,
   inspectSamTextHeavyProductionV3DurableReservation,
   type SamTextHeavyProductionV3DurableReservation,
@@ -58,94 +45,13 @@ if (
   throw new TypeError('SAM text-heavy production constants drifted from the reviewed catalog.');
 }
 
-export const SAM_TEXT_HEAVY_PRODUCTION_V3_FROZEN_CORPUS_REQUEST_IDENTITY = Object.freeze({
-  corpusProvenanceSha: SAM_TEXT_HEAVY_PRODUCTION_V3_CORPUS_PROVENANCE_SHA,
-  deploymentIdentity: SAM_TEXT_HEAVY_RUNPOD_DEPLOYMENT_V1,
-  deploymentIdentitySha256: SAM_TEXT_HEAVY_RUNPOD_DEPLOYMENT_V1_CANONICAL_SHA256,
-  endpoint: Object.freeze({
-    url: `https://${SAM_TEXT_HEAVY_RUNPOD_DEPLOYMENT_V1.endpointId}.api.runpod.ai${RUNPOD_DIRECT_MASK_PATH}`,
-    method: RUNPOD_DIRECT_METHOD,
-    path: RUNPOD_DIRECT_MASK_PATH,
-    redirectCount: 0 as const,
-  }),
-  fixture: Object.freeze({
-    key: textHeavy.fixtureKey,
-    id: textHeavy.fixtureId,
-    normalizedReference: textHeavy.normalizedReference,
-    source: textHeavy.normalized,
-    humanOracle: textHeavy.humanOracle,
-  }),
-  request: Object.freeze({
-    identifiers: textHeavy.identifiers,
-    canonical: textHeavy.canonicalRequest,
-    contractVersion: SAM_MASK_CONTRACT_VERSION,
-    segmentationMode: 'automatic-candidates' as const,
-    limits: SAM_CORPUS_REQUEST_LIMITS,
-    maskEncoding: SAM_MASK_ENCODING,
-  }),
-  executionIdentity: SAM_CORPUS_EXECUTION_IDENTITY,
-  capacity: textHeavy.capacity,
-  policy: Object.freeze({
-    clientWallTimeoutMs: SAM_TEXT_HEAVY_PRODUCTION_V3_AUTHORIZATION_LIFETIME_MS,
-    incrementalCostMaximumMicroUsd: SAM_CORPUS_COST_MAXIMUM_MICRO_USD,
-    dispatchMaximum: 1 as const,
-    fetchMaximum: 1 as const,
-    materializationMaximum: 1 as const,
-    retryCount: 0 as const,
-    redirectCount: 0 as const,
-    pollCount: 0 as const,
-    healthRequestCount: 0 as const,
-    pingRequestCount: 0 as const,
-    queueRequestCount: 0 as const,
-    providerBillingGuarantee: false as const,
-  }),
-  profiles: SAM_CORPUS_PROFILE_IDENTITIES,
-  localIdentityEvidenceSha256: SAM_CORPUS_LOCAL_IDENTITY_EVIDENCE_SHA256,
-  secretReferenceName: RUNPOD_API_KEY_REFERENCE,
-  documentationEvidence: Object.freeze({
-    retrievedAt: RUNPOD_DIRECT_DOCUMENTATION_RETRIEVED_AT,
-    expiresAt: RUNPOD_DIRECT_DOCUMENTATION_EXPIRES_AT,
-    hostingProfileSha256: SAM_CORPUS_PROFILE_IDENTITIES.hostingSha256,
-  }),
-  publication: 'sam-corpus-v2-exclusive-manifest-last' as const,
-  review: 'sam-corpus-visual-review-v1-verifier-bound' as const,
-  registries: Object.freeze({
-    productionExecutionRegistry: 'empty-unchanged' as const,
-    productionTransportRegistry: 'empty-unchanged' as const,
-    productionAdmissionRegistry: 'empty-unchanged' as const,
-  }),
-  activation: Object.freeze({
-    corpusProductionExecutionAuthority: false as const,
-    corpusProviderCallAuthority: false as const,
-    webRouteAuthority: false as const,
-    productProductionAuthority: false as const,
-    generalAdmissionAuthority: false as const,
-    productionAdmissionAuthority: false as const,
-    corpusBatchAuthority: false as const,
-    providerBillingGuarantee: false as const,
-  }),
-});
+export { SAM_TEXT_HEAVY_PRODUCTION_V3_FROZEN_CORPUS_REQUEST_IDENTITY } from './sam-text-heavy-production-v3-reservation.js';
 
-export interface SamTextHeavyProductionV3AuthorizationIdentity {
-  readonly corpusProvenanceSha: typeof SAM_TEXT_HEAVY_PRODUCTION_V3_CORPUS_PROVENANCE_SHA;
-  readonly repositoryExecution: SamTextHeavyProductionV3RepositoryExecutionEvidence;
-  readonly deploymentIdentity: (typeof SAM_TEXT_HEAVY_PRODUCTION_V3_FROZEN_CORPUS_REQUEST_IDENTITY)['deploymentIdentity'];
-  readonly deploymentIdentitySha256: (typeof SAM_TEXT_HEAVY_PRODUCTION_V3_FROZEN_CORPUS_REQUEST_IDENTITY)['deploymentIdentitySha256'];
-  readonly endpoint: (typeof SAM_TEXT_HEAVY_PRODUCTION_V3_FROZEN_CORPUS_REQUEST_IDENTITY)['endpoint'];
-  readonly fixture: (typeof SAM_TEXT_HEAVY_PRODUCTION_V3_FROZEN_CORPUS_REQUEST_IDENTITY)['fixture'];
-  readonly request: (typeof SAM_TEXT_HEAVY_PRODUCTION_V3_FROZEN_CORPUS_REQUEST_IDENTITY)['request'];
-  readonly executionIdentity: (typeof SAM_TEXT_HEAVY_PRODUCTION_V3_FROZEN_CORPUS_REQUEST_IDENTITY)['executionIdentity'];
-  readonly capacity: (typeof SAM_TEXT_HEAVY_PRODUCTION_V3_FROZEN_CORPUS_REQUEST_IDENTITY)['capacity'];
-  readonly policy: (typeof SAM_TEXT_HEAVY_PRODUCTION_V3_FROZEN_CORPUS_REQUEST_IDENTITY)['policy'];
-  readonly profiles: (typeof SAM_TEXT_HEAVY_PRODUCTION_V3_FROZEN_CORPUS_REQUEST_IDENTITY)['profiles'];
-  readonly localIdentityEvidenceSha256: (typeof SAM_TEXT_HEAVY_PRODUCTION_V3_FROZEN_CORPUS_REQUEST_IDENTITY)['localIdentityEvidenceSha256'];
-  readonly secretReferenceName: (typeof SAM_TEXT_HEAVY_PRODUCTION_V3_FROZEN_CORPUS_REQUEST_IDENTITY)['secretReferenceName'];
-  readonly documentationEvidence: (typeof SAM_TEXT_HEAVY_PRODUCTION_V3_FROZEN_CORPUS_REQUEST_IDENTITY)['documentationEvidence'];
-  readonly publication: (typeof SAM_TEXT_HEAVY_PRODUCTION_V3_FROZEN_CORPUS_REQUEST_IDENTITY)['publication'];
-  readonly review: (typeof SAM_TEXT_HEAVY_PRODUCTION_V3_FROZEN_CORPUS_REQUEST_IDENTITY)['review'];
-  readonly registries: (typeof SAM_TEXT_HEAVY_PRODUCTION_V3_FROZEN_CORPUS_REQUEST_IDENTITY)['registries'];
-  readonly activation: (typeof SAM_TEXT_HEAVY_PRODUCTION_V3_FROZEN_CORPUS_REQUEST_IDENTITY)['activation'];
-}
+export type SamTextHeavyProductionV3AuthorizationIdentity = Readonly<
+  typeof SAM_TEXT_HEAVY_PRODUCTION_V3_FROZEN_CORPUS_REQUEST_IDENTITY & {
+    readonly repositoryExecution: SamTextHeavyProductionV3RepositoryExecutionEvidence;
+  }
+>;
 
 const createAuthorizationIdentity = (
   repositoryExecution: SamTextHeavyProductionV3RepositoryExecutionEvidence,

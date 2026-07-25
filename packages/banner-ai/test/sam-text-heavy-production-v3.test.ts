@@ -18,7 +18,7 @@ import { type SamMaskResponse } from '../src/sam/sam-mask-contracts.js';
 import { postprocessSamMasks, type SamRawMaskCandidate } from '../src/sam/sam-mask-postprocess.js';
 import { canonicalResponseSha256 } from '../src/sam/sam-mask-rle.js';
 import { parseAndVerifySamMaskResponse } from '../src/sam/sam-mask-validation.js';
-import { sha256Hex } from '../src/scene/canonical-scene-json.js';
+import { canonicalizeJson, sha256Hex } from '../src/scene/canonical-scene-json.js';
 import {
   SAM_CORPUS_CLIENT_TIMEOUT_MS,
   SAM_CORPUS_EVALUATION_FIXTURES_V1,
@@ -71,6 +71,7 @@ import {
   SAM_TEXT_HEAVY_PRODUCTION_V3_OUTPUT_NAMING_POLICY,
   SAM_TEXT_HEAVY_PRODUCTION_V3_OUTPUT_NAMING_POLICY_SHA256,
   SAM_TEXT_HEAVY_PRODUCTION_V3_OUTPUT_ROOT,
+  SamTextHeavyProductionV3CanonicalCallIdentitySchema,
   createTestOnlySamTextHeavyProductionV3Root,
   deriveSamTextHeavyProductionV3CanonicalCallEvidence,
   deriveSamTextHeavyProductionV3CanonicalCallEvidenceFromRepositoryExecution,
@@ -86,6 +87,7 @@ import { SAM_TEXT_HEAVY_PRODUCTION_V3_CORPUS_PROVENANCE_SHA } from '../src/serve
 import {
   SAM_TEXT_HEAVY_PRODUCTION_V3_FAKE_EXPECTED_REPOSITORY_IDENTITY,
   SAM_TEXT_HEAVY_PRODUCTION_V3_FAKE_OBSERVED_REPOSITORY_IDENTITY,
+  SAM_TEXT_HEAVY_PRODUCTION_V3_FAKE_REFERENCE_CANONICAL_CLAIM_SHA256,
   createValidTestOnlySamTextHeavyProductionV3RepositoryBinding,
 } from './sam-text-heavy-production-v3-test-helpers.js';
 
@@ -289,6 +291,8 @@ describe('SAM text-heavy production V3 frozen identity and inactive admission', 
       SAM_CORPUS_CLIENT_TIMEOUT_MS,
     );
     expect(canonicalCall.identity).toMatchObject({
+      schema: 'fabrica-sam-text-heavy-production-v3-canonical-claim-v2',
+      version: 2,
       corpusProvenanceSha: SAM_TEXT_HEAVY_PRODUCTION_V3_CORPUS_PROVENANCE_SHA,
       repositoryExecution: {
         expected: SAM_TEXT_HEAVY_PRODUCTION_V3_FAKE_EXPECTED_REPOSITORY_IDENTITY,
@@ -298,10 +302,20 @@ describe('SAM text-heavy production V3 frozen identity and inactive admission', 
       deploymentIdentitySha256: SAM_TEXT_HEAVY_RUNPOD_DEPLOYMENT_V1_CANONICAL_SHA256,
       outputNamingPolicy: SAM_TEXT_HEAVY_PRODUCTION_V3_OUTPUT_NAMING_POLICY,
       outputNamingPolicySha256: SAM_TEXT_HEAVY_PRODUCTION_V3_OUTPUT_NAMING_POLICY_SHA256,
-      fixtureId: fixture.fixtureId,
-      ...fixture.identifiers,
-      canonicalRequestByteLength: 222_620,
-      canonicalRequestSha256: 'a14354bb67685293a8aa3c2523db36506b2050d53f0dea90c4070bcdd015ee26',
+      fixture: {
+        key: 'text-heavy',
+        id: fixture.fixtureId,
+        normalizedReference: fixture.normalizedReference,
+        source: fixture.normalized,
+        humanOracle: fixture.humanOracle,
+      },
+      request: {
+        identifiers: fixture.identifiers,
+        canonical: {
+          byteLength: 222_620,
+          sha256: 'a14354bb67685293a8aa3c2523db36506b2050d53f0dea90c4070bcdd015ee26',
+        },
+      },
     });
     expect(canonicalCall.claimSha256).toMatch(/^[0-9a-f]{64}$/u);
     expect(SAM_TEXT_HEAVY_PRODUCTION_V3_OUTPUT_ROOT).toBe('/private/tmp');
@@ -623,6 +637,169 @@ const schemaAuthorization = (): unknown => {
     singleUse: true,
   };
 };
+
+const REQUIRED_CANONICAL_CLAIM_IDENTITY_PATHS = Object.freeze([
+  'schema',
+  'version',
+  'corpusProvenanceSha',
+  'repositoryExecution.expected.executingMergeSha',
+  'repositoryExecution.expected.executingMergeTreeSha',
+  'repositoryExecution.expected.firstParentSha',
+  'repositoryExecution.expected.reviewedImplementationSha',
+  'repositoryExecution.expected.reviewedImplementationTreeSha',
+  'repositoryExecution.observed.parentCount',
+  'repositoryExecution.observed.firstParentSha',
+  'repositoryExecution.observed.secondParentSha',
+  'repositoryExecution.observed.secondParentTreeSha',
+  'deploymentIdentity.schema',
+  'deploymentIdentity.endpointId',
+  'deploymentIdentity.endpointName',
+  'deploymentIdentity.endpointType',
+  'deploymentIdentity.endpointVersion',
+  'deploymentIdentity.workerImage',
+  'deploymentIdentity.minimumWorkers',
+  'deploymentIdentity.maximumWorkers',
+  'deploymentIdentity.gpuCount',
+  'deploymentIdentity.ports.0',
+  'deploymentIdentity.templateIdentity.state',
+  'deploymentIdentitySha256',
+  'outputNamingPolicy.schema',
+  'outputNamingPolicy.corpusProvenanceSha',
+  'outputNamingPolicy.canonicalBasenamePolicy',
+  'outputNamingPolicy.conflictingLegacyBasenamePolicy',
+  'outputNamingPolicySha256',
+  'fixture.key',
+  'fixture.id',
+  'fixture.normalizedReference',
+  'fixture.source.mediaType',
+  'fixture.source.byteLength',
+  'fixture.source.width',
+  'fixture.source.height',
+  'fixture.source.sha256',
+  'fixture.humanOracle.corpusSha256',
+  'fixture.humanOracle.oracleSha256',
+  'fixture.humanOracle.approvedEntrySha256',
+  'fixture.humanOracle.requiredLayerIds.0',
+  'fixture.humanOracle.requiredLayerIds.1',
+  'fixture.humanOracle.requiredLayerIds.2',
+  'fixture.humanOracle.requiredLayerIds.3',
+  'fixture.humanOracle.requiredLayerIds.4',
+  'request.identifiers.requestId',
+  'request.identifiers.workspaceId',
+  'request.identifiers.jobId',
+  'request.identifiers.attemptId',
+  'request.canonical.byteLength',
+  'request.canonical.sha256',
+  'request.contractVersion',
+  'request.segmentationMode',
+  'request.limits.maxCandidates',
+  'request.limits.minMaskAreaPixels',
+  'request.maskEncoding',
+  'executionIdentity.modelId',
+  'executionIdentity.repositoryCommit',
+  'executionIdentity.configIdentity',
+  'executionIdentity.checkpointSha256',
+  'capacity.automaticOnePointPeakBytes',
+  'capacity.ceilingBytes',
+  'capacity.pointsPerBatch',
+  'capacity.eligible',
+  'policy.clientWallTimeoutMs',
+  'policy.incrementalCostMaximumMicroUsd',
+  'policy.dispatchMaximum',
+  'policy.fetchMaximum',
+  'policy.materializationMaximum',
+  'policy.retryCount',
+  'policy.redirectCount',
+  'policy.pollCount',
+  'policy.healthRequestCount',
+  'policy.pingRequestCount',
+  'policy.queueRequestCount',
+  'policy.providerBillingGuarantee',
+  'profiles.hostingSha256',
+  'profiles.adapterV3Sha256',
+  'profiles.authorizationV3Sha256',
+  'authorizationV3Profile.identity.profileVersion',
+  'authorizationV3Profile.identity.authorizationKind',
+  'authorizationV3Profile.identity.bindings.0',
+  'authorizationV3Profile.identity.activation.clientRetryCount',
+  'authorizationV3Profile.identity.activation.pollCount',
+  'authorizationV3Profile.identity.activation.providerBillingGuarantee',
+  'authorizationV3Profile.sha256',
+  'localIdentityEvidenceSha256',
+  'endpoint.url',
+  'endpoint.method',
+  'endpoint.path',
+  'endpoint.redirectCount',
+  'secretReferenceName',
+  'documentationEvidence.retrievedAt',
+  'documentationEvidence.expiresAt',
+  'documentationEvidence.hostingProfileSha256',
+  'publication',
+  'review',
+  'registries.productionExecutionRegistry',
+  'registries.productionTransportRegistry',
+  'registries.productionAdmissionRegistry',
+  'activation.corpusProductionExecutionAuthority',
+  'activation.corpusProviderCallAuthority',
+  'activation.webRouteAuthority',
+  'activation.productProductionAuthority',
+  'activation.generalAdmissionAuthority',
+  'activation.productionAdmissionAuthority',
+  'activation.corpusBatchAuthority',
+  'activation.providerBillingGuarantee',
+] as const);
+
+describe('SAM text-heavy production V3 canonical claim identity', () => {
+  it('directly binds every required identity group and rejects every primitive mutation', () => {
+    const canonicalCall = deriveSamTextHeavyProductionV3CanonicalCallEvidence(
+      createValidTestOnlySamTextHeavyProductionV3RepositoryBinding(),
+    );
+    const paths = primitivePaths(canonicalCall.identity);
+    const pathNames = new Set(paths.map((path) => path.join('.')));
+    expect(
+      SamTextHeavyProductionV3CanonicalCallIdentitySchema.safeParse(canonicalCall.identity),
+    ).toMatchObject({ success: true });
+    expect(canonicalCall.claimSha256).not.toBe(
+      '711b6461cde56746c591e315e91fc178913eb23604ba212daa93c5d34ebe4086',
+    );
+    expect(canonicalCall.claimSha256).not.toBe(
+      SAM_TEXT_HEAVY_PRODUCTION_V3_FAKE_REFERENCE_CANONICAL_CLAIM_SHA256,
+    );
+    for (const requiredPath of REQUIRED_CANONICAL_CLAIM_IDENTITY_PATHS) {
+      expect(pathNames.has(requiredPath), requiredPath).toBe(true);
+    }
+    for (const path of paths) {
+      const mutated = deepFreeze(mutatePath(canonicalCall.identity, path));
+      expect(
+        SamTextHeavyProductionV3CanonicalCallIdentitySchema.safeParse(mutated).success,
+        path.join('.'),
+      ).toBe(false);
+      expect(sha256Hex(Buffer.from(canonicalizeJson(mutated), 'utf8')), path.join('.')).not.toBe(
+        canonicalCall.claimSha256,
+      );
+    }
+  });
+
+  it('fails closed on missing, extra, differently typed, or caller-overridden fields', () => {
+    const identity = deriveSamTextHeavyProductionV3CanonicalCallEvidence(
+      createValidTestOnlySamTextHeavyProductionV3RepositoryBinding(),
+    ).identity;
+    const missing = structuredClone(identity) as MutableRecord;
+    delete missing.executionIdentity;
+    const extra = structuredClone(identity) as MutableRecord;
+    extra.unexpectedField = 'forbidden';
+    const differentlyTyped = structuredClone(identity) as MutableRecord;
+    (differentlyTyped.policy as MutableRecord).retryCount = '0';
+    const callerOverridden = structuredClone(identity) as MutableRecord;
+    (callerOverridden.authorizationV3Profile as MutableRecord).sha256 = '0'.repeat(64);
+    for (const candidate of [missing, extra, differentlyTyped, callerOverridden]) {
+      expect(
+        SamTextHeavyProductionV3CanonicalCallIdentitySchema.safeParse(deepFreeze(candidate))
+          .success,
+      ).toBe(false);
+    }
+  });
+});
 
 describe('SAM text-heavy production V3 fixture-exact authorization', () => {
   it('rejects a mutation of every primitive frozen-identity leaf', () => {

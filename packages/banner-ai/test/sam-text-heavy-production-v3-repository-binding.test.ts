@@ -1,6 +1,17 @@
-import { lstat, mkdtemp, readFile, readdir, realpath, rm } from 'node:fs/promises';
+import { execFileSync } from 'node:child_process';
+import {
+  lstat,
+  mkdir,
+  mkdtemp,
+  readFile,
+  readdir,
+  realpath,
+  rm,
+  writeFile,
+} from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { pathToFileURL } from 'node:url';
 
 import { afterEach, describe, expect, it } from 'vitest';
 
@@ -26,10 +37,14 @@ import {
   reserveSamTextHeavyProductionV3CanonicalCall,
 } from '../src/server/sam-text-heavy-production-v3-reservation.js';
 import {
+  SAM_TEXT_HEAVY_PRODUCTION_V3_REPOSITORY_BINDING_ERROR_CODE,
   SAM_TEXT_HEAVY_PRODUCTION_V3_CORPUS_PROVENANCE_SHA,
+  SAM_TEXT_HEAVY_PRODUCTION_V3_REPOSITORY_OBSERVATION_ERROR_CODE,
   SamTextHeavyProductionV3ExpectedRepositoryIdentitySchema,
   SamTextHeavyProductionV3ObservedRepositoryIdentitySchema,
+  assertSamTextHeavyProductionV3RepositoryBindingProvenance,
   createSamTextHeavyProductionV3ProductionRepositoryObserver,
+  createTestOnlySamTextHeavyProductionV3LocalGitRepositoryObserver,
   createTestOnlySamTextHeavyProductionV3RepositoryObserver,
   inspectSamTextHeavyProductionV3RepositoryExecutionBinding,
   inspectTestOnlySamTextHeavyProductionV3RepositoryObserver,
@@ -123,6 +138,164 @@ const createRoot = async () => {
   };
 };
 
+const FIXTURE_GIT_ENVIRONMENT = Object.freeze({
+  LANG: 'C',
+  LC_ALL: 'C',
+  TMPDIR: '/tmp',
+  GIT_CONFIG_GLOBAL: '/dev/null',
+  GIT_CONFIG_NOSYSTEM: '1',
+  GIT_CONFIG_SYSTEM: '/dev/null',
+  GIT_TERMINAL_PROMPT: '0',
+});
+
+const runFixtureGit = (repositoryRoot: string, args: readonly string[]): string =>
+  execFileSync('/usr/bin/git', [...args], {
+    cwd: repositoryRoot,
+    encoding: 'utf8',
+    env: FIXTURE_GIT_ENVIRONMENT,
+    maxBuffer: 16_384,
+    stdio: ['ignore', 'pipe', 'ignore'],
+    timeout: 10_000,
+    windowsHide: true,
+  });
+
+const fixtureGitCommitArguments = (message: string) =>
+  Object.freeze([
+    '-c',
+    'user.name=SAM Observer Test',
+    '-c',
+    'user.email=sam-observer-test.invalid',
+    'commit',
+    '-m',
+    message,
+  ] as const);
+
+const readFixtureObjectId = (repositoryRoot: string, revision: string): string => {
+  const output = runFixtureGit(repositoryRoot, ['rev-parse', '--verify', revision]);
+  expect(output).toMatch(/^[0-9a-f]{40}\n$/u);
+  return output.slice(0, -1);
+};
+
+const createGitFixtureParent = async (): Promise<string> => {
+  const parent = await mkdtemp(
+    join(await realpath(tmpdir()), 'fabrica-sam-text-heavy-repository-observer-fixture-'),
+  );
+  roots.push(parent);
+  return parent;
+};
+
+const createNormalMergedGitFixture = async (): Promise<{
+  readonly parent: string;
+  readonly repositoryRoot: string;
+  readonly expected: SamTextHeavyProductionV3ExpectedRepositoryIdentity;
+}> => {
+  const parent = await createGitFixtureParent();
+  const repositoryRoot = join(parent, 'normal-merged-repository');
+  await mkdir(repositoryRoot);
+  runFixtureGit(repositoryRoot, ['init', '--initial-branch=main']);
+  await writeFile(join(repositoryRoot, 'base.txt'), 'base\n', { encoding: 'utf8', flag: 'wx' });
+  runFixtureGit(repositoryRoot, ['add', '--', 'base.txt']);
+  runFixtureGit(repositoryRoot, fixtureGitCommitArguments('base'));
+  const firstParentSha = readFixtureObjectId(repositoryRoot, 'HEAD');
+
+  runFixtureGit(repositoryRoot, ['switch', '-c', 'reviewed-implementation']);
+  await writeFile(join(repositoryRoot, 'implementation.txt'), 'implementation\n', {
+    encoding: 'utf8',
+    flag: 'wx',
+  });
+  runFixtureGit(repositoryRoot, ['add', '--', 'implementation.txt']);
+  runFixtureGit(repositoryRoot, fixtureGitCommitArguments('reviewed implementation'));
+  const reviewedImplementationSha = readFixtureObjectId(repositoryRoot, 'HEAD');
+  const reviewedImplementationTreeSha = readFixtureObjectId(repositoryRoot, 'HEAD^{tree}');
+
+  runFixtureGit(repositoryRoot, ['switch', 'main']);
+  runFixtureGit(repositoryRoot, [
+    '-c',
+    'user.name=SAM Observer Test',
+    '-c',
+    'user.email=sam-observer-test.invalid',
+    'merge',
+    '--no-ff',
+    'reviewed-implementation',
+    '-m',
+    'merge reviewed implementation',
+  ]);
+  const executingMergeSha = readFixtureObjectId(repositoryRoot, 'HEAD');
+  const executingMergeTreeSha = readFixtureObjectId(repositoryRoot, 'HEAD^{tree}');
+  expect(executingMergeTreeSha).toBe(reviewedImplementationTreeSha);
+  runFixtureGit(repositoryRoot, ['update-ref', 'refs/remotes/origin/main', executingMergeSha]);
+
+  return {
+    parent,
+    repositoryRoot,
+    expected: Object.freeze({
+      executingMergeSha,
+      executingMergeTreeSha,
+      firstParentSha,
+      reviewedImplementationSha,
+      reviewedImplementationTreeSha,
+      corpusProvenanceSha: SAM_TEXT_HEAVY_PRODUCTION_V3_CORPUS_PROVENANCE_SHA,
+    }),
+  };
+};
+
+const createSingleCommitGitFixture = async (): Promise<{
+  readonly repositoryRoot: string;
+  readonly expected: SamTextHeavyProductionV3ExpectedRepositoryIdentity;
+}> => {
+  const parent = await createGitFixtureParent();
+  const repositoryRoot = join(parent, 'single-parent-repository');
+  await mkdir(repositoryRoot);
+  runFixtureGit(repositoryRoot, ['init', '--initial-branch=main']);
+  await writeFile(join(repositoryRoot, 'tracked.txt'), 'tracked\n', {
+    encoding: 'utf8',
+    flag: 'wx',
+  });
+  runFixtureGit(repositoryRoot, ['add', '--', 'tracked.txt']);
+  runFixtureGit(repositoryRoot, fixtureGitCommitArguments('single commit'));
+  const executingMergeSha = readFixtureObjectId(repositoryRoot, 'HEAD');
+  const executingMergeTreeSha = readFixtureObjectId(repositoryRoot, 'HEAD^{tree}');
+  runFixtureGit(repositoryRoot, ['update-ref', 'refs/remotes/origin/main', executingMergeSha]);
+  return {
+    repositoryRoot,
+    expected: Object.freeze({
+      executingMergeSha,
+      executingMergeTreeSha,
+      firstParentSha: 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+      reviewedImplementationSha: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+      reviewedImplementationTreeSha: executingMergeTreeSha,
+      corpusProvenanceSha: SAM_TEXT_HEAVY_PRODUCTION_V3_CORPUS_PROVENANCE_SHA,
+    }),
+  };
+};
+
+const captureError = (operation: () => unknown): unknown => {
+  try {
+    operation();
+  } catch (error) {
+    return error;
+  }
+  throw new TypeError('Expected operation to fail.');
+};
+
+const expectClosedRepositoryError = (
+  error: unknown,
+  code:
+    | typeof SAM_TEXT_HEAVY_PRODUCTION_V3_REPOSITORY_OBSERVATION_ERROR_CODE
+    | typeof SAM_TEXT_HEAVY_PRODUCTION_V3_REPOSITORY_BINDING_ERROR_CODE,
+  forbiddenRepositoryRoot: string,
+): void => {
+  expect(error).toBeInstanceOf(TypeError);
+  expect(error).toMatchObject({ code });
+  expect(Object.hasOwn(error as object, 'stack')).toBe(false);
+  expect(Object.hasOwn(error as object, 'cause')).toBe(false);
+  const publicSurface = `${String(error)}\n${JSON.stringify(error)}`;
+  expect(publicSurface).not.toContain(forbiddenRepositoryRoot);
+  expect(publicSurface).not.toMatch(/\n\s*at\s/u);
+  expect(publicSurface).not.toMatch(/(?:^|[\s:(])\/(?:[^/\s]+\/)+[^/\s]*/u);
+  expect(publicSurface).not.toMatch(/Raw Git|stderr|environment|rev-parse|GIT_/u);
+};
+
 describe('SAM text-heavy production V3 closed repository execution binding', () => {
   it('accepts independent immutable expected and observed identities and exposes sanitized evidence', () => {
     const { binding, observer } = verifyFakeBinding();
@@ -152,7 +325,8 @@ describe('SAM text-heavy production V3 closed repository execution binding', () 
       observationCount: 1,
     });
     const canonicalCall = deriveSamTextHeavyProductionV3CanonicalCallEvidence(binding);
-    expect(canonicalCall.claimSha256).toBe(
+    expect(canonicalCall.claimSha256).toMatch(/^[0-9a-f]{64}$/u);
+    expect(canonicalCall.claimSha256).not.toBe(
       SAM_TEXT_HEAVY_PRODUCTION_V3_FAKE_REFERENCE_CANONICAL_CLAIM_SHA256,
     );
     expect(canonicalCall.identity).toMatchObject({
@@ -361,10 +535,125 @@ describe('SAM text-heavy production V3 closed repository execution binding', () 
     expect(source).toContain("GIT_NO_REPLACE_OBJECTS: '1'");
     expect(source).toContain("GIT_CONFIG_NOSYSTEM: '1'");
     expect(source).toContain("GIT_TERMINAL_PROMPT: '0'");
-    expect(source).toContain('runGitText(GIT_TOP_LEVEL_ARGS)');
+    expect(source).toContain('runGitText(runGit, GIT_TOP_LEVEL_ARGS)');
     expect(source).toContain("'refs/replace/'");
     expect(source).toContain("join(commonDirectory, 'info', 'grafts')");
+    expect(source).toContain("'--is-shallow-repository'");
+    expect(source).toContain("!== 'false\\n'");
+    expect(source).toContain("join(commonDirectory, 'shallow')");
     expect(source).not.toMatch(/process\.cwd|process\.env|\bGIT_DIR\b|\bGIT_WORK_TREE\b/u);
+    expect(createSamTextHeavyProductionV3ProductionRepositoryObserver).toHaveLength(0);
+  });
+
+  it('accepts normal synchronized history through the shared fixed-Git observation engine', async () => {
+    const fixture = await createNormalMergedGitFixture();
+    expect(runFixtureGit(fixture.repositoryRoot, ['rev-parse', '--is-shallow-repository'])).toBe(
+      'false\n',
+    );
+    const observer = createTestOnlySamTextHeavyProductionV3LocalGitRepositoryObserver({
+      repositoryRoot: fixture.repositoryRoot,
+    });
+    const binding = verifySamTextHeavyProductionV3RepositoryExecutionBinding({
+      expected: fixture.expected,
+      observer,
+    });
+    expect(inspectSamTextHeavyProductionV3RepositoryExecutionBinding(binding)).toMatchObject({
+      observerProvenance: 'test-only-injected',
+      expected: fixture.expected,
+      observed: {
+        headSha: fixture.expected.executingMergeSha,
+        headTreeSha: fixture.expected.executingMergeTreeSha,
+        parentCount: 2,
+        firstParentSha: fixture.expected.firstParentSha,
+        secondParentSha: fixture.expected.reviewedImplementationSha,
+        secondParentTreeSha: fixture.expected.reviewedImplementationTreeSha,
+        headDetached: false,
+        currentBranchIsMain: true,
+        indexClean: true,
+        worktreeClean: true,
+        untrackedFilesPresent: false,
+      },
+    });
+  });
+
+  it('rejects an actually shallow repository through the production shallow probe', async () => {
+    const fixture = await createNormalMergedGitFixture();
+    const shallowRepositoryRoot = join(fixture.parent, 'actual-shallow-repository');
+    runFixtureGit(fixture.parent, [
+      '-c',
+      'protocol.file.allow=always',
+      'clone',
+      '--depth=1',
+      '--no-local',
+      pathToFileURL(fixture.repositoryRoot).href,
+      shallowRepositoryRoot,
+    ]);
+    expect(runFixtureGit(shallowRepositoryRoot, ['rev-parse', '--is-shallow-repository'])).toBe(
+      'true\n',
+    );
+    const observer = createTestOnlySamTextHeavyProductionV3LocalGitRepositoryObserver({
+      repositoryRoot: shallowRepositoryRoot,
+    });
+    const error = captureError(() =>
+      verifySamTextHeavyProductionV3RepositoryExecutionBinding({
+        expected: fixture.expected,
+        observer,
+      }),
+    );
+    expectClosedRepositoryError(
+      error,
+      SAM_TEXT_HEAVY_PRODUCTION_V3_REPOSITORY_OBSERVATION_ERROR_CODE,
+      shallowRepositoryRoot,
+    );
+    expect(String(error)).toBe('TypeError: SAM text-heavy Git observation failed closed.');
+  });
+
+  it.each([
+    'missing-shallow-probe-output',
+    'malformed-shallow-probe-output',
+    'ambiguous-shallow-probe-output',
+    'unexpected-shallow-probe-output',
+    'shallow-probe-command-failure',
+    'unexpected-runtime-failure',
+  ] as const)('fails closed and sanitizes %s', async (fault) => {
+    const fixture = await createNormalMergedGitFixture();
+    const observer = createTestOnlySamTextHeavyProductionV3LocalGitRepositoryObserver({
+      repositoryRoot: fixture.repositoryRoot,
+      fault,
+    });
+    const error = captureError(() =>
+      verifySamTextHeavyProductionV3RepositoryExecutionBinding({
+        expected: fixture.expected,
+        observer,
+      }),
+    );
+    expectClosedRepositoryError(
+      error,
+      SAM_TEXT_HEAVY_PRODUCTION_V3_REPOSITORY_OBSERVATION_ERROR_CODE,
+      fixture.repositoryRoot,
+    );
+    expect(String(error)).toBe('TypeError: SAM text-heavy Git observation failed closed.');
+  });
+
+  it('rejects malformed topology with a sanitized stackless binding error', async () => {
+    const fixture = await createSingleCommitGitFixture();
+    const observer = createTestOnlySamTextHeavyProductionV3LocalGitRepositoryObserver({
+      repositoryRoot: fixture.repositoryRoot,
+    });
+    const error = captureError(() =>
+      verifySamTextHeavyProductionV3RepositoryExecutionBinding({
+        expected: fixture.expected,
+        observer,
+      }),
+    );
+    expectClosedRepositoryError(
+      error,
+      SAM_TEXT_HEAVY_PRODUCTION_V3_REPOSITORY_BINDING_ERROR_CODE,
+      fixture.repositoryRoot,
+    );
+    expect(String(error)).toBe(
+      'TypeError: SAM text-heavy repository execution binding failed closed.',
+    );
   });
 
   it('sanitizes observer failures and never derives expected values from observed values', () => {
@@ -387,6 +676,10 @@ describe('SAM text-heavy production V3 closed repository execution binding', () 
     })();
     expect(String(error)).toMatch(/Git observation failed closed/u);
     expect(String(error)).not.toContain(marker);
+    expect(error).toMatchObject({
+      code: SAM_TEXT_HEAVY_PRODUCTION_V3_REPOSITORY_OBSERVATION_ERROR_CODE,
+    });
+    expect(Object.hasOwn(error as object, 'stack')).toBe(false);
     expect(Object.hasOwn(error as object, 'cause')).toBe(false);
 
     const independentObserver = createSequencedObserver([
@@ -401,7 +694,73 @@ describe('SAM text-heavy production V3 closed repository execution binding', () 
     expect(inspectTestOnlySamTextHeavyProductionV3RepositoryObserver(independentObserver)).toEqual({
       observationCount: 1,
     });
-    expect(createSamTextHeavyProductionV3ProductionRepositoryObserver).toHaveLength(0);
+  });
+
+  it('uses closed stackless errors at every production-facing repository boundary', () => {
+    const boundarySentinel = join(tmpdir(), 'repository-boundary-sentinel');
+    const foreignObserver = Object.freeze({
+      purpose: 'sam-text-heavy-production-v3-repository-observer' as const,
+    }) as ReturnType<typeof createSamTextHeavyProductionV3ProductionRepositoryObserver>;
+    const foreignBinding = Object.freeze({
+      purpose: 'verified-sam-text-heavy-production-v3-repository-binding' as const,
+    }) as SamTextHeavyProductionV3VerifiedRepositoryBinding;
+    const valid = verifyFakeBinding();
+    const invalidExpectedObserver = createSequencedObserver([
+      SAM_TEXT_HEAVY_PRODUCTION_V3_FAKE_OBSERVED_REPOSITORY_IDENTITY,
+    ]);
+
+    const cases = [
+      {
+        code: SAM_TEXT_HEAVY_PRODUCTION_V3_REPOSITORY_BINDING_ERROR_CODE,
+        operation: () =>
+          verifySamTextHeavyProductionV3RepositoryExecutionBinding(
+            Object.freeze({}) as Parameters<
+              typeof verifySamTextHeavyProductionV3RepositoryExecutionBinding
+            >[0],
+          ),
+      },
+      {
+        code: SAM_TEXT_HEAVY_PRODUCTION_V3_REPOSITORY_BINDING_ERROR_CODE,
+        operation: () =>
+          verifySamTextHeavyProductionV3RepositoryExecutionBinding({
+            expected: frozenExpected({ executingMergeSha: 'not-an-object-id' }),
+            observer: invalidExpectedObserver,
+          }),
+      },
+      {
+        code: SAM_TEXT_HEAVY_PRODUCTION_V3_REPOSITORY_OBSERVATION_ERROR_CODE,
+        operation: () =>
+          verifySamTextHeavyProductionV3RepositoryExecutionBinding({
+            expected: SAM_TEXT_HEAVY_PRODUCTION_V3_FAKE_EXPECTED_REPOSITORY_IDENTITY,
+            observer: foreignObserver,
+          }),
+      },
+      {
+        code: SAM_TEXT_HEAVY_PRODUCTION_V3_REPOSITORY_BINDING_ERROR_CODE,
+        operation: () =>
+          revalidateSamTextHeavyProductionV3RepositoryExecutionBinding(foreignBinding),
+      },
+      {
+        code: SAM_TEXT_HEAVY_PRODUCTION_V3_REPOSITORY_BINDING_ERROR_CODE,
+        operation: () => inspectSamTextHeavyProductionV3RepositoryExecutionBinding(foreignBinding),
+      },
+      {
+        code: SAM_TEXT_HEAVY_PRODUCTION_V3_REPOSITORY_BINDING_ERROR_CODE,
+        operation: () =>
+          assertSamTextHeavyProductionV3RepositoryBindingProvenance(
+            valid.binding,
+            'production-local-git',
+          ),
+      },
+    ] as const;
+
+    for (const testCase of cases) {
+      expectClosedRepositoryError(
+        captureError(testCase.operation),
+        testCase.code,
+        boundarySentinel,
+      );
+    }
   });
 
   it('rejects repository-observer reentry without invalidating a valid outer observation', () => {

@@ -4,8 +4,28 @@ import { lstat, mkdir, open, readdir, realpath } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, dirname, isAbsolute, join, normalize, resolve, sep } from 'node:path';
 
+import { z } from 'zod';
+
+import { SAM_MASK_CONTRACT_VERSION, SAM_MASK_ENCODING } from '../sam/sam-mask-contracts.js';
 import { canonicalizeJson } from '../scene/canonical-scene-json.js';
-import { SAM_CORPUS_EVALUATION_FIXTURES_V1 } from './sam-corpus-evaluation-catalog-v1.js';
+import {
+  SAM_CORPUS_CLIENT_TIMEOUT_MS,
+  SAM_CORPUS_COST_MAXIMUM_MICRO_USD,
+  SAM_CORPUS_EVALUATION_FIXTURES_V1,
+  SAM_CORPUS_EXECUTION_IDENTITY,
+  SAM_CORPUS_LOCAL_IDENTITY_EVIDENCE_SHA256,
+  SAM_CORPUS_PROFILE_IDENTITIES,
+  SAM_CORPUS_REQUEST_LIMITS,
+} from './sam-corpus-evaluation-catalog-v1.js';
+import {
+  RUNPOD_API_KEY_REFERENCE,
+  RUNPOD_DIRECT_DOCUMENTATION_EXPIRES_AT,
+  RUNPOD_DIRECT_DOCUMENTATION_RETRIEVED_AT,
+  RUNPOD_DIRECT_MASK_PATH,
+  RUNPOD_DIRECT_METHOD,
+  SAM_RUNPOD_DIRECT_AUTHORIZATION_PROFILE_V3,
+  SAM_RUNPOD_DIRECT_AUTHORIZATION_PROFILE_V3_SHA256,
+} from './sam-runpod-direct-v3-profiles.js';
 import {
   SAM_TEXT_HEAVY_RUNPOD_DEPLOYMENT_V1,
   SAM_TEXT_HEAVY_RUNPOD_DEPLOYMENT_V1_CANONICAL_SHA256,
@@ -51,6 +71,78 @@ export const SAM_TEXT_HEAVY_PRODUCTION_V3_OUTPUT_NAMING_POLICY_SHA256 = createHa
   .update(canonicalizeJson(SAM_TEXT_HEAVY_PRODUCTION_V3_OUTPUT_NAMING_POLICY))
   .digest('hex');
 
+export const SAM_TEXT_HEAVY_PRODUCTION_V3_FROZEN_CORPUS_REQUEST_IDENTITY = Object.freeze({
+  corpusProvenanceSha: SAM_TEXT_HEAVY_PRODUCTION_V3_CORPUS_PROVENANCE_SHA,
+  deploymentIdentity: SAM_TEXT_HEAVY_RUNPOD_DEPLOYMENT_V1,
+  deploymentIdentitySha256: SAM_TEXT_HEAVY_RUNPOD_DEPLOYMENT_V1_CANONICAL_SHA256,
+  endpoint: Object.freeze({
+    url: `https://${SAM_TEXT_HEAVY_RUNPOD_DEPLOYMENT_V1.endpointId}.api.runpod.ai${RUNPOD_DIRECT_MASK_PATH}`,
+    method: RUNPOD_DIRECT_METHOD,
+    path: RUNPOD_DIRECT_MASK_PATH,
+    redirectCount: 0 as const,
+  }),
+  fixture: Object.freeze({
+    key: textHeavy.fixtureKey,
+    id: textHeavy.fixtureId,
+    normalizedReference: textHeavy.normalizedReference,
+    source: textHeavy.normalized,
+    humanOracle: textHeavy.humanOracle,
+  }),
+  request: Object.freeze({
+    identifiers: textHeavy.identifiers,
+    canonical: textHeavy.canonicalRequest,
+    contractVersion: SAM_MASK_CONTRACT_VERSION,
+    segmentationMode: 'automatic-candidates' as const,
+    limits: SAM_CORPUS_REQUEST_LIMITS,
+    maskEncoding: SAM_MASK_ENCODING,
+  }),
+  executionIdentity: SAM_CORPUS_EXECUTION_IDENTITY,
+  capacity: textHeavy.capacity,
+  policy: Object.freeze({
+    clientWallTimeoutMs: SAM_CORPUS_CLIENT_TIMEOUT_MS,
+    incrementalCostMaximumMicroUsd: SAM_CORPUS_COST_MAXIMUM_MICRO_USD,
+    dispatchMaximum: 1 as const,
+    fetchMaximum: 1 as const,
+    materializationMaximum: 1 as const,
+    retryCount: 0 as const,
+    redirectCount: 0 as const,
+    pollCount: 0 as const,
+    healthRequestCount: 0 as const,
+    pingRequestCount: 0 as const,
+    queueRequestCount: 0 as const,
+    providerBillingGuarantee: false as const,
+  }),
+  profiles: SAM_CORPUS_PROFILE_IDENTITIES,
+  authorizationV3Profile: Object.freeze({
+    identity: SAM_RUNPOD_DIRECT_AUTHORIZATION_PROFILE_V3,
+    sha256: SAM_RUNPOD_DIRECT_AUTHORIZATION_PROFILE_V3_SHA256,
+  }),
+  localIdentityEvidenceSha256: SAM_CORPUS_LOCAL_IDENTITY_EVIDENCE_SHA256,
+  secretReferenceName: RUNPOD_API_KEY_REFERENCE,
+  documentationEvidence: Object.freeze({
+    retrievedAt: RUNPOD_DIRECT_DOCUMENTATION_RETRIEVED_AT,
+    expiresAt: RUNPOD_DIRECT_DOCUMENTATION_EXPIRES_AT,
+    hostingProfileSha256: SAM_CORPUS_PROFILE_IDENTITIES.hostingSha256,
+  }),
+  publication: 'sam-corpus-v2-exclusive-manifest-last' as const,
+  review: 'sam-corpus-visual-review-v1-verifier-bound' as const,
+  registries: Object.freeze({
+    productionExecutionRegistry: 'empty-unchanged' as const,
+    productionTransportRegistry: 'empty-unchanged' as const,
+    productionAdmissionRegistry: 'empty-unchanged' as const,
+  }),
+  activation: Object.freeze({
+    corpusProductionExecutionAuthority: false as const,
+    corpusProviderCallAuthority: false as const,
+    webRouteAuthority: false as const,
+    productProductionAuthority: false as const,
+    generalAdmissionAuthority: false as const,
+    productionAdmissionAuthority: false as const,
+    corpusBatchAuthority: false as const,
+    providerBillingGuarantee: false as const,
+  }),
+});
+
 const CANONICAL_PRODUCTION_BASENAME = new RegExp(
   `^fabrica-sam-text-heavy-real-call-v3-[0-9]{2}-corpus-${CORPUS_PROVENANCE_PREFIX}$`,
   'u',
@@ -62,21 +154,88 @@ const CONFLICTING_LEGACY_PRODUCTION_BASENAME = new RegExp(
 const TEST_ROOT_BASENAME = /^fabrica-sam-text-heavy-production-v3-test-root-[A-Za-z0-9_-]+$/u;
 const TEST_OUTPUT_BASENAME = /^fabrica-sam-text-heavy-production-v3-fake-[0-9a-f]{12}$/u;
 
-export interface SamTextHeavyProductionV3CanonicalCallIdentity {
-  readonly corpusProvenanceSha: typeof SAM_TEXT_HEAVY_PRODUCTION_V3_CORPUS_PROVENANCE_SHA;
-  readonly repositoryExecution: SamTextHeavyProductionV3RepositoryExecutionEvidence;
-  readonly deploymentIdentity: typeof SAM_TEXT_HEAVY_RUNPOD_DEPLOYMENT_V1;
-  readonly deploymentIdentitySha256: typeof SAM_TEXT_HEAVY_RUNPOD_DEPLOYMENT_V1_CANONICAL_SHA256;
-  readonly outputNamingPolicy: typeof SAM_TEXT_HEAVY_PRODUCTION_V3_OUTPUT_NAMING_POLICY;
-  readonly outputNamingPolicySha256: string;
-  readonly fixtureId: typeof textHeavy.fixtureId;
-  readonly requestId: typeof textHeavy.identifiers.requestId;
-  readonly workspaceId: typeof textHeavy.identifiers.workspaceId;
-  readonly jobId: typeof textHeavy.identifiers.jobId;
-  readonly attemptId: typeof textHeavy.identifiers.attemptId;
-  readonly canonicalRequestByteLength: typeof textHeavy.canonicalRequest.byteLength;
-  readonly canonicalRequestSha256: typeof textHeavy.canonicalRequest.sha256;
-}
+export type SamTextHeavyProductionV3CanonicalCallIdentity = Readonly<
+  typeof SAM_TEXT_HEAVY_PRODUCTION_V3_FROZEN_CORPUS_REQUEST_IDENTITY & {
+    readonly schema: 'fabrica-sam-text-heavy-production-v3-canonical-claim-v2';
+    readonly version: 2;
+    readonly repositoryExecution: SamTextHeavyProductionV3RepositoryExecutionEvidence;
+    readonly outputNamingPolicy: typeof SAM_TEXT_HEAVY_PRODUCTION_V3_OUTPUT_NAMING_POLICY;
+    readonly outputNamingPolicySha256: string;
+  }
+>;
+
+const isExactCanonicalValue = (input: unknown, expected: unknown): boolean => {
+  if (Object.is(input, expected)) return true;
+  if (Array.isArray(expected)) {
+    return (
+      Array.isArray(input) &&
+      input.length === expected.length &&
+      expected.every((value, index) => isExactCanonicalValue(input[index], value))
+    );
+  }
+  if (typeof expected !== 'object' || expected === null) return false;
+  if (typeof input !== 'object' || input === null || Array.isArray(input)) return false;
+  const inputRecord = input as Record<string, unknown>;
+  const expectedRecord = expected as Record<string, unknown>;
+  const inputKeys = Object.keys(inputRecord).toSorted();
+  const expectedKeys = Object.keys(expectedRecord).toSorted();
+  return (
+    inputKeys.length === expectedKeys.length &&
+    inputKeys.every((key, index) => key === expectedKeys[index]) &&
+    expectedKeys.every((key) => isExactCanonicalValue(inputRecord[key], expectedRecord[key]))
+  );
+};
+
+const exactCanonicalValueSchema = <T>(expected: T) =>
+  z.custom<T>((input) => isExactCanonicalValue(input, expected), {
+    error: 'Canonical production claim identity field drifted.',
+  });
+
+export const SamTextHeavyProductionV3CanonicalCallIdentitySchema = z
+  .strictObject({
+    schema: z.literal('fabrica-sam-text-heavy-production-v3-canonical-claim-v2'),
+    version: z.literal(2),
+    repositoryExecution: SamTextHeavyProductionV3RepositoryExecutionEvidenceSchema,
+    corpusProvenanceSha: z.literal(SAM_TEXT_HEAVY_PRODUCTION_V3_CORPUS_PROVENANCE_SHA),
+    deploymentIdentity: exactCanonicalValueSchema(SAM_TEXT_HEAVY_RUNPOD_DEPLOYMENT_V1),
+    deploymentIdentitySha256: z.literal(SAM_TEXT_HEAVY_RUNPOD_DEPLOYMENT_V1_CANONICAL_SHA256),
+    outputNamingPolicy: exactCanonicalValueSchema(
+      SAM_TEXT_HEAVY_PRODUCTION_V3_OUTPUT_NAMING_POLICY,
+    ),
+    outputNamingPolicySha256: z.literal(SAM_TEXT_HEAVY_PRODUCTION_V3_OUTPUT_NAMING_POLICY_SHA256),
+    endpoint: exactCanonicalValueSchema(
+      SAM_TEXT_HEAVY_PRODUCTION_V3_FROZEN_CORPUS_REQUEST_IDENTITY.endpoint,
+    ),
+    fixture: exactCanonicalValueSchema(
+      SAM_TEXT_HEAVY_PRODUCTION_V3_FROZEN_CORPUS_REQUEST_IDENTITY.fixture,
+    ),
+    request: exactCanonicalValueSchema(
+      SAM_TEXT_HEAVY_PRODUCTION_V3_FROZEN_CORPUS_REQUEST_IDENTITY.request,
+    ),
+    executionIdentity: exactCanonicalValueSchema(SAM_CORPUS_EXECUTION_IDENTITY),
+    capacity: exactCanonicalValueSchema(textHeavy.capacity),
+    policy: exactCanonicalValueSchema(
+      SAM_TEXT_HEAVY_PRODUCTION_V3_FROZEN_CORPUS_REQUEST_IDENTITY.policy,
+    ),
+    profiles: exactCanonicalValueSchema(SAM_CORPUS_PROFILE_IDENTITIES),
+    authorizationV3Profile: exactCanonicalValueSchema(
+      SAM_TEXT_HEAVY_PRODUCTION_V3_FROZEN_CORPUS_REQUEST_IDENTITY.authorizationV3Profile,
+    ),
+    localIdentityEvidenceSha256: z.literal(SAM_CORPUS_LOCAL_IDENTITY_EVIDENCE_SHA256),
+    secretReferenceName: z.literal(RUNPOD_API_KEY_REFERENCE),
+    documentationEvidence: exactCanonicalValueSchema(
+      SAM_TEXT_HEAVY_PRODUCTION_V3_FROZEN_CORPUS_REQUEST_IDENTITY.documentationEvidence,
+    ),
+    publication: z.literal('sam-corpus-v2-exclusive-manifest-last'),
+    review: z.literal('sam-corpus-visual-review-v1-verifier-bound'),
+    registries: exactCanonicalValueSchema(
+      SAM_TEXT_HEAVY_PRODUCTION_V3_FROZEN_CORPUS_REQUEST_IDENTITY.registries,
+    ),
+    activation: exactCanonicalValueSchema(
+      SAM_TEXT_HEAVY_PRODUCTION_V3_FROZEN_CORPUS_REQUEST_IDENTITY.activation,
+    ),
+  })
+  .readonly();
 
 export interface SamTextHeavyProductionV3CanonicalCallEvidence {
   readonly identity: SamTextHeavyProductionV3CanonicalCallIdentity;
@@ -93,21 +252,16 @@ export const deriveSamTextHeavyProductionV3CanonicalCallEvidenceFromRepositoryEx
       throw new TypeError('SAM text-heavy repository execution evidence failed closed.');
     }
   })();
-  const identity = Object.freeze({
-    corpusProvenanceSha: SAM_TEXT_HEAVY_PRODUCTION_V3_CORPUS_PROVENANCE_SHA,
-    repositoryExecution: verifiedRepositoryExecution,
-    deploymentIdentity: SAM_TEXT_HEAVY_RUNPOD_DEPLOYMENT_V1,
-    deploymentIdentitySha256: SAM_TEXT_HEAVY_RUNPOD_DEPLOYMENT_V1_CANONICAL_SHA256,
-    outputNamingPolicy: SAM_TEXT_HEAVY_PRODUCTION_V3_OUTPUT_NAMING_POLICY,
-    outputNamingPolicySha256: SAM_TEXT_HEAVY_PRODUCTION_V3_OUTPUT_NAMING_POLICY_SHA256,
-    fixtureId: textHeavy.fixtureId,
-    requestId: textHeavy.identifiers.requestId,
-    workspaceId: textHeavy.identifiers.workspaceId,
-    jobId: textHeavy.identifiers.jobId,
-    attemptId: textHeavy.identifiers.attemptId,
-    canonicalRequestByteLength: textHeavy.canonicalRequest.byteLength,
-    canonicalRequestSha256: textHeavy.canonicalRequest.sha256,
-  });
+  const identity = SamTextHeavyProductionV3CanonicalCallIdentitySchema.parse(
+    Object.freeze({
+      schema: 'fabrica-sam-text-heavy-production-v3-canonical-claim-v2',
+      version: 2,
+      ...SAM_TEXT_HEAVY_PRODUCTION_V3_FROZEN_CORPUS_REQUEST_IDENTITY,
+      repositoryExecution: verifiedRepositoryExecution,
+      outputNamingPolicy: SAM_TEXT_HEAVY_PRODUCTION_V3_OUTPUT_NAMING_POLICY,
+      outputNamingPolicySha256: SAM_TEXT_HEAVY_PRODUCTION_V3_OUTPUT_NAMING_POLICY_SHA256,
+    }),
+  );
   return Object.freeze({
     identity,
     claimSha256: createHash('sha256').update(canonicalizeJson(identity)).digest('hex'),
