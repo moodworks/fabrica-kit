@@ -6,8 +6,22 @@ import {
   type BannerSceneV1,
 } from '../scene/banner-scene-v1.schema.js';
 import { canonicalizeJson } from '../scene/canonical-scene-json.js';
+import {
+  BannerExportRequestSchema,
+  validateBannerExportResult,
+  type BannerExporterPort,
+} from '../ports/banner-capability-ports.js';
+import {
+  ExportReproductionManifestV1Schema,
+  ExporterManifestRefV1Schema,
+} from '../scene/export-reproduction-manifest-v1.schema.js';
+import { PROVIDER_FREE_BANNER_EXPORT_WORKFLOW_V1 } from '../workflows/workflow-definition.js';
 import { MAX_RASTER_ENCODED_BYTES } from '../security/raster-container.js';
 import { validateNormalizedPng } from '../security/raster-upload.js';
+import {
+  createBannerSceneV1ExportDocumentParts,
+  createBannerSceneV1RenderPlan,
+} from '../render/banner-scene-v1-renderer.js';
 import {
   createExactZipContentPolicy,
   inspectZipBytes,
@@ -15,6 +29,7 @@ import {
   type ZipInspectionResult,
 } from './zip-inspector.js';
 import { ZipFile } from 'yazl';
+import { PROVIDER_FREE_EXPORTER_REF_V1 } from './provider-free-export-identities-v1.js';
 
 export interface FakeExportAsset {
   readonly bytes: Uint8Array;
@@ -39,6 +54,36 @@ export interface DeterministicFakePngArtifact {
   readonly sha256: string;
   readonly validationLabel: 'internal-provider-free-not-gdn';
 }
+
+const providerFreeExporterBuildDefinitionV1 = Object.freeze({
+  buildDefinitionVersion: 1 as const,
+  exporterKind: 'deterministic-provider-free-html5' as const,
+  exporterVersion: 1 as const,
+  renderer: 'banner-scene-v1-render-plan-runtime-v1' as const,
+  zip: Object.freeze({
+    compression: 'stored' as const,
+    timestamp: '1980-01-01T00:00:00' as const,
+    mode: '100644' as const,
+    entryOrder: Object.freeze([
+      'index.html',
+      'styles.css',
+      'runtime.js',
+      'scene.json',
+      'INTERNAL-NON-GDN.txt',
+      'assets-by-version-id',
+    ] as const),
+  }),
+});
+
+const computedProviderFreeExporterBuildSha256 = sha256Hex(
+  Buffer.from(canonicalizeJson(providerFreeExporterBuildDefinitionV1), 'utf8'),
+);
+if (computedProviderFreeExporterBuildSha256 !== PROVIDER_FREE_EXPORTER_REF_V1.buildSha256) {
+  throw new TypeError('The provider-free exporter build identity drifted.');
+}
+export const PROVIDER_FREE_EXPORTER_V1 = ExporterManifestRefV1Schema.parse(
+  PROVIDER_FREE_EXPORTER_REF_V1,
+);
 
 const fixedZipDate = new Date(1980, 0, 1, 0, 0, 0, 0);
 const fixedFileOptions = Object.freeze({
@@ -118,33 +163,27 @@ const packagedSceneAssetIds = (scene: BannerSceneV1): ReadonlySet<string> => {
   return ids;
 };
 
-const trustedIndexHtml = (scene: BannerSceneV1): string =>
-  `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=${String(
-    scene.canvas.width,
-  )},height=${String(scene.canvas.height)}"><link rel="stylesheet" href="styles.css"></head><body><main id="banner" aria-label="Internal provider-free banner"></main><script src="runtime.js"></script></body></html>`;
+export interface DeterministicFakeZipEntryV1 {
+  readonly bytes: Uint8Array;
+  readonly name: string;
+}
 
-const trustedStyles = (scene: BannerSceneV1): string =>
-  `html,body{margin:0;width:${String(scene.canvas.width)}px;height:${String(
-    scene.canvas.height,
-  )}px;overflow:hidden}#banner{position:relative;width:100%;height:100%}`;
-
-const trustedRuntime =
-  "'use strict';document.getElementById('banner').textContent='Internal deterministic preview';";
-
-export const createDeterministicFakeZipArtifact = async (input: {
+export const createDeterministicFakeZipEntriesV1 = (input: {
   readonly assets: readonly FakeExportAsset[];
   readonly scene: BannerSceneV1;
-}): Promise<DeterministicFakeZipArtifact> => {
+}): readonly DeterministicFakeZipEntryV1[] => {
   if (input.scene.exportSettings.kind === 'static-png') {
     throw new TypeError('Static PNG scenes require the deterministic PNG fake path.');
   }
   const assets = validateAssets(input.scene, input.assets);
   const packagedIds = packagedSceneAssetIds(input.scene);
   const packagedAssets = assets.filter((asset) => packagedIds.has(asset.reference.assetVersionId));
-  const entries: { readonly bytes: Buffer; readonly name: string }[] = [
-    { name: 'index.html', bytes: Buffer.from(trustedIndexHtml(input.scene), 'utf8') },
-    { name: 'styles.css', bytes: Buffer.from(trustedStyles(input.scene), 'utf8') },
-    { name: 'runtime.js', bytes: Buffer.from(trustedRuntime, 'utf8') },
+  const plan = createBannerSceneV1RenderPlan(input.scene);
+  const document = createBannerSceneV1ExportDocumentParts({ plan, assets });
+  return [
+    { name: 'index.html', bytes: Buffer.from(document.indexHtml, 'utf8') },
+    { name: 'styles.css', bytes: Buffer.from(document.stylesCss, 'utf8') },
+    { name: 'runtime.js', bytes: Buffer.from(document.runtimeJavaScript, 'utf8') },
     { name: 'scene.json', bytes: Buffer.from(canonicalizeJson(input.scene), 'utf8') },
     {
       name: 'INTERNAL-NON-GDN.txt',
@@ -157,8 +196,16 @@ export const createDeterministicFakeZipArtifact = async (input: {
       bytes: Buffer.from(asset.bytes),
     })),
   ];
+};
+
+export const createDeterministicFakeZipArtifact = async (input: {
+  readonly assets: readonly FakeExportAsset[];
+  readonly scene: BannerSceneV1;
+}): Promise<DeterministicFakeZipArtifact> => {
+  const entries = createDeterministicFakeZipEntriesV1(input);
   const zip = new ZipFile();
-  for (const entry of entries) zip.addBuffer(entry.bytes, entry.name, fixedFileOptions);
+  for (const entry of entries)
+    zip.addBuffer(Buffer.from(entry.bytes), entry.name, fixedFileOptions);
   zip.end({ comment: '', forceZip64Format: false });
 
   const bytes = await collectZipOutput(zip);
@@ -205,3 +252,56 @@ export const createDeterministicFakePngArtifact = async (input: {
     validationLabel: 'internal-provider-free-not-gdn',
   };
 };
+
+const providerFreeExportWorkflowRefV1 = {
+  workflowVersionId: PROVIDER_FREE_BANNER_EXPORT_WORKFLOW_V1.workflowVersionId,
+  workflowVersion: PROVIDER_FREE_BANNER_EXPORT_WORKFLOW_V1.workflowVersion,
+  definitionSha256: PROVIDER_FREE_BANNER_EXPORT_WORKFLOW_V1.definitionSha256,
+};
+
+export const createProviderFreeBannerExporterV1 = (): BannerExporterPort => ({
+  async export(input) {
+    const request = BannerExportRequestSchema.parse(input);
+    if (
+      canonicalizeJson(request.exporter) !== canonicalizeJson(PROVIDER_FREE_EXPORTER_V1) ||
+      canonicalizeJson(request.exportWorkflow) !== canonicalizeJson(providerFreeExportWorkflowRefV1)
+    ) {
+      throw new TypeError('Provider-free export identity does not match the fixed implementation.');
+    }
+    request.cancellation.throwIfCancelled();
+    const generated = await createDeterministicFakeZipArtifact({
+      scene: request.scene,
+      assets: request.assets,
+    });
+    request.cancellation.throwIfCancelled();
+    const artifact = {
+      mediaType: generated.mediaType,
+      bytes: generated.bytes,
+      byteSize: generated.byteSize,
+      sha256: generated.sha256,
+      validationLabel: generated.validationLabel,
+    } as const;
+    const assetVersions = distinctSceneAssets(request.scene);
+    const manifest = ExportReproductionManifestV1Schema.parse({
+      manifestVersion: 1,
+      sceneVersionId: request.sceneVersionId,
+      sceneRevision: request.sceneRevision,
+      sceneEncoding: 'banner-scene-json-v1',
+      sceneSha256: sha256Hex(Buffer.from(canonicalizeJson(request.scene), 'utf8')),
+      assetVersions,
+      sceneWorkflow: request.sceneWorkflow,
+      exportWorkflow: request.exportWorkflow,
+      exporter: request.exporter,
+      validator:
+        request.scene.exportSettings.kind === 'gdn-html5'
+          ? { kind: 'profile', profile: request.scene.exportSettings.validatorProfile }
+          : { kind: 'none' },
+      output: {
+        mediaType: artifact.mediaType,
+        byteSize: artifact.byteSize,
+        sha256: artifact.sha256,
+      },
+    });
+    return validateBannerExportResult({ request, result: { artifact, manifest } });
+  },
+});

@@ -8,6 +8,7 @@ import {
 } from '../jobs/syntax.js';
 import { PositiveInt32Schema, Sha256HexSchema } from '../scene/banner-scene-v1.schema.js';
 import { canonicalizeJson, sha256Hex } from '../scene/canonical-scene-json.js';
+import { PROVIDER_FREE_BANNER_EXPORT_WORKFLOW_REF_V1 } from '../export/provider-free-export-identities-v1.js';
 
 export const WorkflowStepKindSchema = z.enum([
   'source_load',
@@ -255,6 +256,65 @@ export const INITIAL_BANNER_ANALYZE_WORKFLOW_V1 = WorkflowVersionContractSchema.
   workflowVersion: 1,
   definitionSha256: computeWorkflowDefinitionSha256(initialBannerAnalyzeDefinition),
   definition: initialBannerAnalyzeDefinition,
+});
+
+const providerFreeBannerExportDefinition = WorkflowDefinitionV1Schema.parse({
+  definitionVersion: 1,
+  workflowKey: 'banner.export',
+  steps: [
+    {
+      stepKey: 'scene-load',
+      kind: 'scene_load',
+      weightBps: 1_500,
+      replaySafe: true,
+      externalIdempotency: 'none',
+    },
+    {
+      stepKey: 'deterministic-export',
+      kind: 'deterministic_export',
+      weightBps: 5_500,
+      replaySafe: true,
+      externalIdempotency: 'job-step-call-v1',
+    },
+    {
+      stepKey: 'output-validation',
+      kind: 'output_validation',
+      weightBps: 2_000,
+      replaySafe: true,
+      externalIdempotency: 'none',
+    },
+    {
+      stepKey: 'atomic-persistence',
+      kind: 'atomic_persistence',
+      weightBps: 1_000,
+      replaySafe: true,
+      externalIdempotency: 'none',
+    },
+  ],
+  outputs: [
+    {
+      outputKey: 'export.artifact',
+      kind: 'export_artifact',
+      disposition: 'final',
+      producingStepKey: 'atomic-persistence',
+      replaySafe: true,
+    },
+  ],
+  policy: initialBannerAnalyzeDefinition.policy,
+});
+
+const computedProviderFreeExportWorkflowSha256 = computeWorkflowDefinitionSha256(
+  providerFreeBannerExportDefinition,
+);
+if (
+  computedProviderFreeExportWorkflowSha256 !==
+  PROVIDER_FREE_BANNER_EXPORT_WORKFLOW_REF_V1.definitionSha256
+) {
+  throw new TypeError('The provider-free export workflow identity drifted.');
+}
+export const PROVIDER_FREE_BANNER_EXPORT_WORKFLOW_V1 = WorkflowVersionContractSchema.parse({
+  ...PROVIDER_FREE_BANNER_EXPORT_WORKFLOW_REF_V1,
+  definition: providerFreeBannerExportDefinition,
 });
 
 export const workflowCumulativeBoundaries = (
