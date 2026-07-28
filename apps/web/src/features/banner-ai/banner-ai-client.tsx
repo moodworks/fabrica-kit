@@ -123,6 +123,20 @@ export function BannerAiClient() {
         </p>
       </header>
 
+      <section className="demo-project-entry" aria-labelledby="demo-project-entry-title">
+        <div>
+          <p className="section-kicker">Phase 2A · approved synthetic fixture</p>
+          <h2 id="demo-project-entry-title">Edit the provider-free Angel demo</h2>
+          <p>
+            Open the exact 300 × 200 fixture project to save scene revisions, preview in an isolated
+            frame, and create an internally validated deterministic ZIP.
+          </p>
+        </div>
+        <Link className="demo-project-link" href="/banner-ai/editor">
+          Open approved demo project
+        </Link>
+      </section>
+
       <div className="banner-workspace">
         <section className="upload-card" aria-labelledby="source-image-title">
           <div className="card-heading">

@@ -26,7 +26,7 @@ import {
 } from '../src/index.js';
 import { cloneRecord, loadAngelRecord, setAt } from './fixture.js';
 
-const pinnedFakeZipSha256 = '8a05cbb9c03e888b6d7afa3baf04b2860c5515c361e78967831ce2ba4d57a4a8';
+const pinnedFakeZipSha256 = '352cad81939d87971f56a83e3bef622657216dec1e1986cbb40f616e9b769c6f';
 
 const signatureOffsets = (bytes: Buffer, signature: number): readonly number[] => {
   const encoded = Buffer.alloc(4);

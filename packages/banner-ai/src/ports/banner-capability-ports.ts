@@ -1,10 +1,8 @@
 import { z } from 'zod';
 
 import {
-  ErrorCodeSchema,
   PersistedSceneVersionIdSchema,
   PersistedWorkflowVersionIdSchema,
-  SafePersistedMessageSchema,
   CurrencyCodeSchema,
   type CurrencyCode,
 } from '../jobs/syntax.js';
@@ -41,6 +39,12 @@ import {
   type CompositionAnalysisResultV1,
   type CompositionPartV1,
 } from '../workflows/composition-contracts.js';
+import {
+  GdnValidationResultSchema,
+  type GdnValidationResult,
+} from './gdn-validation-result-v1.contract.js';
+
+export * from './gdn-validation-result-v1.contract.js';
 
 export interface CancellationSignalPort {
   readonly cancelled: boolean;
@@ -354,20 +358,6 @@ export interface BannerExporterPort {
   export(input: BannerExportRequest): Promise<BannerExportResult>;
 }
 
-export const GdnValidationFindingSchema = z
-  .strictObject({
-    ruleCode: ErrorCodeSchema,
-    severity: z.enum(['error', 'warning']),
-    message: SafePersistedMessageSchema,
-    entryPath: z
-      .string()
-      .min(1)
-      .max(240)
-      .regex(/^[A-Za-z0-9][A-Za-z0-9._/-]{0,239}$/)
-      .nullable(),
-  })
-  .readonly();
-
 export const GdnValidationRequestSchema = z
   .strictObject({
     artifact: BannerExportArtifactSchema.refine(
@@ -378,27 +368,7 @@ export const GdnValidationRequestSchema = z
   })
   .readonly();
 
-export const GdnValidationResultSchema = z
-  .strictObject({
-    validationLabel: z.literal('internal-provider-free-not-gdn'),
-    artifactSha256: Sha256HexSchema,
-    profile: ValidatorProfileRefV1Schema,
-    outcome: z.enum(['internal-check-passed', 'internal-check-failed']),
-    findings: z.array(GdnValidationFindingSchema).max(256).readonly(),
-  })
-  .superRefine((result, context) => {
-    const hasErrors = result.findings.some((finding) => finding.severity === 'error');
-    if ((result.outcome === 'internal-check-failed') !== hasErrors) {
-      context.addIssue({
-        code: 'custom',
-        message: 'Internal validator outcome must match the presence of error findings.',
-      });
-    }
-  })
-  .readonly();
-
 export type GdnValidationRequest = z.infer<typeof GdnValidationRequestSchema>;
-export type GdnValidationResult = z.infer<typeof GdnValidationResultSchema>;
 
 export const validateInternalGdnValidationResult = (input: {
   readonly request: unknown;
