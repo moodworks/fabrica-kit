@@ -6,6 +6,7 @@ node_modules/
 # Framework and compiler output
 .next/
 **/.next/
+/apps/web/next-env.d.ts
 dist/
 **/dist/
 build/
