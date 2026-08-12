@@ -9,7 +9,9 @@ import {
   createBoundedLayerPreview,
   createDeterministicSamBoxPromptAdapter,
   extractLayerWithSamBoxPrompt,
-  materializeProviderFreeAngelProjectWithDeterministicSamBoxPromptsV1,
+  materializeProviderFreePersonSamReplayProjectV1,
+  PROVIDER_FREE_PERSON_SAM_REPLAY_EVIDENCE_V1,
+  validateProviderFreePersonSamReplayEvidenceV1,
 } from '../src/server/sam-box-prompt-layer-extraction.js';
 import { postprocessSamMasks } from '../src/sam/sam-mask-postprocess.js';
 import { assertCanonicalNormalizedPng } from '../src/security/raster-container.js';
@@ -106,19 +108,51 @@ const fakeSam = (calls: SamMaskRequest[], empty = false) => ({
 });
 
 describe('SAM box-prompt layer extraction', () => {
-  it('memoizes the deterministic Angel project with extracted foreground assets', async () => {
+  it('exposes deeply frozen pinned replay evidence and rejects every major tamper class', () => {
+    const evidence = PROVIDER_FREE_PERSON_SAM_REPLAY_EVIDENCE_V1;
+    expect(Object.isFrozen(evidence)).toBe(true);
+    expect(Object.isFrozen(evidence.fixture)).toBe(true);
+    expect(Object.isFrozen(evidence.fixture.requestIdentifiers)).toBe(true);
+    expect(Object.isFrozen(evidence.candidate.mask)).toBe(true);
+    expect(Object.isFrozen(validateProviderFreePersonSamReplayEvidenceV1(evidence))).toBe(true);
+
+    const tampered = [
+      ['manifest', ['manifestSha256'], '0'.repeat(64)],
+      ['validated', ['validatedResponseSha256'], '0'.repeat(64)],
+      ['sanitized', ['sanitizedResponseSha256'], '0'.repeat(64)],
+      ['classification', ['outputClassification'], 'not-sam-output'],
+      ['fixture', ['fixture', 'sourceSha256'], '0'.repeat(64)],
+      ['request', ['fixture', 'requestIdentifiers', 'requestId'], ids.requestId],
+      ['execution', ['executionIdentity', 'repositoryCommit'], '0'.repeat(40)],
+      ['candidate order', ['candidateOrder'], 4],
+      ['candidate score', ['candidate', 'predictedIouBps'], 1],
+      ['candidate flags', ['candidate', 'reviewFlags'], []],
+      ['candidate mask', ['candidate', 'mask', 'sha256'], '0'.repeat(64)],
+      ['cutout', ['cutout', 'sha256'], '0'.repeat(64)],
+    ] as const;
+    for (const [, path, value] of tampered) {
+      const copy = structuredClone(evidence) as Record<string, unknown>;
+      let target: Record<string, unknown> = copy;
+      for (const key of path.slice(0, -1)) {
+        const child = target[key];
+        if (child === null || typeof child !== 'object')
+          throw new TypeError('Invalid tamper path.');
+        target = child as Record<string, unknown>;
+      }
+      target[path[path.length - 1]!] = value;
+      expect(() => validateProviderFreePersonSamReplayEvidenceV1(copy)).toThrow();
+    }
+  });
+
+  it('memoizes the verified person SAM replay project with extracted foreground assets', async () => {
     const [first, second] = await Promise.all([
-      materializeProviderFreeAngelProjectWithDeterministicSamBoxPromptsV1(),
-      materializeProviderFreeAngelProjectWithDeterministicSamBoxPromptsV1(),
+      materializeProviderFreePersonSamReplayProjectV1(),
+      materializeProviderFreePersonSamReplayProjectV1(),
     ]);
     expect(first).toBe(second);
-    expect(first.assets).toHaveLength(4);
-    expect(first.scene.layers).toHaveLength(3);
-    expect(first.scene.layers.map((layer) => layer.name)).toEqual([
-      'Angel body',
-      'Left wing',
-      'Right wing',
-    ]);
+    expect(first.assets).toHaveLength(2);
+    expect(first.scene.layers).toHaveLength(1);
+    expect(first.scene.layers.map((layer) => layer.name)).toEqual(['banner-person-v1 subject']);
     expect(first.scene.layers.map((layer) => layer.asset.sha256)).toEqual(
       first.assets.slice(1).map((asset) => asset.reference.sha256),
     );
@@ -129,9 +163,7 @@ describe('SAM box-prompt layer extraction', () => {
       }),
     ).toBe(true);
     expect(first.scene.layers.map((layer) => layer.frame)).toEqual([
-      { x: 105, y: 30, width: 90, height: 160 },
-      { x: 15, y: 36, width: 105, height: 120 },
-      { x: 180, y: 36, width: 105, height: 120 },
+      { x: 195, y: 5, width: 54, height: 195 },
     ]);
     const legacyTintDigests = new Set([
       '5927efb1aff9e9f00f72265a6a3b744985f9b58fe0d848230fde163292e08ced',
@@ -141,9 +173,7 @@ describe('SAM box-prompt layer extraction', () => {
     expect(
       first.assets.slice(1).every((asset) => !legacyTintDigests.has(asset.reference.sha256)),
     ).toBe(true);
-    await expect(
-      materializeProviderFreeAngelProjectWithDeterministicSamBoxPromptsV1(),
-    ).resolves.toBe(first);
+    await expect(materializeProviderFreePersonSamReplayProjectV1()).resolves.toBe(first);
   });
   it('uses the exact box in the deterministic adapter with one zero-network call', async () => {
     const input = await createInput();

@@ -590,11 +590,12 @@ export function BannerAiProjectEditor() {
           <span>Provider-free editor</span>
         </nav>
         <section className="editor-open-card" aria-labelledby="editor-open-title">
-          <p className="section-kicker">Approved synthetic fixture · 300 × 200</p>
-          <h1 id="editor-open-title">Open the Angel demo project.</h1>
+          <p className="section-kicker">Verified replay · development-only · 300 × 200</p>
+          <h1 id="editor-open-title">Open the verified Meta SAM replay project.</h1>
           <p>
-            This fixed local project uses no provider response, remote asset, credential, payment,
-            or SAM artifact.
+            This fixed local project preserves and replays validated real Meta SAM automatic
+            candidate 05, manually selected. There is no live provider call, Qwen box output,
+            reconstruction, or product admission.
           </p>
           {state.openingError === null ? null : (
             <div className="editor-operation-error" role="alert">
@@ -627,7 +628,8 @@ export function BannerAiProjectEditor() {
           {resetConfirmation ? (
             <div className="editor-reset-confirmation" role="alert">
               <p>
-                Remove only the corrupt local Angel demo key? No unrelated browser data is changed.
+                Remove only the corrupt local verified replay key? No unrelated browser data is
+                changed.
               </p>
               <div className="editor-operation-actions">
                 <button type="button" onClick={() => void confirmReset()}>
@@ -659,14 +661,14 @@ export function BannerAiProjectEditor() {
 
       <header className="editor-project-header" aria-labelledby="editor-project-title">
         <div>
-          <p className="section-kicker">Provider-free fixture project</p>
+          <p className="section-kicker">Verified Meta SAM replay · development-only</p>
           <h1 id="editor-project-title">{projectData.project.displayName}</h1>
           <p>
-            Exact fixture <code>{projectData.project.fixtureId}</code> · 300 × 200 canvas
+            Exact replay fixture <code>{projectData.project.fixtureId}</code> · 300 × 200 canvas
           </p>
         </div>
         <div className="editor-project-actions">
-          <span className="local-badge">Provider-free</span>
+          <span className="local-badge">Replay · no live provider call</span>
           <button
             type="button"
             onClick={() => void save()}

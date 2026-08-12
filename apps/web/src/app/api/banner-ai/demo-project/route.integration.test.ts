@@ -5,7 +5,7 @@ import {
   createExactZipContentPolicy,
   inspectZipBytes,
 } from '@fabrica/banner-ai';
-import { materializeProviderFreeAngelProjectWithDeterministicSamBoxPromptsV1 } from '@fabrica/banner-ai/server/sam-box-prompt-layer-extraction';
+import { materializeProviderFreePersonSamReplayProjectV1 } from '@fabrica/banner-ai/server/sam-box-prompt-layer-extraction';
 import {
   isProviderFreeLayerIdV1,
   mutateProviderFreeBannerSceneV1,
@@ -56,38 +56,36 @@ const operationBody = (project: Awaited<ReturnType<typeof openData>>['project'])
 
 const revisionTwo = async () => {
   const opened = await openData();
-  const leftWing = opened.project.revisions[0]!.scene.layers.find((layer) =>
-    layer.name.includes('Left wing'),
-  )!;
-  if (!isProviderFreeLayerIdV1(leftWing.id)) throw new Error('Expected fixed left-wing ID.');
+  const subject = opened.project.revisions[0]!.scene.layers[0]!;
+  if (!isProviderFreeLayerIdV1(subject.id)) throw new Error('Expected fixed subject ID.');
   let scene = mutateProviderFreeBannerSceneV1(opened.project.revisions[0]!.scene, {
     type: 'set_layer_visible',
-    layerId: leftWing.id,
+    layerId: subject.id,
     visible: false,
   });
   scene = mutateProviderFreeBannerSceneV1(scene, {
     type: 'set_layer_included',
-    layerId: leftWing.id,
+    layerId: subject.id,
     included: false,
   });
   scene = mutateProviderFreeBannerSceneV1(scene, {
     type: 'set_layer_included',
-    layerId: leftWing.id,
+    layerId: subject.id,
     included: true,
   });
   scene = mutateProviderFreeBannerSceneV1(scene, {
     type: 'apply_gentle_float',
-    layerId: leftWing.id,
+    layerId: subject.id,
   });
   const response = await postJson(updateProject, '/api/banner-ai/demo-project', {
     action: 'save',
     project: opened.project,
     scene,
-    selectedPartId: leftWing.id,
+    selectedPartId: subject.id,
   });
   const envelope = parseProviderFreeProjectEnvelope(await response.json());
   if (!envelope.ok) throw new Error('Expected revision two to save.');
-  return { opened, saved: envelope.data, leftWing };
+  return { opened, saved: envelope.data, subject };
 };
 
 afterEach(() => vi.restoreAllMocks());
@@ -101,45 +99,47 @@ describe('provider-free demo project route integration', () => {
 
     expect(data.project).toMatchObject({
       envelopeVersion: 1,
-      fixtureId: 'angel-local-png-v1',
+      fixtureId: 'banner-person-sam-replay-v1',
       projectId: '2a000000-0000-5000-8000-000000000001',
       currentAcceptedRevision: 1,
     });
     expect(data.project.revisions[0]!.scene.canvas).toMatchObject({ width: 300, height: 200 });
     expect(data.presentation.parts.map((part) => part.name)).toEqual([
-      'Background',
-      'Angel body',
-      'Left wing',
-      'Right wing',
+      'Solid background',
+      'banner-person-v1 subject',
     ]);
     expect(
       data.presentation.parts.every((part) =>
         part.thumbnail.dataUrl.startsWith('data:image/png;base64,'),
       ),
     ).toBe(true);
-    expect(data.presentation.parts).toHaveLength(4);
-    expect(new Set(data.presentation.parts.map((part) => part.partKey)).size).toBe(4);
-    const fixed = await materializeProviderFreeAngelProjectWithDeterministicSamBoxPromptsV1();
+    expect(data.presentation.parts).toHaveLength(2);
+    expect(new Set(data.presentation.parts.map((part) => part.partKey)).size).toBe(2);
+    const fixed = await materializeProviderFreePersonSamReplayProjectV1();
     expect(data.presentation.parts.map((part) => [part.partKey, part.thumbnail.sha256])).toEqual(
       fixed.presentationParts.map((part) => [part.partKey, part.thumbnail.sha256]),
     );
     expect(data.project.revisions[0]!.scene.layers.map((layer) => layer.asset.sha256)).toEqual(
       fixed.scene.layers.map((layer) => layer.asset.sha256),
     );
+    expect(data.project.revisions[0]!.scene.layers).toHaveLength(1);
+    expect(data.project.revisions[0]!.scene.layers[0]!.asset.sha256).toBe(
+      '464f1bb286ac4a599e3b49a25b1f427d2b73acaac6c2cd1829902d0d5a870c33',
+    );
     expect(outbound).not.toHaveBeenCalled();
   });
 
   it('appends and reopens an exact canonical revision with unique identity and ancestry', async () => {
-    const { opened, saved, leftWing } = await revisionTwo();
+    const { opened, saved, subject } = await revisionTwo();
     const first = saved.project.revisions[0]!;
     const second = saved.project.revisions[1]!;
 
     expect(saved.project.currentAcceptedRevision).toBe(2);
-    expect(saved.project.selectedPartId).toBe(leftWing.id);
+    expect(saved.project.selectedPartId).toBe(subject.id);
     expect(second.sceneVersionId).not.toBe(first.sceneVersionId);
     expect(second.parentSceneSha256).toBe(first.sceneSha256);
     expect(second.sceneSha256).not.toBe(first.sceneSha256);
-    expect(second.scene.layers.find((layer) => layer.id === leftWing.id)).toMatchObject({
+    expect(second.scene.layers.find((layer) => layer.id === subject.id)).toMatchObject({
       included: true,
       visible: false,
     });
@@ -156,6 +156,15 @@ describe('provider-free demo project route integration', () => {
 
   it('rejects client authority, digest drift, and query input with closed safe errors', async () => {
     const opened = await openData();
+    const legacy = structuredClone(opened.project);
+    (legacy as { fixtureId: string }).fixtureId = 'angel-local-png-v1';
+    const legacyResponse = await postJson(updateProject, '/api/banner-ai/demo-project', {
+      action: 'reopen',
+      project: legacy,
+    });
+    expect(legacyResponse.status).toBe(400);
+    await expect(legacyResponse.text()).resolves.toContain('PROJECT_STORAGE_CORRUPT');
+
     const extra = await postJson(updateProject, '/api/banner-ai/demo-project', {
       action: 'reopen',
       project: opened.project,
@@ -205,7 +214,7 @@ describe('provider-free preview route integration', () => {
     expect(html).not.toContain('https://example.com/campaign');
     expect(html).not.toMatch(/<(?:iframe|form|object|base)\b/iu);
     expect(html).not.toMatch(/\b(?:fetch|XMLHttpRequest|WebSocket|EventSource)\s*\(/u);
-    const fixed = await materializeProviderFreeAngelProjectWithDeterministicSamBoxPromptsV1();
+    const fixed = await materializeProviderFreePersonSamReplayProjectV1();
     const encodedPlan = /input = decode\('([^']+)'\)/u.exec(html)?.[1];
     expect(encodedPlan).toBeDefined();
     const plan = JSON.parse(Buffer.from(encodedPlan!, 'base64').toString('utf8')) as {
@@ -256,7 +265,7 @@ describe('provider-free export route integration', () => {
       findings: [],
     });
 
-    const fixed = await materializeProviderFreeAngelProjectWithDeterministicSamBoxPromptsV1();
+    const fixed = await materializeProviderFreePersonSamReplayProjectV1();
     const bytes = Buffer.from(first.data.artifact.bytesBase64, 'base64');
     const expectedEntries = createDeterministicFakeZipEntriesV1({
       scene: opened.project.revisions[0]!.scene,

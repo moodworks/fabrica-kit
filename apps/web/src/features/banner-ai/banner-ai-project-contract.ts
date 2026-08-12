@@ -200,7 +200,7 @@ const parsePresentation = (input: unknown): ProviderFreeProjectPresentation => {
     input['canvas']['height'] !== 200 ||
     !isSafeText(input['fixtureLabel'], 120) ||
     !Array.isArray(input['parts']) ||
-    input['parts'].length !== 4
+    input['parts'].length !== 2
   ) {
     throw new TypeError('The demo API returned an invalid project presentation.');
   }

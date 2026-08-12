@@ -21,7 +21,7 @@ import {
   type ProviderFreeBannerProjectV1,
   type ProviderFreeFixtureMaterializationV1,
 } from '@fabrica/banner-ai';
-import { materializeProviderFreeAngelProjectWithDeterministicSamBoxPromptsV1 } from '@fabrica/banner-ai/server/sam-box-prompt-layer-extraction';
+import { materializeProviderFreePersonSamReplayProjectV1 } from '@fabrica/banner-ai/server/sam-box-prompt-layer-extraction';
 
 import type {
   ProviderFreeExportData,
@@ -37,7 +37,7 @@ const MAX_EXPORT_RESPONSE_BYTES = 2_097_152;
 let materializationPromise: Promise<ProviderFreeFixtureMaterializationV1> | null = null;
 
 const materialization = (): Promise<ProviderFreeFixtureMaterializationV1> => {
-  materializationPromise ??= materializeProviderFreeAngelProjectWithDeterministicSamBoxPromptsV1();
+  materializationPromise ??= materializeProviderFreePersonSamReplayProjectV1();
   return materializationPromise;
 };
 
@@ -259,7 +259,7 @@ export const createDemoExport = async (
     artifact: {
       bytesBase64,
       byteSize: validated.artifact.byteSize,
-      filename: `angel-provider-free-r${String(revision.revision)}-${validated.artifact.sha256.slice(0, 12)}.zip`,
+      filename: `verified-meta-sam-replay-r${String(revision.revision)}-${validated.artifact.sha256.slice(0, 12)}.zip`,
       mediaType: validated.artifact.mediaType,
       sha256: validated.artifact.sha256,
       validationLabel: validated.artifact.validationLabel,

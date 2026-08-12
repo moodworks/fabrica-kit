@@ -1,11 +1,6 @@
 import sharp from 'sharp';
 
 import { ProjectIdSchema, WorkspaceIdSchema } from '../context/actor-workspace-context.js';
-import {
-  ANGEL_PROVIDER_FREE_BENCHMARK_CASE_V1,
-  ANGEL_PROVIDER_FREE_EXPECTED_LAYERS_V1,
-} from '../evaluation/benchmark-case.js';
-import { createAngelBenchmarkFixtureSourceV1 } from '../evaluation/repository-benchmark-fixture.js';
 import type { FakeExportAsset } from '../export/deterministic-fake-exporter.js';
 import { PROVIDER_FREE_INTERNAL_VALIDATOR_PROFILE_V1 } from '../export/provider-free-internal-validator.js';
 import type { SceneReferenceResolver } from '../ports/scene-reference-resolver.js';
@@ -25,10 +20,8 @@ import {
   type NormalizedRasterUpload,
 } from '../security/raster-upload.js';
 import {
-  PROVIDER_FREE_ANGEL_BODY_LAYER_ID_V1,
+  PROVIDER_FREE_PERSON_SUBJECT_LAYER_ID_V1,
   PROVIDER_FREE_BACKGROUND_PART_ID_V1,
-  PROVIDER_FREE_LEFT_WING_LAYER_ID_V1,
-  PROVIDER_FREE_RIGHT_WING_LAYER_ID_V1,
   PROVIDER_FREE_SOLID_BACKGROUND_V1,
   type ProviderFreeSelectedPartIdV1,
 } from './provider-free-banner-scene-v1.js';
@@ -85,6 +78,19 @@ export interface ProviderFreeFixtureMaterializationV1 {
   readonly presentationParts: readonly ProviderFreePresentationPartV1[];
 }
 
+const EXPECTED_SOURCE = Object.freeze({
+  sha256: '6e3175cdd260fde33a3885945eb6f8831da3905afbc723f684035f411dc6d699',
+  byteSize: 241013,
+  width: 876,
+  height: 221,
+});
+const EXPECTED_SUBJECT = Object.freeze({
+  sha256: '464f1bb286ac4a599e3b49a25b1f427d2b73acaac6c2cd1829902d0d5a870c33',
+  byteSize: 53742,
+  width: 157,
+  height: 215,
+});
+
 const normalizeGeneratedPng = async (
   bytes: Uint8Array,
   filename: string,
@@ -136,37 +142,17 @@ const assetReference = (input: {
   });
 
 const layerIdentity = Object.freeze({
-  'angel.body': {
-    layerId: PROVIDER_FREE_ANGEL_BODY_LAYER_ID_V1,
-    assetId: 'asset_angel_body_visual_v1',
-    assetVersionId: 'asset_version_angel_body_visual_v1',
-    filename: 'angel-body-visual.png',
-    tint: { r: 206, g: 91, b: 72 },
-  },
-  'wing.left': {
-    layerId: PROVIDER_FREE_LEFT_WING_LAYER_ID_V1,
-    assetId: 'asset_left_wing_visual_v1',
-    assetVersionId: 'asset_version_left_wing_visual_v1',
-    filename: 'left-wing-visual.png',
-    tint: { r: 94, g: 112, b: 202 },
-  },
-  'wing.right': {
-    layerId: PROVIDER_FREE_RIGHT_WING_LAYER_ID_V1,
-    assetId: 'asset_right_wing_visual_v1',
-    assetVersionId: 'asset_version_right_wing_visual_v1',
-    filename: 'right-wing-visual.png',
-    tint: { r: 47, g: 156, b: 129 },
+  subject: {
+    layerId: PROVIDER_FREE_PERSON_SUBJECT_LAYER_ID_V1,
+    assetId: 'asset_banner_person_v1',
+    assetVersionId: 'asset_version_banner_person_v1',
+    filename: 'banner-person-v1.cutout.png',
   },
 });
 
 type ForegroundPartKey = keyof typeof layerIdentity;
 
-export type ProviderFreeAngelForegroundPngsV1 = Readonly<{
-  'angel.body': Uint8Array;
-  'wing.left': Uint8Array;
-  'wing.right': Uint8Array;
-}>;
-
+export type ProviderFreePersonSubjectPngV1 = Readonly<{ subject: Uint8Array }>;
 const materializeThumbnail = async (
   bytes: Uint8Array,
   filename: string,
@@ -181,6 +167,20 @@ const materializeThumbnail = async (
     .png(generatedPngOptions)
     .toBuffer();
   return normalizeGeneratedPng(encoded, filename);
+};
+
+const materializeSolidBackgroundThumbnail = async (): Promise<NormalizedRasterUpload> => {
+  const encoded = await sharp({
+    create: {
+      width: 120,
+      height: 80,
+      channels: 4,
+      background: { r: 243, g: 231, b: 211, alpha: 1 },
+    },
+  })
+    .png(generatedPngOptions)
+    .toBuffer();
+  return normalizeGeneratedPng(encoded, 'background-thumbnail.png');
 };
 
 export const createProviderFreeSceneReferenceResolver = (
@@ -214,39 +214,41 @@ export const createProviderFreeSceneReferenceResolver = (
   };
 };
 
-const materializeProviderFreeFixtureProjectCoreV1 = async (
-  foregroundPngs?: ProviderFreeAngelForegroundPngsV1,
-): Promise<ProviderFreeFixtureMaterializationV1> => {
-  const source = createAngelBenchmarkFixtureSourceV1('png');
+const materializeProviderFreeFixtureProjectCoreV1 = async (input: {
+  readonly source: Uint8Array;
+  readonly subject: Uint8Array;
+}): Promise<ProviderFreeFixtureMaterializationV1> => {
   const normalizedSource = await normalizeRasterUpload({
-    bytes: byteSourceFrom(source.bytes),
-    declaredMediaType: source.declaredMediaType,
-    filename: source.filename,
+    bytes: byteSourceFrom(input.source),
+    declaredMediaType: 'image/png',
+    filename: 'banner-person-v1.png',
   });
-  const expectedSource = ANGEL_PROVIDER_FREE_BENCHMARK_CASE_V1.input.sourceAsset;
+  const expectedSource = {
+    assetId: 'asset_banner_person_source_v1',
+    assetVersionId: 'asset_version_banner_person_source_v1',
+    sha256: EXPECTED_SOURCE.sha256,
+    mediaType: 'image/png' as const,
+    byteSize: EXPECTED_SOURCE.byteSize,
+    pixelWidth: EXPECTED_SOURCE.width,
+    pixelHeight: EXPECTED_SOURCE.height,
+  };
   if (
-    normalizedSource.sha256 !== expectedSource.sha256 ||
-    normalizedSource.byteSize !== expectedSource.byteSize ||
-    normalizedSource.width !== expectedSource.pixelWidth ||
-    normalizedSource.height !== expectedSource.pixelHeight
+    normalizedSource.sha256 !== EXPECTED_SOURCE.sha256 ||
+    normalizedSource.byteSize !== EXPECTED_SOURCE.byteSize ||
+    normalizedSource.width !== EXPECTED_SOURCE.width ||
+    normalizedSource.height !== EXPECTED_SOURCE.height
   ) {
     throw new TypeError('The approved provider-free fixture source identity drifted.');
   }
 
-  const canvasEncoded = await sharp(normalizedSource.bytes)
-    .resize(CANVAS_WIDTH, CANVAS_HEIGHT, { fit: 'fill', kernel: sharp.kernel.nearest })
-    .png(generatedPngOptions)
-    .toBuffer();
-  const canvasVisualization = await normalizeGeneratedPng(canvasEncoded, 'angel-canvas-visual.png');
-  const backgroundThumbnail = await materializeThumbnail(
-    canvasVisualization.bytes,
-    'background-thumbnail.png',
-  );
+  const backgroundThumbnail = await materializeSolidBackgroundThumbnail();
 
-  const backgroundEvidence = ANGEL_PROVIDER_FREE_EXPECTED_LAYERS_V1[0]!.proposal;
-  if (backgroundEvidence.partKey !== 'background' || backgroundEvidence.role !== 'background') {
-    throw new TypeError('The approved fixture background evidence drifted.');
-  }
+  const backgroundEvidence = {
+    partKey: 'background',
+    role: 'background' as const,
+    label: 'Solid background',
+    bounds: { xBps: 0, yBps: 0, widthBps: 10000, heightBps: 10000 },
+  };
 
   const layerAssets: FakeExportAsset[] = [];
   const sceneLayers: BannerSceneV1['layers'][number][] = [];
@@ -261,21 +263,20 @@ const materializeProviderFreeFixtureProjectCoreV1 = async (
     },
   ];
 
-  for (const [index, evidence] of ANGEL_PROVIDER_FREE_EXPECTED_LAYERS_V1.slice(1).entries()) {
-    const proposal = evidence.proposal;
+  for (const [index, proposal] of [
+    {
+      partKey: 'subject',
+      label: 'banner-person-v1 subject',
+      role: 'subject',
+      bounds: { xBps: 6506, yBps: 271, widthBps: 1794, heightBps: 9729 },
+    },
+  ].entries()) {
     if (!(proposal.partKey in layerIdentity)) {
       throw new TypeError('The approved fixture foreground evidence drifted.');
     }
     const identity = layerIdentity[proposal.partKey as ForegroundPartKey];
     const bounds = boundsToPixels(proposal.bounds);
-    const encoded =
-      foregroundPngs === undefined
-        ? await sharp(canvasVisualization.bytes)
-            .extract({ left: bounds.x, top: bounds.y, width: bounds.width, height: bounds.height })
-            .tint(identity.tint)
-            .png(generatedPngOptions)
-            .toBuffer()
-        : foregroundPngs[proposal.partKey as ForegroundPartKey];
+    const encoded = input.subject;
     const normalized = await normalizeGeneratedPng(encoded, identity.filename);
     const reference = assetReference({
       assetId: identity.assetId,
@@ -307,7 +308,7 @@ const materializeProviderFreeFixtureProjectCoreV1 = async (
       partKey: proposal.partKey,
       targetId: identity.layerId,
       name: proposal.label,
-      role: proposal.role as 'subject' | 'decoration',
+      role: 'subject',
       bounds,
       thumbnail: thumbnailFrom(thumbnail),
     });
@@ -371,28 +372,30 @@ const materializeProviderFreeFixtureProjectCoreV1 = async (
   return materialization;
 };
 
-export const materializeProviderFreeFixtureProjectV1 =
-  (): Promise<ProviderFreeFixtureMaterializationV1> =>
-    materializeProviderFreeFixtureProjectCoreV1();
-
-export const materializeProviderFreeAngelForegroundProjectV1 = async (
+export const materializeProviderFreePersonSubjectProjectV1 = async (
   input: Record<string, unknown>,
 ): Promise<ProviderFreeFixtureMaterializationV1> => {
   const keys = Object.keys(input).toSorted();
-  if (keys.join('|') !== ['angel.body', 'wing.left', 'wing.right'].join('|')) {
-    throw new TypeError('Angel foreground PNG keys are fixed and exact.');
+  if (keys.join('|') !== 'source|subject') {
+    throw new TypeError('Person replay source and subject PNG keys are fixed and exact.');
   }
   for (const key of keys) {
     const bytes = input[key];
     if (!(bytes instanceof Uint8Array) || bytes.byteLength === 0) {
-      throw new TypeError('Angel foreground PNG bytes are invalid.');
+      throw new TypeError('Person replay PNG bytes are invalid.');
     }
   }
-  const normalized: Record<string, Uint8Array> = {};
-  for (const key of keys as ForegroundPartKey[]) {
-    normalized[key] = (await normalizeGeneratedPng(input[key] as Uint8Array, `${key}.png`)).bytes;
-  }
-  return materializeProviderFreeFixtureProjectCoreV1(
-    normalized as ProviderFreeAngelForegroundPngsV1,
-  );
+  const source = (await normalizeGeneratedPng(input.source as Uint8Array, 'source.png')).bytes;
+  const subject = (await normalizeGeneratedPng(input.subject as Uint8Array, 'subject.png')).bytes;
+  if (
+    sha256Hex(source) !== EXPECTED_SOURCE.sha256 ||
+    source.byteLength !== EXPECTED_SOURCE.byteSize
+  )
+    throw new TypeError('Person replay source identity drifted.');
+  if (
+    sha256Hex(subject) !== EXPECTED_SUBJECT.sha256 ||
+    subject.byteLength !== EXPECTED_SUBJECT.byteSize
+  )
+    throw new TypeError('Person replay subject identity drifted.');
+  return materializeProviderFreeFixtureProjectCoreV1({ source, subject });
 };

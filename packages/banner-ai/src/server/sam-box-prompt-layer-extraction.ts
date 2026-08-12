@@ -1,4 +1,8 @@
-import { createHash, randomUUID } from 'node:crypto';
+import { createHash } from 'node:crypto';
+import { lstat, readFile, realpath } from 'node:fs/promises';
+import { resolve } from 'node:path';
+import { canonicalizeJson, sha256Hex } from '../scene/canonical-scene-json.js';
+import { z } from 'zod';
 
 import sharp from 'sharp';
 
@@ -16,6 +20,8 @@ import {
   SAM_MASK_CONTRACT_VERSION,
   SAM_MASK_ENCODING,
   SamMaskRequestSchema,
+  SamMaskCandidateSchema,
+  SamLiveExecutionIdentitySchema,
   type SamMaskCandidate,
   type SamMaskRequest,
   type SamMaskResponse,
@@ -23,21 +29,21 @@ import {
 import { SamFakeExecutionIdentitySchema } from '../sam/sam-mask-contracts.js';
 import { materializeSamMaskCutout } from '../sam/sam-cutout-materializer.js';
 import { assertSamMaskResponseWasStrictlyValidated } from '../sam/sam-mask-validation.js';
-import { boxBasisToPixel } from '../sam/sam-mask-rle.js';
+import {
+  boxBasisToPixel,
+  decodeBinaryMaskRle,
+  decodeCanonicalBase64,
+  maskContentSha256,
+} from '../sam/sam-mask-rle.js';
 import { canonicalResponseSha256 } from '../sam/sam-mask-rle.js';
 import {
   parseAndVerifySamMaskRequest,
   parseAndVerifySamMaskResponse,
 } from '../sam/sam-mask-validation.js';
 import { postprocessSamMasks } from '../sam/sam-mask-postprocess.js';
-import { createAngelBenchmarkFixtureSourceV1 } from '../evaluation/repository-benchmark-fixture.js';
-import {
-  ANGEL_PROVIDER_FREE_BENCHMARK_CASE_V1,
-  ANGEL_PROVIDER_FREE_EXPECTED_LAYERS_V1,
-} from '../evaluation/benchmark-case.js';
 import { byteSourceFrom, normalizeRasterUpload } from '../security/raster-upload.js';
 import {
-  materializeProviderFreeAngelForegroundProjectV1,
+  materializeProviderFreePersonSubjectProjectV1,
   type ProviderFreeFixtureMaterializationV1,
 } from '../editor/provider-free-fixture-materializer-v1.js';
 
@@ -47,55 +53,277 @@ const SAM_DETERMINISTIC_DIRECT_FAKE_IDENTITY = SamFakeExecutionIdentitySchema.pa
   definitionSha256: '711d087a27ca497fdbbb9bee07603a89ce4bc14f4357c96295467a2bdfe45dd9',
   notice: 'NOT_SAM_OUTPUT',
 });
+let personReplayMaterializationPromise: Promise<ProviderFreeFixtureMaterializationV1> | null = null;
 
-let angelMaterializationPromise: Promise<ProviderFreeFixtureMaterializationV1> | null = null;
+const deepFreeze = <T>(value: T): T => {
+  if (value !== null && typeof value === 'object' && !Object.isFrozen(value)) {
+    for (const child of Object.values(value as Record<string, unknown>)) deepFreeze(child);
+    Object.freeze(value);
+  }
+  return value;
+};
 
-export const materializeProviderFreeAngelProjectWithDeterministicSamBoxPromptsV1 =
+const replayRle =
+  'RkJSTAEAAANsAAAA3QAAAAG5nS4C5QYO3AYS2AYX0gYczQYhyQYlxQYowwYqwAYtvgYvuwYyugYzuAY1tgY2tgY3tQY4tAY4swY5swY6sQY7sQY7sQY7sAY8sQY7sQY7sQY7sQY7sQY7sQY7sQY7sgY6sgY6sgY6swY5swY5swY6sgY6swY6sQY6swY6sgY5swY5swY5swY4tQY3tQY3tQY3tQY3tgY1twY1twY0uQYzuQYyugYyuwYwvAYwvQYvvQYvvgYtvwYtvwYtwAYswAYrwQYswQYrwQYrwgYrwQYtwAYtvwYuvwYtvwYuvwYtvwYuvwYtvgYuvgYvvQYvvAYxuwYzuQY1twY3tQY6sgY7sAY+rgZArAZDqQZEpwZHpQZJoAZOmgZTlwZWlAZZjwZejAZhiQZjhwZmhQZnhAZpggZqgQZrgAZt/wVt/gVu/QVv/QVv/QVv/QVv/AVw/AVw+wVx+wVx+gVy+gVy+QVz+QVz+AV0+AV09wV19gV29gV29QV39QV39AV49AV48wV58wV58gV68gV68QV78AV88AV87wV87wV0AQfvBXQHAfAFc/gFdPgFc/gFc/kFc/gFdPcFdPcFdfcFdPUFd/QFd/UFd/QFePQFefIFe/AFfe0Ffu4Ffu0Ffu4Ffe0Ffu4Ffe8FfO4Ffu0Ffu4Ffe0Ffu0Ffu0Ffe0Ff+wFf+0Ffu0Ffu0Ffu4Ffe8FfO8FfPAFe/EFevIFefMFePQFd/UFdvYFdfcFdPgFc/kFcvoFcfsFb/4Fbv4Fbf8Fa4EGaoIGaoIGaYQGZ4UGZocGZIgGY4sGYI4GGgJBkQYSCT+VBgoOPq4GPa8GPLAGO7EGOrIGObMGN7YGNbcGNbcGNLkGMb0GLr8GLcAGKsMGKMUGJuAB';
+
+const ReplayEvidenceSchema = z
+  .strictObject({
+    manifestSha256: z.literal('b921f3390307857a166bcd4ba6c36a3d19d6c7f55ccd96e61e07d589af8638ee'),
+    validatedResponseSha256: z.literal(
+      '371b51fe00b0d80a32ad53a0de3ad864d089ea3dbb1e7cb3f2667ce170b29646',
+    ),
+    sanitizedResponseSha256: z.literal(
+      '68c85095d9d0524dae4edb1f40f049cf1a6143a6be59a5446350530b2a2b3999',
+    ),
+    outputClassification: z.literal('real-sam-output'),
+    fixture: z
+      .strictObject({
+        id: z.literal('banner-person-v1'),
+        sourceSha256: z.literal('6e3175cdd260fde33a3885945eb6f8831da3905afbc723f684035f411dc6d699'),
+        sourceByteSize: z.literal(241013),
+        sourceWidth: z.literal(876),
+        sourceHeight: z.literal(221),
+        canonicalRequestSha256: z.literal(
+          '506e75d829f2494f34a58e9e9f4d610b9b0881a520ed815e7b38f62561815f80',
+        ),
+        contractVersion: z.literal('sam-mask-v2'),
+        requestIdentifiers: z
+          .strictObject({
+            requestId: z.literal('817e7fd7-0c34-4449-ae81-38c90505a39b'),
+            workspaceId: z.literal('dd1f94e4-308e-4fd9-8ea0-e1d60f5d6cb5'),
+            jobId: z.literal('2f249fbd-f14b-4004-8c74-1817fd2ef537'),
+            attemptId: z.literal('08fb06c9-50c8-40e7-851f-922e4e2be5ff'),
+          })
+          .readonly(),
+        segmentation: z
+          .strictObject({
+            mode: z.literal('automatic-candidates'),
+            prompt: z.strictObject({ kind: z.literal('none') }).readonly(),
+          })
+          .readonly(),
+        limits: z
+          .strictObject({ minMaskAreaPixels: z.literal(64), maxCandidates: z.literal(8) })
+          .readonly(),
+        output: z.strictObject({ maskEncoding: z.literal('fabrica-binary-rle-v1') }).readonly(),
+        workerImageDigest: z.literal(
+          'sha256:5f6058eb5f626ada2ce9ad3e9f105cd12b601f614df83265ab8479c8403ae7a8',
+        ),
+      })
+      .readonly(),
+    executionIdentity: SamLiveExecutionIdentitySchema,
+    candidateOrder: z.literal(5),
+    candidate: SamMaskCandidateSchema,
+    cutout: z
+      .strictObject({
+        sha256: z.literal('464f1bb286ac4a599e3b49a25b1f427d2b73acaac6c2cd1829902d0d5a870c33'),
+        width: z.literal(157),
+        height: z.literal(215),
+        byteSize: z.literal(53742),
+      })
+      .readonly(),
+  })
+  .readonly();
+
+/** Immutable, local provenance for the preserved real Meta SAM replay artifact. */
+export const PROVIDER_FREE_PERSON_SAM_REPLAY_EVIDENCE_V1 = deepFreeze(
+  ReplayEvidenceSchema.parse({
+    manifestSha256: 'b921f3390307857a166bcd4ba6c36a3d19d6c7f55ccd96e61e07d589af8638ee',
+    validatedResponseSha256: '371b51fe00b0d80a32ad53a0de3ad864d089ea3dbb1e7cb3f2667ce170b29646',
+    sanitizedResponseSha256: '68c85095d9d0524dae4edb1f40f049cf1a6143a6be59a5446350530b2a2b3999',
+    outputClassification: 'real-sam-output',
+    fixture: {
+      id: 'banner-person-v1',
+      sourceSha256: '6e3175cdd260fde33a3885945eb6f8831da3905afbc723f684035f411dc6d699',
+      sourceByteSize: 241013,
+      sourceWidth: 876,
+      sourceHeight: 221,
+      canonicalRequestSha256: '506e75d829f2494f34a58e9e9f4d610b9b0881a520ed815e7b38f62561815f80',
+      contractVersion: 'sam-mask-v2',
+      requestIdentifiers: {
+        requestId: '817e7fd7-0c34-4449-ae81-38c90505a39b',
+        workspaceId: 'dd1f94e4-308e-4fd9-8ea0-e1d60f5d6cb5',
+        jobId: '2f249fbd-f14b-4004-8c74-1817fd2ef537',
+        attemptId: '08fb06c9-50c8-40e7-851f-922e4e2be5ff',
+      },
+      segmentation: { mode: 'automatic-candidates', prompt: { kind: 'none' } },
+      limits: { minMaskAreaPixels: 64, maxCandidates: 8 },
+      output: { maskEncoding: 'fabrica-binary-rle-v1' },
+      workerImageDigest: 'sha256:5f6058eb5f626ada2ce9ad3e9f105cd12b601f614df83265ab8479c8403ae7a8',
+    },
+    executionIdentity: {
+      kind: 'meta-sam2.1',
+      repositoryUrl: 'https://github.com/facebookresearch/sam2',
+      repositoryCommit: '05d9e57fb3945b10c861046c1e6749e2bfc258e3',
+      modelId: 'sam2.1_hiera_base_plus',
+      configIdentity: 'configs/sam2.1/sam2.1_hiera_b+.yaml',
+      checkpointUrl:
+        'https://dl.fbaipublicfiles.com/segment_anything_2/092824/sam2.1_hiera_base_plus.pt',
+      checkpointSha256: 'a2345aede8715ab1d5d31b4a509fb160c5a4af1970f199d9054ccfb746c004c5',
+      workerImageDigest: 'sha256:5f6058eb5f626ada2ce9ad3e9f105cd12b601f614df83265ab8479c8403ae7a8',
+    },
+    candidateOrder: 5,
+    candidate: {
+      candidateId: 'samc_v1_478780b81c47a3b064a5398bbf275ddd137a4e21d746b5aeb0623a7a546f99cf',
+      bounds: { xBps: 6506, yBps: 271, widthBps: 1794, heightBps: 9729 },
+      pixelArea: 17822,
+      areaRatioBps: 920,
+      predictedIouBps: 9648,
+      stabilityScoreBps: 9644,
+      reviewFlags: ['near-contained', 'touches-source-edge'],
+      mask: {
+        encoding: 'fabrica-binary-rle-v1',
+        width: 876,
+        height: 221,
+        byteSize: 675,
+        sha256: '218f758d896e6f14198080c50705b1c7cf013b2902922596ee8fa8a2be0f75b0',
+        dataBase64: replayRle,
+      },
+    },
+    cutout: {
+      sha256: '464f1bb286ac4a599e3b49a25b1f427d2b73acaac6c2cd1829902d0d5a870c33',
+      width: 157,
+      height: 215,
+      byteSize: 53742,
+    },
+  }),
+);
+
+export const validateProviderFreePersonSamReplayEvidenceV1 = (
+  input: unknown,
+): typeof PROVIDER_FREE_PERSON_SAM_REPLAY_EVIDENCE_V1 => {
+  const parsed = ReplayEvidenceSchema.parse(input);
+  const maskBytes = decodeCanonicalBase64(
+    parsed.candidate.mask.dataBase64,
+    parsed.candidate.mask.byteSize,
+  );
+  const decodedMask = decodeBinaryMaskRle(
+    maskBytes,
+    parsed.candidate.mask.width,
+    parsed.candidate.mask.height,
+  );
+  if (
+    maskBytes.byteLength !== parsed.candidate.mask.byteSize ||
+    maskContentSha256(decodedMask.pixels, decodedMask.width, decodedMask.height) !==
+      parsed.candidate.mask.sha256
+  ) {
+    throw new TypeError('Provider-free SAM replay candidate mask integrity drifted.');
+  }
+  if (canonicalizeJson(parsed) !== canonicalizeJson(PROVIDER_FREE_PERSON_SAM_REPLAY_EVIDENCE_V1)) {
+    throw new TypeError('Provider-free SAM replay evidence drifted from the preserved binding.');
+  }
+  return deepFreeze(parsed) as typeof PROVIDER_FREE_PERSON_SAM_REPLAY_EVIDENCE_V1;
+};
+
+const loadPersonReplayFixture = async (): Promise<Uint8Array> => {
+  const fixtureRelativePath =
+    'packages/banner-ai/test/fixtures/real-model-benchmark/normalized/banner-person-v1.png';
+  const cwd = process.cwd();
+  const candidates = [
+    resolve(cwd, fixtureRelativePath),
+    resolve(cwd, '..', '..', fixtureRelativePath),
+  ];
+  for (const candidate of candidates) {
+    try {
+      const stat = await lstat(candidate);
+      if (!stat.isFile() || (await realpath(candidate)) !== candidate) continue;
+      return Uint8Array.from(await readFile(candidate));
+    } catch {
+      // The second path is the apps/web-cwd build layout fallback.
+    }
+  }
+  throw new TypeError('Pinned person replay fixture is unavailable.');
+};
+
+export const materializeProviderFreePersonSamReplayProjectV1 =
   (): Promise<ProviderFreeFixtureMaterializationV1> => {
-    if (angelMaterializationPromise !== null) return angelMaterializationPromise;
-    angelMaterializationPromise = (async () => {
-      const source = createAngelBenchmarkFixtureSourceV1('png');
+    if (personReplayMaterializationPromise !== null) return personReplayMaterializationPromise;
+    personReplayMaterializationPromise = (async () => {
+      const evidence = validateProviderFreePersonSamReplayEvidenceV1(
+        PROVIDER_FREE_PERSON_SAM_REPLAY_EVIDENCE_V1,
+      );
+      const source = {
+        bytes: await loadPersonReplayFixture(),
+        declaredMediaType: 'image/png' as const,
+        filename: 'banner-person-v1.png',
+      };
       const normalized = await normalizeRasterUpload({
         bytes: byteSourceFrom(source.bytes),
         declaredMediaType: source.declaredMediaType,
         filename: source.filename,
       });
-      const expected = ANGEL_PROVIDER_FREE_BENCHMARK_CASE_V1.input.sourceAsset;
+      const normalizedIdentity = evidence.fixture;
+      const expected = {
+        assetId: 'asset_banner_person_source_v1',
+        assetVersionId: 'asset_version_banner_person_source_v1',
+        sha256: normalizedIdentity.sourceSha256,
+        mediaType: 'image/png' as const,
+        byteSize: normalizedIdentity.sourceByteSize,
+        pixelWidth: normalizedIdentity.sourceWidth,
+        pixelHeight: normalizedIdentity.sourceHeight,
+      };
       if (
         normalized.sha256 !== expected.sha256 ||
         normalized.byteSize !== expected.byteSize ||
         normalized.width !== expected.pixelWidth ||
         normalized.height !== expected.pixelHeight
       )
-        throw new TypeError('Approved Angel source identity drifted.');
-      const fake = createDeterministicSamBoxPromptAdapter();
-      const foreground: Record<string, unknown> = {};
-      for (const evidence of ANGEL_PROVIDER_FREE_EXPECTED_LAYERS_V1.slice(1)) {
-        const part = evidence.proposal;
-        const extracted = await extractLayerWithSamBoxPrompt({
-          request: { sourceAsset: expected, part, trimTransparentPixels: true },
-          normalizedPng: normalized.bytes,
-          requestId: randomUUID(),
-          workspaceId: randomUUID(),
-          jobId: randomUUID(),
-          attemptId: randomUUID(),
-          sam: fake.adapter,
-        });
-        foreground[part.partKey] = extracted.layer.bytes;
-      }
+        throw new TypeError('Verified person replay source identity drifted.');
+      const request = SamMaskRequestSchema.parse({
+        contractVersion: evidence.fixture.contractVersion,
+        ...evidence.fixture.requestIdentifiers,
+        source: {
+          mediaType: 'image/png',
+          byteSize: evidence.fixture.sourceByteSize,
+          width: evidence.fixture.sourceWidth,
+          height: evidence.fixture.sourceHeight,
+          sha256: evidence.fixture.sourceSha256,
+          pngBase64: Buffer.from(normalized.bytes).toString('base64'),
+        },
+        segmentation: evidence.fixture.segmentation,
+        limits: evidence.fixture.limits,
+        output: evidence.fixture.output,
+      });
       if (
-        fake.getCallCount() !== 3 ||
-        fake.networkCalls !== 0 ||
-        fake.executionIdentity.kind !== 'deterministic-fake' ||
-        fake.executionIdentity.notice !== 'NOT_SAM_OUTPUT'
+        sha256Hex(
+          Buffer.from(
+            canonicalizeJson({
+              ...request,
+              workerImageDigest: evidence.executionIdentity.workerImageDigest,
+            }),
+            'utf8',
+          ),
+        ) !== evidence.fixture.canonicalRequestSha256
       )
-        throw new TypeError('Deterministic Angel SAM accounting drifted.');
-      return materializeProviderFreeAngelForegroundProjectV1(foreground);
+        throw new TypeError('Meta SAM replay request drifted.');
+      if (
+        request.source.sha256 !== evidence.fixture.sourceSha256 ||
+        request.requestId !== evidence.fixture.requestIdentifiers.requestId ||
+        request.workspaceId !== evidence.fixture.requestIdentifiers.workspaceId ||
+        request.jobId !== evidence.fixture.requestIdentifiers.jobId ||
+        request.attemptId !== evidence.fixture.requestIdentifiers.attemptId ||
+        request.limits.maxCandidates !== evidence.fixture.limits.maxCandidates ||
+        request.limits.minMaskAreaPixels !== evidence.fixture.limits.minMaskAreaPixels
+      )
+        throw new TypeError('Meta SAM replay request identity drifted.');
+      const cutout = await materializeSamMaskCutout({
+        trustedRequest: request,
+        candidate: evidence.candidate,
+      });
+      const canonicalCutoutPng = stripPngAncillaryChunks(cutout.cutoutPng);
+      if (
+        canonicalCutoutPng.byteLength !== evidence.cutout.byteSize ||
+        sha256Hex(canonicalCutoutPng) !== evidence.cutout.sha256
+      )
+        throw new TypeError('Meta SAM replay cutout drifted.');
+      return materializeProviderFreePersonSubjectProjectV1({
+        source: normalized.bytes,
+        subject: canonicalCutoutPng,
+      });
     })().catch((error) => {
-      angelMaterializationPromise = null;
+      personReplayMaterializationPromise = null;
       throw error;
     });
-    return angelMaterializationPromise;
+    return personReplayMaterializationPromise;
   };
 
 export const createDeterministicSamBoxPromptAdapter = () => {

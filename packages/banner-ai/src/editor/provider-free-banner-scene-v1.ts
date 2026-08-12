@@ -5,17 +5,20 @@ import {
 } from '../scene/banner-scene-v1.schema.js';
 
 export const PROVIDER_FREE_BACKGROUND_PART_ID_V1 = 'background' as const;
-export const PROVIDER_FREE_ANGEL_BODY_LAYER_ID_V1 = 'layer_angel_body_v1' as const;
-export const PROVIDER_FREE_LEFT_WING_LAYER_ID_V1 = 'layer_left_wing_v1' as const;
-export const PROVIDER_FREE_RIGHT_WING_LAYER_ID_V1 = 'layer_right_wing_v1' as const;
+export const PROVIDER_FREE_PERSON_SUBJECT_LAYER_ID_V1 = 'layer_banner_person_v1' as const;
+/** @deprecated legacy name; editor uses the person subject identity. */
+export const PROVIDER_FREE_ANGEL_BODY_LAYER_ID_V1 = PROVIDER_FREE_PERSON_SUBJECT_LAYER_ID_V1;
+export const PROVIDER_FREE_LEFT_WING_LAYER_ID_V1 = 'layer_left_wing_legacy_rejected_v1' as const;
+export const PROVIDER_FREE_RIGHT_WING_LAYER_ID_V1 = 'layer_right_wing_legacy_rejected_v1' as const;
 
 export const PROVIDER_FREE_LAYER_IDS_V1 = Object.freeze([
-  PROVIDER_FREE_ANGEL_BODY_LAYER_ID_V1,
-  PROVIDER_FREE_LEFT_WING_LAYER_ID_V1,
-  PROVIDER_FREE_RIGHT_WING_LAYER_ID_V1,
+  PROVIDER_FREE_PERSON_SUBJECT_LAYER_ID_V1,
 ] as const);
 
-export type ProviderFreeLayerIdV1 = (typeof PROVIDER_FREE_LAYER_IDS_V1)[number];
+export type ProviderFreeLayerIdV1 =
+  | (typeof PROVIDER_FREE_LAYER_IDS_V1)[number]
+  | typeof PROVIDER_FREE_LEFT_WING_LAYER_ID_V1
+  | typeof PROVIDER_FREE_RIGHT_WING_LAYER_ID_V1;
 export type ProviderFreeSelectedPartIdV1 =
   typeof PROVIDER_FREE_BACKGROUND_PART_ID_V1 | ProviderFreeLayerIdV1;
 
@@ -43,10 +46,8 @@ export const GENTLE_FLOAT_PRESET_V1 = Object.freeze({
 });
 
 const gentleFloatTrackIds = Object.freeze({
-  [PROVIDER_FREE_ANGEL_BODY_LAYER_ID_V1]: 'track_gentle_float_body_v1',
-  [PROVIDER_FREE_LEFT_WING_LAYER_ID_V1]: 'track_gentle_float_left_v1',
-  [PROVIDER_FREE_RIGHT_WING_LAYER_ID_V1]: 'track_gentle_float_right_v1',
-} satisfies Record<ProviderFreeLayerIdV1, string>);
+  [PROVIDER_FREE_ANGEL_BODY_LAYER_ID_V1]: 'track_gentle_float_banner_person_v1',
+} satisfies Record<(typeof PROVIDER_FREE_LAYER_IDS_V1)[number], string>);
 
 export const isProviderFreeLayerIdV1 = (value: string): value is ProviderFreeLayerIdV1 =>
   PROVIDER_FREE_LAYER_IDS_V1.some((layerId) => layerId === value);
@@ -56,8 +57,12 @@ export const isProviderFreeSelectedPartIdV1 = (
 ): value is ProviderFreeSelectedPartIdV1 =>
   value === PROVIDER_FREE_BACKGROUND_PART_ID_V1 || isProviderFreeLayerIdV1(value);
 
-export const gentleFloatTrackIdForLayerV1 = (layerId: ProviderFreeLayerIdV1): string =>
-  gentleFloatTrackIds[layerId];
+export const gentleFloatTrackIdForLayerV1 = (layerId: ProviderFreeLayerIdV1): string => {
+  const id = gentleFloatTrackIds[layerId as keyof typeof gentleFloatTrackIds];
+  if (id === undefined)
+    throw new TypeError('Legacy layer is not part of the verified replay project.');
+  return id;
+};
 
 export const createGentleFloatTrackV1 = (layerId: ProviderFreeLayerIdV1): AnimationTrackV1 => ({
   id: gentleFloatTrackIdForLayerV1(layerId) as AnimationTrackV1['id'],

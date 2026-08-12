@@ -238,7 +238,7 @@ export const acceptProviderFreeExportForCapture = async (
     data.artifact.mediaType !== 'application/zip' ||
     data.artifact.validationLabel !== PROVIDER_FREE_EXPORT_VALIDATION_LABEL_V1 ||
     data.artifact.filename !==
-      `angel-provider-free-r${String(capture.revision)}-${data.artifact.sha256.slice(0, 12)}.zip`
+      `verified-meta-sam-replay-r${String(capture.revision)}-${data.artifact.sha256.slice(0, 12)}.zip`
   ) {
     return rejectExportIdentity();
   }
