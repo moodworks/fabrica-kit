@@ -40,6 +40,20 @@ export const sampleBannerAnalysisData: BannerAnalysisData = {
       },
     ],
   },
+  extraction: {
+    previews: ['angel.body', 'wing.left', 'wing.right'].map((partKey) => ({
+      partKey,
+      byteSize: 70,
+      pixelWidth: 1,
+      pixelHeight: 1,
+      sha256: '49e1dad481e94dfab7c9573a9a81d56aa2ca629fe15a3f7a910aa4f47601c00d',
+      dataUrl:
+        'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP4z8DwHwAFAAH/VscvDQAAAABJRU5ErkJggg==',
+    })),
+    provenance: 'deterministic fake / NOT_SAM_OUTPUT',
+    outboundNetwork: false,
+    dispatches: 3,
+  },
   provenance: {
     fixture: {
       capability: 'fixture_replay',

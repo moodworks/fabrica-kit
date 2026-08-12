@@ -5,7 +5,11 @@ import { join } from 'node:path';
 import sharp from 'sharp';
 import { describe, expect, it } from 'vitest';
 
-import { extractLayerWithSamBoxPrompt } from '../src/server/sam-box-prompt-layer-extraction.js';
+import {
+  createBoundedLayerPreview,
+  createDeterministicSamBoxPromptAdapter,
+  extractLayerWithSamBoxPrompt,
+} from '../src/server/sam-box-prompt-layer-extraction.js';
 import { postprocessSamMasks } from '../src/sam/sam-mask-postprocess.js';
 import {
   SamMaskResponseSchema,
@@ -100,6 +104,33 @@ const fakeSam = (calls: SamMaskRequest[], empty = false) => ({
 });
 
 describe('SAM box-prompt layer extraction', () => {
+  it('uses the exact box in the deterministic adapter with one zero-network call', async () => {
+    const input = await createInput();
+    const fake = createDeterministicSamBoxPromptAdapter();
+    const result = await extractLayerWithSamBoxPrompt({ ...input, sam: fake.adapter });
+    expect(fake.getCallCount()).toBe(1);
+    expect(fake.networkCalls).toBe(0);
+    expect(result.candidate.bounds.xBps).toBeGreaterThanOrEqual(90);
+    expect(result.candidate.bounds.xBps).toBeLessThanOrEqual(110);
+    expect(result.candidate.bounds.yBps).toBeGreaterThanOrEqual(190);
+    expect(result.candidate.bounds.yBps).toBeLessThanOrEqual(210);
+  });
+
+  it('creates bounded canonical previews and rejects malformed input', async () => {
+    const input = await createInput();
+    const fake = createDeterministicSamBoxPromptAdapter();
+    const result = await extractLayerWithSamBoxPrompt({
+      ...input,
+      attemptId: '684173c2-7a85-4703-b99f-000000000007',
+      sam: fake.adapter,
+    });
+    const preview = await createBoundedLayerPreview(result.layer.bytes);
+    expect(preview.byteSize).toBeLessThanOrEqual(524_288);
+    expect(preview.pixelWidth).toBeLessThanOrEqual(160);
+    expect(preview.dataUrl).toMatch(/^data:image\/png;base64,/);
+    await expect(createBoundedLayerPreview(Uint8Array.of(1, 2, 3))).rejects.toThrow();
+  });
+
   it('dispatches one exact box prompt and materializes the first candidate', async () => {
     const calls: SamMaskRequest[] = [];
     const input = await createInput();

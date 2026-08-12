@@ -21,7 +21,81 @@ import {
   type SamMaskResponse,
 } from '../sam/sam-mask-contracts.js';
 import { materializeSamMaskCutout } from '../sam/sam-cutout-materializer.js';
-import { assertSamMaskResponseWasStrictlyValidated } from '../sam/sam-mask-validation.js';
+import {
+  assertSamMaskResponseWasStrictlyValidated,
+  parseAndVerifySamMaskResponse,
+} from '../sam/sam-mask-validation.js';
+import { boxBasisToPixel } from '../sam/sam-mask-rle.js';
+import { createSamRunPodDirectV3Adapter } from './sam-runpod-direct-v3-adapter.js';
+import {
+  createDeterministicSamRunPodDirectV3Transport,
+  SAM_DETERMINISTIC_DIRECT_FAKE_IDENTITY,
+} from './sam-runpod-direct-v3-deterministic-fake-transport.js';
+
+export const createDeterministicSamBoxPromptAdapter = () => {
+  const transport = createDeterministicSamRunPodDirectV3Transport({
+    rawCandidates: (request) => {
+      if (request.segmentation.mode !== 'box-prompt') {
+        throw new TypeError('Deterministic box adapter requires a box prompt.');
+      }
+      const box = boxBasisToPixel(
+        request.segmentation.prompt.box,
+        request.source.width,
+        request.source.height,
+      );
+      const mask = new Uint8Array(request.source.width * request.source.height);
+      for (let y = box.top; y <= box.bottomInclusive; y += 1) {
+        mask.fill(
+          1,
+          y * request.source.width + box.left,
+          y * request.source.width + box.rightInclusive + 1,
+        );
+      }
+      return [{ mask, predictedIou: 1, stabilityScore: 1 }];
+    },
+  });
+  const adapter = createSamRunPodDirectV3Adapter({
+    endpointId: 'fake-sam-box-prompt',
+    expectedExecutionIdentity: SAM_DETERMINISTIC_DIRECT_FAKE_IDENTITY,
+    transport,
+  });
+  return Object.freeze({
+    adapter: {
+      generate: async (request: SamMaskRequest) => {
+        const response = await adapter.generate(request);
+        return parseAndVerifySamMaskResponse({
+          response,
+          request,
+          expectedExecutionKind: 'deterministic-fake',
+        });
+      },
+    },
+    getCallCount: transport.getCallCount,
+    networkCalls: transport.networkCalls,
+    executionIdentity: SAM_DETERMINISTIC_DIRECT_FAKE_IDENTITY,
+  });
+};
+
+export const createBoundedLayerPreview = async (bytes: Uint8Array) => {
+  const png = await sharp(bytes)
+    .ensureAlpha()
+    .toColourspace('srgb')
+    .resize({ width: 160, height: 160, fit: 'inside', withoutEnlargement: true })
+    .png({ compressionLevel: 9, adaptiveFiltering: false, palette: false, force: true })
+    .toBuffer();
+  const canonical = stripPngAncillaryChunks(png);
+  const info = assertCanonicalNormalizedPng(canonical);
+  if (canonical.byteLength > 524_288 || info.width > 160 || info.height > 160)
+    throw new TypeError('Layer preview exceeds its bound.');
+  return {
+    bytes: Uint8Array.from(canonical),
+    byteSize: canonical.byteLength,
+    pixelWidth: info.width,
+    pixelHeight: info.height,
+    sha256: digest(canonical),
+    dataUrl: `data:image/png;base64,${Buffer.from(canonical).toString('base64')}`,
+  };
+};
 
 export interface SamBoxPromptGeneratePort {
   generate(request: SamMaskRequest): Promise<SamMaskResponse>;

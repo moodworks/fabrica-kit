@@ -112,8 +112,8 @@ export function BannerAiStatusPanel({
           <fieldset className="layer-review" aria-describedby="fixture-layer-review-description">
             <legend>Provider-free fixture layer controls</legend>
             <p className="layer-review-description" id="fixture-layer-review-description">
-              Temporary, in-memory intent for a future scene only. These replayed parts are not a
-              BannerScene, extracted assets, masks, or cutouts.
+              Temporary deterministic integration previews exist for these proposed boxes; no
+              BannerScene or persisted layer asset has been created.
             </p>
             <ol className="layer-list">
               {result.proposal.parts.map((part, index) => {
@@ -148,6 +148,22 @@ export function BannerAiStatusPanel({
                         <span className="layer-bounds">
                           {percent(part.bounds.widthBps)} × {percent(part.bounds.heightBps)}
                         </span>
+                        {part.role !== 'background' ? (
+                          <>
+                            {/* eslint-disable-next-line @next/next/no-img-element -- bounded deterministic data URL preview */}
+                            <img
+                              className="layer-cutout-preview"
+                              src={
+                                result.extraction.previews.find(
+                                  (preview) => preview.partKey === part.partKey,
+                                )?.dataUrl
+                              }
+                              alt={`${part.label} deterministic fake integration preview`}
+                              width={80}
+                              height={80}
+                            />
+                          </>
+                        ) : null}
                       </label>
                     </div>
                     <div className="layer-control-set">
@@ -242,7 +258,9 @@ export function BannerAiStatusPanel({
                 </div>
               </dl>
               <p className="future-scene-effect">
-                {futureSceneEffect(selected)} No BannerScene or layer asset has been created.
+                {futureSceneEffect(selected)} Integration preview generated from the proposed box
+                using a deterministic fake mask; not real SAM output or segmentation-quality
+                evidence. No BannerScene or persisted layer asset has been created.
               </p>
             </section>
           )}

@@ -11,6 +11,10 @@
     "./browser": {
       "types": "./src/browser.ts",
       "default": "./src/browser.ts"
+    },
+    "./server/sam-box-prompt-layer-extraction": {
+      "types": "./src/server/sam-box-prompt-layer-extraction.ts",
+      "default": "./src/server/sam-box-prompt-layer-extraction.ts"
     }
   },
   "scripts": {
