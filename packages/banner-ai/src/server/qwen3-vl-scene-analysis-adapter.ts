@@ -68,6 +68,20 @@ import {
   requireCanonicalQwenBenchmarkRequestV1,
 } from './qwen-four-fixture-request-catalog.js';
 import {
+  QWEN_V6_AUTHORIZATION_ID,
+  QWEN_V6_BENCHMARK_PURPOSE,
+  QWEN_V6_EXPIRES_AT,
+  QWEN_V6_FIXTURE_BINDING_DIGEST,
+  QWEN_V6_GRANT_DIGEST,
+  QWEN_V6_GRANT_ID,
+  QWEN_V6_GRANT_VERSION,
+  QWEN_V6_ISSUED_AT,
+  assertQwenV6ProductionRepositoryClean,
+  reserveQwenV6Execution,
+  verifyQwenV6Reservation,
+  finalizeQwenV6Reservation,
+} from './qwen-v6-authorization.js';
+import {
   QwenResponseBoundaryFailure,
   createSyntheticQwenValidationDiagnosticV2,
   validateQwenProviderResponseBoundaryV2,
@@ -304,6 +318,30 @@ export type QwenManualReleaseBindingV1 = z.infer<typeof QwenManualReleaseBinding
 export const QWEN_ACTIVE_AUTHORIZATION_MAX_VALIDITY_MS = 600_000 as const;
 export const QWEN_ACTIVE_MANUAL_RELEASE_MAX_VALIDITY_MS = 900_000 as const;
 export const QWEN_ACTIVE_AUTHORIZATION_MAX_ISSUANCE_AGE_MS = 60_000 as const;
+
+const assertQwenV6TemporalCoverage = (
+  packet: QwenBenchmarkAuthorizationPacketV6,
+  nowMs?: number,
+): void => {
+  const release = packet.manualRelease;
+  if (
+    packet.issuedAtMs >= packet.expiresAtMs ||
+    packet.expiresAtMs - packet.issuedAtMs > QWEN_ACTIVE_AUTHORIZATION_MAX_VALIDITY_MS ||
+    release.issuedAtMs > packet.issuedAtMs ||
+    release.expiresAtMs < packet.expiresAtMs ||
+    release.providerIdentitySha256 !== QWEN3_VL_PROVIDER_IDENTITY_V2_SHA256 ||
+    packet.issuedAtMs < Date.parse(QWEN_V6_ISSUED_AT) ||
+    packet.expiresAtMs > Date.parse(QWEN_V6_EXPIRES_AT) ||
+    (nowMs !== undefined &&
+      (nowMs < packet.issuedAtMs ||
+        nowMs >= packet.expiresAtMs ||
+        nowMs < release.issuedAtMs ||
+        nowMs >= release.expiresAtMs ||
+        nowMs < Date.parse(QWEN_V6_ISSUED_AT) ||
+        nowMs >= Date.parse(QWEN_V6_EXPIRES_AT)))
+  )
+    throw new QwenSceneAnalysisError('authorization-stale');
+};
 
 export const createQwenManualReleaseBindingV1 = (input: {
   readonly releaseId: string;
@@ -557,8 +595,65 @@ export type QwenBenchmarkAuthorizationPacketV5 = z.infer<
   typeof QwenBenchmarkAuthorizationPacketV5Schema
 >;
 
+export type QwenBenchmarkAuthorizationPacketV6 = Omit<
+  QwenBenchmarkAuthorizationPacketV5,
+  'authorizationVersion' | 'authorizationId' | 'mode' | 'purpose' | 'diagnosticCapture'
+> & {
+  readonly authorizationVersion: 6;
+  readonly authorizationId: typeof QWEN_V6_AUTHORIZATION_ID;
+  readonly mode: 'live-provider';
+  readonly purpose: typeof QWEN_V6_BENCHMARK_PURPOSE;
+  readonly grantId: typeof QWEN_V6_GRANT_ID;
+  readonly grantVersion: typeof QWEN_V6_GRANT_VERSION;
+  readonly grantRecordedAt: typeof QWEN_V6_ISSUED_AT;
+  readonly grantOperationalExpiresAtExclusive: typeof QWEN_V6_EXPIRES_AT;
+  readonly grantDigest: typeof QWEN_V6_GRANT_DIGEST;
+  readonly orderedFixtureBindingDigest: typeof QWEN_V6_FIXTURE_BINDING_DIGEST;
+  readonly diagnosticCapture?: never;
+};
+
+const QwenBenchmarkAuthorizationPacketV6RuntimeSchema = z.any().superRefine((value, context) => {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    context.addIssue({ code: 'custom', message: 'Qwen V6 packet must be an object.' });
+    return;
+  }
+  const candidate = { ...(value as Record<string, unknown>) };
+  delete candidate.grantId;
+  delete candidate.grantVersion;
+  delete candidate.grantRecordedAt;
+  delete candidate.grantOperationalExpiresAtExclusive;
+  delete candidate.grantDigest;
+  delete candidate.orderedFixtureBindingDigest;
+  candidate.authorizationVersion = 5;
+  candidate.mode = 'deterministic-fake';
+  candidate.purpose = 'one-capped-four-fixture-sequential-zero-retry-benchmark';
+  delete candidate.diagnosticCapture;
+  const base = QwenBenchmarkAuthorizationPacketV5Schema.safeParse(candidate);
+  if (!base.success) {
+    context.addIssue({ code: 'custom', message: 'Qwen V6 provider/evidence binding drifted.' });
+    return;
+  }
+  const packet = value as Record<string, unknown>;
+  const exact =
+    packet.authorizationVersion === 6 &&
+    packet.authorizationId === QWEN_V6_AUTHORIZATION_ID &&
+    packet.mode === 'live-provider' &&
+    packet.purpose === QWEN_V6_BENCHMARK_PURPOSE &&
+    packet.grantId === QWEN_V6_GRANT_ID &&
+    packet.grantVersion === QWEN_V6_GRANT_VERSION &&
+    packet.grantRecordedAt === QWEN_V6_ISSUED_AT &&
+    packet.grantOperationalExpiresAtExclusive === QWEN_V6_EXPIRES_AT &&
+    packet.grantDigest === QWEN_V6_GRANT_DIGEST &&
+    packet.orderedFixtureBindingDigest === QWEN_V6_FIXTURE_BINDING_DIGEST &&
+    !Object.hasOwn(packet, 'diagnosticCapture');
+  if (!exact)
+    context.addIssue({ code: 'custom', message: 'Qwen V6 grant or live-run binding drifted.' });
+});
+export const QwenBenchmarkAuthorizationPacketV6Schema =
+  QwenBenchmarkAuthorizationPacketV6RuntimeSchema;
+
 export interface QwenBenchmarkExecutionAuthorization {
-  readonly authorizationVersion: 2 | 3 | 4 | 5;
+  readonly authorizationVersion: 2 | 3 | 4 | 5 | 6;
   readonly authorizationId: string;
   readonly mode: 'deterministic-fake' | 'live-provider';
   readonly providerKey: typeof QWEN3_VL_PROVIDER_KEY;
@@ -787,16 +882,66 @@ export const createQwenDiagnosticAuthorizationPacketV5 = (input: {
   });
 };
 
+export const createQwenFourFixtureLiveAuthorizationPacketV6 = (input: {
+  readonly issuedAtMs: number;
+  readonly expiresAtMs: number;
+  readonly gitSha: string;
+  readonly manualRelease: unknown;
+}): QwenBenchmarkAuthorizationPacketV6 => {
+  const manualRelease = QwenManualReleaseBindingV1Schema.parse(input.manualRelease);
+  if (
+    input.issuedAtMs >= input.expiresAtMs ||
+    input.expiresAtMs - input.issuedAtMs > QWEN_ACTIVE_AUTHORIZATION_MAX_VALIDITY_MS ||
+    input.issuedAtMs < Date.parse(QWEN_V6_ISSUED_AT) ||
+    input.expiresAtMs > Date.parse(QWEN_V6_EXPIRES_AT) ||
+    !/^[0-9a-f]{40}$/u.test(input.gitSha)
+  ) {
+    throw new QwenSceneAnalysisError('authorization-stale');
+  }
+  const base = createQwenDiagnosticAuthorizationPacketV5({
+    authorizationId: QWEN_V6_AUTHORIZATION_ID,
+    issuedAtMs: input.issuedAtMs,
+    expiresAtMs: input.expiresAtMs,
+    gitSha: input.gitSha,
+    manualRelease,
+    responseArtifactRelativePath:
+      '.local-data/banner-ai/qwen-response-diagnostic-v6-unused-0001.json',
+    diagnosticReportRelativePath:
+      '.local-data/banner-ai/qwen-response-diagnostic-report-v6-unused-0001.json',
+  });
+  const withoutDiagnostic = { ...base };
+  delete withoutDiagnostic.diagnosticCapture;
+  const packet = {
+    ...withoutDiagnostic,
+    authorizationVersion: 6 as const,
+    authorizationId: QWEN_V6_AUTHORIZATION_ID,
+    mode: 'live-provider' as const,
+    purpose: QWEN_V6_BENCHMARK_PURPOSE,
+    grantId: QWEN_V6_GRANT_ID,
+    grantVersion: QWEN_V6_GRANT_VERSION,
+    grantRecordedAt: QWEN_V6_ISSUED_AT,
+    grantOperationalExpiresAtExclusive: QWEN_V6_EXPIRES_AT,
+    grantDigest: QWEN_V6_GRANT_DIGEST,
+    orderedFixtureBindingDigest: QWEN_V6_FIXTURE_BINDING_DIGEST,
+    manualRelease,
+  };
+  assertQwenV6TemporalCoverage(packet as QwenBenchmarkAuthorizationPacketV6);
+  QwenBenchmarkAuthorizationPacketV6Schema.parse(packet);
+  return packet as QwenBenchmarkAuthorizationPacketV6;
+};
+
 interface PrivateAuthorizationState {
   readonly packet:
     | QwenBenchmarkAuthorizationPacketV2
     | QwenBenchmarkAuthorizationPacketV3
     | QwenBenchmarkAuthorizationPacketV4
-    | QwenBenchmarkAuthorizationPacketV5;
+    | QwenBenchmarkAuthorizationPacketV5
+    | QwenBenchmarkAuthorizationPacketV6;
   readonly claimedInvocationKeys: Set<string>;
   readonly claimedFixtureIds: Set<string>;
   liveDispatchGitGuard: QwenLiveDispatchGitGuardPort | null;
   diagnosticReservations: QwenDiagnosticReservationSetV1 | null;
+  v6Reservation: object | null;
 }
 
 export interface QwenLiveDispatchGitGuardPort {
@@ -809,6 +954,32 @@ const privateAuthorizationState = new WeakMap<object, PrivateAuthorizationState>
 const mintValidatedQwenBenchmarkExecutionAuthorization = (
   input: unknown,
 ): QwenBenchmarkExecutionAuthorization => {
+  const v6Packet = QwenBenchmarkAuthorizationPacketV6Schema.safeParse(input);
+  if (v6Packet.success) {
+    const packet = v6Packet.data as QwenBenchmarkAuthorizationPacketV6;
+    const authorization = Object.freeze({
+      authorizationVersion: 6 as const,
+      authorizationId: packet.authorizationId,
+      mode: packet.mode,
+      providerKey: QWEN3_VL_PROVIDER_KEY,
+      requestedModelId: QWEN3_VL_REQUESTED_MODEL_ID,
+      gitSha: packet.gitSha,
+      manualReleaseSha256: packet.manualRelease.releaseSha256,
+      endpoint: packet.endpoint,
+      diagnosticCapture: null,
+      dispatchAuthority: true as const,
+    });
+    validAuthorizations.add(authorization);
+    privateAuthorizationState.set(authorization, {
+      packet,
+      claimedInvocationKeys: new Set<string>(),
+      claimedFixtureIds: new Set<string>(),
+      liveDispatchGitGuard: null,
+      diagnosticReservations: null,
+      v6Reservation: null,
+    });
+    return authorization;
+  }
   const activePacket = QwenBenchmarkAuthorizationPacketV5Schema.safeParse(input);
   if (activePacket.success === false) {
     const historicalV4 = QwenBenchmarkAuthorizationPacketV4Schema.safeParse(input);
@@ -843,6 +1014,7 @@ const mintValidatedQwenBenchmarkExecutionAuthorization = (
     claimedFixtureIds: new Set<string>(),
     liveDispatchGitGuard: null,
     diagnosticReservations: null,
+    v6Reservation: null,
   });
   return authorization;
 };
@@ -850,6 +1022,9 @@ const mintValidatedQwenBenchmarkExecutionAuthorization = (
 export const mintQwenBenchmarkExecutionAuthorization = (
   input: unknown,
 ): QwenBenchmarkExecutionAuthorization => {
+  if (QwenBenchmarkAuthorizationPacketV6Schema.safeParse(input).success) {
+    throw new QwenSceneAnalysisError('authorization-missing');
+  }
   const activePacket = QwenBenchmarkAuthorizationPacketV5Schema.safeParse(input);
   if (activePacket.success && activePacket.data.mode === 'live-provider') {
     throw new QwenSceneAnalysisError('authorization-missing');
@@ -938,6 +1113,20 @@ export const preflightQwenLiveExecutionAuthorization = (input: {
   const nowMs = z.int().min(0).parse(input.nowMs);
   z.literal(true).parse(input.secretPresent);
   assertQwen3VlOfficialEvidenceFresh(nowMs);
+  const v6PacketResult = QwenBenchmarkAuthorizationPacketV6Schema.safeParse(input.packet);
+  if (v6PacketResult.success) {
+    const packet = v6PacketResult.data as QwenBenchmarkAuthorizationPacketV6;
+    assertQwenV6TemporalCoverage(packet, nowMs);
+    if (
+      input.currentGitSha !== packet.gitSha ||
+      nowMs - packet.issuedAtMs >= QWEN_ACTIVE_AUTHORIZATION_MAX_ISSUANCE_AGE_MS ||
+      nowMs < packet.manualRelease.issuedAtMs
+    ) {
+      throw new QwenSceneAnalysisError('authorization-stale');
+    }
+    assertQwenV6ProductionRepositoryClean(packet.gitSha);
+    return mintValidatedQwenBenchmarkExecutionAuthorization(packet);
+  }
   const activePacket = QwenBenchmarkAuthorizationPacketV5Schema.safeParse(input.packet);
   if (!activePacket.success) {
     throw new QwenSceneAnalysisError('authorization-missing');
@@ -977,6 +1166,31 @@ export const preflightQwenLiveExecutionAuthorization = (input: {
   return authorization;
 };
 
+export const reserveQwenV6AuthorizedExecution = (
+  authorization: QwenBenchmarkExecutionAuthorization,
+): void => {
+  const state = requireOpaqueAuthorizationState(authorization);
+  if (state.packet.authorizationVersion !== 6 || state.v6Reservation !== null)
+    throw new QwenSceneAnalysisError('authorization-missing');
+  assertQwenV6ProductionRepositoryClean(state.packet.gitSha);
+  const reservation = reserveQwenV6Execution({
+    gitSha: state.packet.gitSha,
+    manualRelease: state.packet.manualRelease.releaseSha256,
+    grantDigest: QWEN_V6_GRANT_DIGEST,
+  });
+  state.v6Reservation = reservation;
+};
+
+export const finalizeQwenV6AuthorizedReport = async (input: {
+  readonly authorization: QwenBenchmarkExecutionAuthorization;
+  readonly bytes: Uint8Array;
+}): Promise<void> => {
+  const state = requireOpaqueAuthorizationState(input.authorization);
+  if (state.packet.authorizationVersion !== 6 || state.v6Reservation === null)
+    throw new QwenSceneAnalysisError('authorization-missing');
+  await finalizeQwenV6Reservation(state.v6Reservation, input.bytes);
+};
+
 const requireAuthorizationState = (input: unknown, nowMs: number): PrivateAuthorizationState => {
   if (typeof input !== 'object' || input === null || !validAuthorizations.has(input)) {
     throw new QwenSceneAnalysisError('authorization-missing');
@@ -986,6 +1200,7 @@ const requireAuthorizationState = (input: unknown, nowMs: number): PrivateAuthor
   if (nowMs < state.packet.issuedAtMs || nowMs >= state.packet.expiresAtMs) {
     throw new QwenSceneAnalysisError('authorization-stale');
   }
+  if (state.packet.authorizationVersion === 6) assertQwenV6TemporalCoverage(state.packet, nowMs);
   if (state.packet.authorizationVersion === 5) {
     const release = QwenManualReleaseBindingV1Schema.parse(
       state.packet.manualRelease,
@@ -1448,15 +1663,25 @@ export const createQwen3VlSceneAnalysisAdapter = (input: {
         buildPrivateRequestBody(analyzeInput.normalizedImageBytes),
       );
       if (transport.transportKind === 'native-fetch') {
-        if (authorizationState.packet.authorizationVersion !== 5) {
-          throw new QwenSceneAnalysisError('authorization-missing');
-        }
-        const gitGuard = authorizationState.liveDispatchGitGuard;
-        if (gitGuard === null) throw new QwenSceneAnalysisError('authorization-missing');
-        try {
-          gitGuard.assertCurrentGitState(authorizationState.packet.gitSha);
-        } catch {
-          throw new QwenSceneAnalysisError('authorization-missing');
+        if (authorizationState.packet.authorizationVersion === 6) {
+          if (authorizationState.v6Reservation === null)
+            throw new QwenSceneAnalysisError('authorization-missing');
+          try {
+            verifyQwenV6Reservation(authorizationState.v6Reservation);
+            assertQwenV6ProductionRepositoryClean(authorizationState.packet.gitSha);
+          } catch {
+            throw new QwenSceneAnalysisError('authorization-missing');
+          }
+        } else {
+          if (authorizationState.packet.authorizationVersion !== 5)
+            throw new QwenSceneAnalysisError('authorization-missing');
+          const gitGuard = authorizationState.liveDispatchGitGuard;
+          if (gitGuard === null) throw new QwenSceneAnalysisError('authorization-missing');
+          try {
+            gitGuard.assertCurrentGitState(authorizationState.packet.gitSha);
+          } catch {
+            throw new QwenSceneAnalysisError('authorization-missing');
+          }
         }
       }
       if (context.cancellation.cancelled) throw cancellationError();
