@@ -77,6 +77,7 @@ export interface ProviderFreeSourceReferenceV1 {
 
 export interface ProviderFreeFixtureMaterializationV1 {
   readonly fixtureId: typeof PROVIDER_FREE_FIXTURE_ID_V1;
+  readonly candidateId: string;
   readonly project: ProviderFreeBannerProjectV1;
   readonly scene: BannerSceneV1;
   readonly assets: readonly FakeExportAsset[];
@@ -223,6 +224,15 @@ export const createProviderFreeSceneReferenceResolver = (
 const materializeProviderFreeFixtureProjectCoreV1 = async (input: {
   readonly source: Uint8Array;
   readonly subject: Uint8Array;
+  readonly subjectIdentity?: Readonly<{
+    assetId: string;
+    assetVersionId: string;
+    layerId: string;
+    filename: string;
+    bounds: { xBps: number; yBps: number; widthBps: number; heightBps: number };
+    name: string;
+  }>;
+  readonly candidateId?: string;
 }): Promise<ProviderFreeFixtureMaterializationV1> => {
   const normalizedSource = await normalizeRasterUpload({
     bytes: byteSourceFrom(input.source),
@@ -284,8 +294,8 @@ const materializeProviderFreeFixtureProjectCoreV1 = async (input: {
     if (!(proposal.partKey in layerIdentity)) {
       throw new TypeError('The approved fixture foreground evidence drifted.');
     }
-    const identity = layerIdentity[proposal.partKey as ForegroundPartKey];
-    const bounds = boundsToPixels(proposal.bounds);
+    const identity = input.subjectIdentity ?? layerIdentity[proposal.partKey as ForegroundPartKey];
+    const bounds = boundsToPixels(input.subjectIdentity?.bounds ?? proposal.bounds);
     const encoded = input.subject;
     const normalized = await normalizeGeneratedPng(encoded, identity.filename);
     const reference = assetReference({
@@ -295,8 +305,8 @@ const materializeProviderFreeFixtureProjectCoreV1 = async (input: {
     });
     layerAssets.push({ reference, bytes: Uint8Array.from(normalized.bytes) });
     sceneLayers.push({
-      id: identity.layerId as BannerSceneV1['layers'][number]['id'],
-      name: proposal.label,
+      id: identity.layerId as unknown as BannerSceneV1['layers'][number]['id'],
+      name: input.subjectIdentity?.name ?? proposal.label,
       order: index,
       included: true,
       visible: true,
@@ -316,7 +326,7 @@ const materializeProviderFreeFixtureProjectCoreV1 = async (input: {
     const thumbnail = await materializeThumbnail(normalized.bytes, `${proposal.partKey}.png`);
     presentationParts.push({
       partKey: proposal.partKey,
-      targetId: identity.layerId,
+      targetId: identity.layerId as unknown as ProviderFreeSelectedPartIdV1,
       name: proposal.label,
       role: 'subject',
       bounds,
@@ -348,6 +358,9 @@ const materializeProviderFreeFixtureProjectCoreV1 = async (input: {
   const project = createInitialProviderFreeBannerProjectV1(scene);
   const materialization: ProviderFreeFixtureMaterializationV1 = Object.freeze({
     fixtureId: PROVIDER_FREE_FIXTURE_ID_V1,
+    candidateId:
+      input.candidateId ??
+      'samc_v1_478780b81c47a3b064a5398bbf275ddd137a4e21d746b5aeb0623a7a546f99cf',
     project,
     scene,
     assets: Object.freeze([
@@ -413,4 +426,30 @@ export const materializeProviderFreePersonSubjectProjectV1 = async (
   )
     throw new TypeError('Person replay subject identity drifted.');
   return materializeProviderFreeFixtureProjectCoreV1({ source, subject });
+};
+
+export const materializeProviderFreePersonSamCandidateProjectV1 = async (input: {
+  readonly source: Uint8Array;
+  readonly subject: Uint8Array;
+  readonly candidate: {
+    readonly candidateId: string;
+    readonly bounds: { xBps: number; yBps: number; widthBps: number; heightBps: number };
+  };
+}): Promise<ProviderFreeFixtureMaterializationV1> => {
+  const normalizedSource = await normalizeGeneratedPng(input.source, 'source.png');
+  const normalizedSubject = await normalizeGeneratedPng(input.subject, 'candidate.png');
+  const shortId = input.candidate.candidateId.slice(-8);
+  return materializeProviderFreeFixtureProjectCoreV1({
+    source: normalizedSource.bytes,
+    subject: normalizedSubject.bytes,
+    subjectIdentity: {
+      assetId: `asset_banner_person_${shortId}`,
+      assetVersionId: `asset_version_banner_person_${shortId}`,
+      layerId: PROVIDER_FREE_PERSON_SUBJECT_LAYER_ID_V1,
+      filename: `banner-person-v1-${shortId}.cutout.png`,
+      bounds: input.candidate.bounds,
+      name: 'banner-person-v1 subject',
+    },
+    candidateId: input.candidate.candidateId,
+  });
 };

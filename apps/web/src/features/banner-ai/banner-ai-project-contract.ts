@@ -151,6 +151,7 @@ export interface ProviderFreeProjectPresentationPart {
 export interface ProviderFreeProjectPresentation {
   readonly canvas: { readonly width: 300; readonly height: 200 };
   readonly fixtureLabel: string;
+  readonly candidateId: string;
   readonly source: {
     readonly name: string;
     readonly asset: {
@@ -172,6 +173,66 @@ export interface ProviderFreeProjectOpenData {
   readonly presentation: ProviderFreeProjectPresentation;
   readonly project: ProviderFreeBannerProjectV1;
 }
+
+export interface ProviderFreeCandidateChoice {
+  readonly candidateId: string;
+  readonly order: number;
+  readonly bounds: {
+    readonly x: number;
+    readonly y: number;
+    readonly width: number;
+    readonly height: number;
+  };
+  readonly thumbnail: ProviderFreeProjectPresentationPart['thumbnail'];
+  readonly asset: BannerSceneV1['layers'][number]['asset'];
+}
+
+export const parseProviderFreeCandidateCatalogEnvelope = (
+  input: unknown,
+): readonly ProviderFreeCandidateChoice[] => {
+  if (
+    !isRecord(input) ||
+    input['ok'] !== true ||
+    !isRecord(input['data']) ||
+    !hasExactKeys(input['data'], ['candidates']) ||
+    !Array.isArray(input['data']['candidates']) ||
+    input['data']['candidates'].length !== 8
+  )
+    throw new TypeError('The demo API returned an invalid candidate catalog.');
+  const candidates = input['data']['candidates'].map((candidate, index) => {
+    if (
+      !isRecord(candidate) ||
+      !hasExactKeys(candidate, ['asset', 'bounds', 'candidateId', 'order', 'thumbnail']) ||
+      typeof candidate['candidateId'] !== 'string' ||
+      !/^samc_v1_[0-9a-f]{64}$/u.test(candidate['candidateId']) ||
+      candidate['order'] !== index + 1 ||
+      !isRecord(candidate['bounds']) ||
+      !hasExactKeys(candidate['bounds'], ['height', 'width', 'x', 'y']) ||
+      Object.values(candidate['bounds']).some(
+        (value) => typeof value !== 'number' || !Number.isFinite(value),
+      ) ||
+      !isRecord(candidate['asset']) ||
+      !hasExactKeys(candidate['asset'], [
+        'assetId',
+        'assetVersionId',
+        'byteSize',
+        'mediaType',
+        'pixelHeight',
+        'pixelWidth',
+        'sha256',
+      ]) ||
+      candidate['asset']['mediaType'] !== 'image/png' ||
+      typeof candidate['asset']['sha256'] !== 'string' ||
+      !sha256Pattern.test(candidate['asset']['sha256'])
+    )
+      throw new TypeError('The demo API returned an invalid candidate choice.');
+    parseThumbnail(candidate['thumbnail']);
+    return candidate as unknown as ProviderFreeCandidateChoice;
+  });
+  if (new Set(candidates.map((candidate) => candidate.candidateId)).size !== 8)
+    throw new TypeError('The demo API returned duplicate candidates.');
+  return candidates;
+};
 
 export interface BannerProjectApiError {
   readonly code: string;
@@ -209,12 +270,14 @@ const parsePresentation = (
 ): ProviderFreeProjectPresentation => {
   if (
     !isRecord(input) ||
-    !hasExactKeys(input, ['canvas', 'fixtureLabel', 'parts', 'source']) ||
+    !hasExactKeys(input, ['candidateId', 'canvas', 'fixtureLabel', 'parts', 'source']) ||
     !isRecord(input['canvas']) ||
     !hasExactKeys(input['canvas'], ['height', 'width']) ||
     input['canvas']['width'] !== 300 ||
     input['canvas']['height'] !== 200 ||
     !isSafeText(input['fixtureLabel'], 120) ||
+    typeof input['candidateId'] !== 'string' ||
+    !/^samc_v1_[0-9a-f]{64}$/u.test(input['candidateId']) ||
     !Array.isArray(input['parts']) ||
     input['parts'].length !== 2
   ) {

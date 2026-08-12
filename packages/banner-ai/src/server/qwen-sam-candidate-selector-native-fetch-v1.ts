@@ -8,7 +8,7 @@ export async function dispatchQwenSamNative(
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 120_000);
   try {
-    const response = await fetch(request.endpoint, {
+    const response = await globalThis.fetch(request.endpoint, {
       method: 'POST',
       headers: { authorization: `Bearer ${secret}`, 'content-type': 'application/json' },
       body: request.requestBodyText,

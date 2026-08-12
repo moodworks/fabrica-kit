@@ -18,6 +18,8 @@ import {
   parseProviderFreeExportEnvelope,
   parseProviderFreePreviewEnvelope,
   parseProviderFreeProjectEnvelope,
+  parseProviderFreeCandidateCatalogEnvelope,
+  type ProviderFreeCandidateChoice,
   type ProviderFreeExportData,
   type ProviderFreePreviewData,
   type ProviderFreeProjectOpenData,
@@ -78,6 +80,26 @@ export const requestProviderFreeProject = async (
     method: 'GET',
     cache: 'no-store',
     credentials: 'same-origin',
+  });
+  return resolveEnvelope(parseProviderFreeProjectEnvelope(await parseJsonResponse(response)));
+};
+
+export const requestProviderFreeCandidateCatalog = async (
+  fetchImplementation: BannerProjectFetch = fetch,
+): Promise<readonly ProviderFreeCandidateChoice[]> => {
+  const response = await postJson(fetchImplementation, '/api/banner-ai/demo-project', {
+    action: 'catalog',
+  });
+  return parseProviderFreeCandidateCatalogEnvelope(await parseJsonResponse(response));
+};
+
+export const openProviderFreeCandidate = async (
+  candidateId: string,
+  fetchImplementation: BannerProjectFetch = fetch,
+): Promise<ProviderFreeProjectOpenData> => {
+  const response = await postJson(fetchImplementation, '/api/banner-ai/demo-project', {
+    action: 'open-candidate',
+    candidateId,
   });
   return resolveEnvelope(parseProviderFreeProjectEnvelope(await parseJsonResponse(response)));
 };

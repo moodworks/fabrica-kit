@@ -19,9 +19,12 @@ import {
   requestProviderFreeExport,
   requestProviderFreePreview,
   requestProviderFreeProject,
+  requestProviderFreeCandidateCatalog,
+  openProviderFreeCandidate,
   saveProviderFreeProject,
   type ProviderFreeOperationCapture,
 } from './banner-ai-project-api';
+import type { ProviderFreeCandidateChoice } from './banner-ai-project-contract';
 import { getAcceptedRevision } from './banner-ai-project-contract';
 import {
   bannerAiProjectReducer,
@@ -103,6 +106,11 @@ export function BannerAiProjectEditor() {
   const [state, dispatch] = useReducer(bannerAiProjectReducer, initialBannerAiProjectState);
   const [resetConfirmation, setResetConfirmation] = useState(false);
   const [reducedMotion, setReducedMotion] = useState(false);
+  const [candidateCatalog, setCandidateCatalog] = useState<
+    readonly ProviderFreeCandidateChoice[] | null
+  >(null);
+  const [candidateChoice, setCandidateChoice] = useState<string | null>(null);
+  const [catalogLoading, setCatalogLoading] = useState(false);
   const lifecycleIdRef = useRef(0);
   const operationIdRef = useRef(0);
   const saveActiveRef = useRef<OperationLease | null>(null);
@@ -166,6 +174,7 @@ export function BannerAiProjectEditor() {
   const acceptOpenedProject = useCallback(
     (data: Awaited<ReturnType<typeof requestProviderFreeProject>>, lifecycleId: number): void => {
       if (lifecycleIdRef.current !== lifecycleId) return;
+      setCandidateChoice(data.presentation.candidateId);
       const write = writeStoredProviderFreeProject(localStorage, data.canonicalProjectJson);
       if (lifecycleIdRef.current !== lifecycleId) return;
       dispatch({
@@ -179,9 +188,9 @@ export function BannerAiProjectEditor() {
   );
 
   const openFreshProject = useCallback(
-    async (lifecycleId: number): Promise<void> => {
+    async (lifecycleId: number, candidateId: string): Promise<void> => {
       try {
-        acceptOpenedProject(await requestProviderFreeProject(), lifecycleId);
+        acceptOpenedProject(await openProviderFreeCandidate(candidateId), lifecycleId);
       } catch (error) {
         if (lifecycleIdRef.current !== lifecycleId) return;
         dispatch({
@@ -213,6 +222,7 @@ export function BannerAiProjectEditor() {
           });
           return;
         }
+        setCandidateChoice(data.presentation.candidateId);
         dispatch({ type: 'open_succeeded', lifecycleId, data, persistence: 'available' });
       } catch (error) {
         if (lifecycleIdRef.current !== lifecycleId) return;
@@ -238,18 +248,37 @@ export function BannerAiProjectEditor() {
   }, [beginProjectLifecycle, reopenStored]);
 
   const openProject = async (): Promise<void> => {
+    const stored = readStoredProviderFreeProject(localStorage);
+    if (stored.status === 'unavailable' || stored.status === 'missing') {
+      if (candidateCatalog !== null && candidateChoice !== null) {
+        if (state.opening === 'loading') return;
+        const lifecycleId = beginProjectLifecycle();
+        await openFreshProject(lifecycleId, candidateChoice);
+        return;
+      }
+      if (catalogLoading) return;
+      setCatalogLoading(true);
+      try {
+        const catalog = await requestProviderFreeCandidateCatalog();
+        setCandidateCatalog(catalog);
+        setCandidateChoice(
+          catalog.find((candidate) => candidate.order === 5)?.candidateId ??
+            catalog[0]!.candidateId,
+        );
+      } catch (error) {
+        dispatch({
+          type: 'open_failed',
+          lifecycleId: 0,
+          error: safeFailureFrom(error, 'open'),
+          corrupt: false,
+        });
+      } finally {
+        setCatalogLoading(false);
+      }
+      return;
+    }
     if (state.opening === 'loading') return;
     const lifecycleId = beginProjectLifecycle();
-    const stored = readStoredProviderFreeProject(localStorage);
-    if (stored.status === 'unavailable') {
-      await openFreshProject(lifecycleId);
-      return;
-    }
-    if (stored.status === 'missing') {
-      await openFreshProject(lifecycleId);
-      return;
-    }
-
     await reopenStored(stored.canonicalProjectJson, lifecycleId);
   };
 
@@ -268,7 +297,10 @@ export function BannerAiProjectEditor() {
       return;
     }
     setResetConfirmation(false);
-    await openFreshProject(lifecycleId);
+    await openFreshProject(
+      lifecycleId,
+      candidateChoice ?? 'samc_v1_478780b81c47a3b064a5398bbf275ddd137a4e21d746b5aeb0623a7a546f99cf',
+    );
     if (lifecycleIdRef.current !== lifecycleId) return;
     window.setTimeout(() => {
       if (lifecycleIdRef.current === lifecycleId) {
@@ -593,8 +625,8 @@ export function BannerAiProjectEditor() {
           <p className="section-kicker">Verified replay · development-only · 300 × 200</p>
           <h1 id="editor-open-title">Open the verified Meta SAM replay project.</h1>
           <p>
-            This fixed local project preserves and replays validated real Meta SAM automatic
-            candidate 05, manually selected. There is no live provider call, Qwen box output,
+            This fixed local project preserves eight validated real Meta SAM automatic candidates.
+            Choose one before opening. There is no live provider call, Qwen box output,
             reconstruction, or product admission.
           </p>
           {state.openingError === null ? null : (
@@ -603,16 +635,44 @@ export function BannerAiProjectEditor() {
               <span>{state.openingError.message}</span>
             </div>
           )}
+          {candidateCatalog === null ? null : (
+            <fieldset className="editor-candidate-picker">
+              <legend>Choose a preserved Meta SAM candidate</legend>
+              {candidateCatalog.map((candidate) => (
+                <label key={candidate.candidateId} className="editor-candidate-choice">
+                  <input
+                    type="radio"
+                    name="banner-ai-candidate"
+                    value={candidate.candidateId}
+                    checked={candidateChoice === candidate.candidateId}
+                    onChange={() => setCandidateChoice(candidate.candidateId)}
+                  />
+                  {/* eslint-disable-next-line @next/next/no-img-element -- bounded validated in-memory candidate thumbnail */}
+                  <img src={candidate.thumbnail.dataUrl} alt={`SAM candidate ${candidate.order}`} />
+                  <span>
+                    Candidate {candidate.order}
+                    {candidate.order === 5 ? ' (recommended)' : ''}
+                  </span>
+                </label>
+              ))}
+            </fieldset>
+          )}
           <div className="editor-operation-actions">
             <button
               ref={openButtonRef}
               type="button"
               onClick={() => void openProject()}
-              disabled={state.opening === 'loading' || state.persistence === 'corrupt'}
+              disabled={
+                catalogLoading || state.opening === 'loading' || state.persistence === 'corrupt'
+              }
             >
-              {state.opening === 'loading'
-                ? 'Opening approved demo…'
-                : 'Open approved demo project'}
+              {catalogLoading
+                ? 'Loading preserved candidates…'
+                : state.opening === 'loading'
+                  ? 'Opening approved demo…'
+                  : candidateCatalog === null
+                    ? 'Open approved demo project'
+                    : 'Open selected candidate'}
             </button>
             {state.persistence === 'corrupt' ? (
               <button

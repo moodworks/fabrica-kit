@@ -24,6 +24,7 @@ test('open → edit → preset → save → preview → export → validate → 
 }) => {
   const externalRequests: string[] = [];
   const saveBodies: unknown[] = [];
+  const openCandidateBodies: unknown[] = [];
   const exportBodies: unknown[] = [];
   const observedDownloads: Download[] = [];
 
@@ -55,7 +56,20 @@ test('open → edit → preset → save → preview → export → validate → 
     if (request.method() !== 'POST') return;
     const path = new URL(request.url()).pathname;
     const body = request.postDataJSON() as unknown;
-    if (path === '/api/banner-ai/demo-project') saveBodies.push(body);
+    if (
+      path === '/api/banner-ai/demo-project' &&
+      body &&
+      typeof body === 'object' &&
+      (body as { action?: unknown }).action === 'save'
+    )
+      saveBodies.push(body);
+    if (
+      path === '/api/banner-ai/demo-project' &&
+      body &&
+      typeof body === 'object' &&
+      (body as { action?: unknown }).action === 'open-candidate'
+    )
+      openCandidateBodies.push(body);
     if (path === '/api/banner-ai/demo-project/export') exportBodies.push(body);
   });
 
@@ -65,17 +79,24 @@ test('open → edit → preset → save → preview → export → validate → 
   });
   const openButton = page.getByRole('button', { name: 'Open approved demo project' });
   await activateWithKeyboard(page, openButton);
+  await expect(page.getByRole('radio')).toHaveCount(8);
+  await page.getByRole('radio').nth(0).check();
+  await activateWithKeyboard(page, page.getByRole('button', { name: 'Open selected candidate' }));
   await expect(
     page.getByRole('heading', { name: 'Development-only verified Meta SAM replay' }),
   ).toBeVisible();
   await expect(
     page.getByText(
-      'Development-only verified Meta SAM replay; automatic candidate 05, manually selected.',
+      'Development-only verified Meta SAM replay; automatic candidate 1, manually selected.',
     ),
   ).toBeVisible();
   await expect(page.getByText('Source banner', { exact: true })).toBeVisible();
   await expect(page.getByText('Reference only', { exact: false })).toBeVisible();
   await expect(page.getByRole('img', { name: 'Source banner reference' })).toBeVisible();
+  expect(openCandidateBodies).toHaveLength(1);
+  expect((openCandidateBodies[0] as { candidateId: string }).candidateId).toMatch(
+    /^samc_v1_[0-9a-f]{64}$/u,
+  );
 
   const layerRows = page.locator('.editor-layer-row');
   await expect(layerRows).toHaveCount(2);
@@ -83,6 +104,16 @@ test('open → edit → preset → save → preview → export → validate → 
     'Solid background',
     'banner-person-v1 subject',
   ]);
+  const revisionOneSubject = await page.evaluate(() => {
+    const project = JSON.parse(
+      localStorage.getItem('fabrica.banner-ai.verified-sam-replay-project.v1')!,
+    );
+    return project.revisions[0].scene.layers[0];
+  });
+  expect(revisionOneSubject.asset.sha256).toBe(
+    'efa97f238a11d55d31e0438887bddece3de757f2b4abf117c8f1895553977022',
+  );
+  expect(revisionOneSubject.frame).toEqual({ x: 258, y: 0, width: 42, height: 69 });
   const thumbnailState = await layerRows.locator('img').evaluateAll((images) =>
     images.map((image) => ({
       complete: (image as HTMLImageElement).complete,
@@ -330,6 +361,11 @@ test('open → edit → preset → save → preview → export → validate → 
       await route.continue();
       return;
     }
+    const body = route.request().postDataJSON() as { action?: unknown } | null;
+    if (body?.action !== 'save') {
+      await route.continue();
+      return;
+    }
     observeDelayedSave();
     await delayedSaveGate;
     await route.continue();
@@ -342,7 +378,8 @@ test('open → edit → preset → save → preview → export → validate → 
   const delayedSaveResponse = page.waitForResponse(
     (response) =>
       new URL(response.url()).pathname === '/api/banner-ai/demo-project' &&
-      response.request().method() === 'POST',
+      response.request().method() === 'POST' &&
+      (response.request().postDataJSON() as { action?: unknown }).action === 'save',
   );
   releaseDelayedSave();
   await delayedSaveResponse;

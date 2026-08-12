@@ -44,8 +44,14 @@ import { postprocessSamMasks } from '../sam/sam-mask-postprocess.js';
 import { byteSourceFrom, normalizeRasterUpload } from '../security/raster-upload.js';
 import {
   materializeProviderFreePersonSubjectProjectV1,
+  materializeProviderFreePersonSamCandidateProjectV1 as materializeSamCandidateProject,
   type ProviderFreeFixtureMaterializationV1,
 } from '../editor/provider-free-fixture-materializer-v1.js';
+import {
+  PROVIDER_FREE_PERSON_SAM_CANDIDATES_V1,
+  PROVIDER_FREE_PERSON_SAM_CUTOUTS_V1,
+} from './provider-free-person-sam-candidates-v1.js';
+export { PROVIDER_FREE_PERSON_SAM_CANDIDATES_V1 } from './provider-free-person-sam-candidates-v1.js';
 
 const SAM_DETERMINISTIC_DIRECT_FAKE_IDENTITY = SamFakeExecutionIdentitySchema.parse({
   kind: 'deterministic-fake',
@@ -325,6 +331,54 @@ export const materializeProviderFreePersonSamReplayProjectV1 =
     });
     return personReplayMaterializationPromise;
   };
+
+export const materializeProviderFreePersonSamCandidateProjectV1 = async (
+  candidateId: string,
+): Promise<ProviderFreeFixtureMaterializationV1> => {
+  const candidate = PROVIDER_FREE_PERSON_SAM_CANDIDATES_V1.find(
+    (item) => item.candidateId === candidateId,
+  );
+  if (!candidate) throw new TypeError('Unknown preserved Meta SAM candidate.');
+  if (candidateId === PROVIDER_FREE_PERSON_SAM_REPLAY_EVIDENCE_V1.candidate.candidateId)
+    return materializeProviderFreePersonSamReplayProjectV1();
+  const evidence = validateProviderFreePersonSamReplayEvidenceV1(
+    PROVIDER_FREE_PERSON_SAM_REPLAY_EVIDENCE_V1,
+  );
+  const normalized = await normalizeRasterUpload({
+    bytes: byteSourceFrom(await loadPersonReplayFixture()),
+    declaredMediaType: 'image/png',
+    filename: 'banner-person-v1.png',
+  });
+  const request = SamMaskRequestSchema.parse({
+    contractVersion: evidence.fixture.contractVersion,
+    ...evidence.fixture.requestIdentifiers,
+    source: {
+      mediaType: 'image/png',
+      byteSize: normalized.byteSize,
+      width: normalized.width,
+      height: normalized.height,
+      sha256: normalized.sha256,
+      pngBase64: Buffer.from(normalized.bytes).toString('base64'),
+    },
+    segmentation: evidence.fixture.segmentation,
+    limits: evidence.fixture.limits,
+    output: evidence.fixture.output,
+  });
+  const materializedCutout = await materializeSamMaskCutout({ trustedRequest: request, candidate });
+  const canonical = stripPngAncillaryChunks(materializedCutout.cutoutPng);
+  const cutoutIdentity = PROVIDER_FREE_PERSON_SAM_CUTOUTS_V1.get(candidateId);
+  if (
+    !cutoutIdentity ||
+    canonical.byteLength !== cutoutIdentity.byteSize ||
+    sha256Hex(canonical) !== cutoutIdentity.sha256
+  )
+    throw new TypeError('Preserved candidate cutout drifted.');
+  return materializeSamCandidateProject({
+    source: normalized.bytes,
+    subject: canonical,
+    candidate,
+  });
+};
 
 export const createDeterministicSamBoxPromptAdapter = () => {
   let callCount = 0;

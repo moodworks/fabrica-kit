@@ -91,6 +91,34 @@ const revisionTwo = async () => {
 afterEach(() => vi.restoreAllMocks());
 
 describe('provider-free demo project route integration', () => {
+  it('opens candidate catalog and a non-default candidate strictly', async () => {
+    const catalogResponse = await postJson(updateProject, '/api/banner-ai/demo-project', {
+      action: 'catalog',
+    });
+    expect(catalogResponse.status).toBe(200);
+    const catalog = (await catalogResponse.json()) as {
+      ok: true;
+      data: { candidates: { candidateId: string }[] };
+    };
+    expect(catalog.data.candidates).toHaveLength(8);
+    const candidateId = catalog.data.candidates[0]!.candidateId;
+    const opened = await postJson(updateProject, '/api/banner-ai/demo-project', {
+      action: 'open-candidate',
+      candidateId,
+    });
+    expect(opened.status).toBe(200);
+    const data = parseProviderFreeProjectEnvelope(await opened.json());
+    if (!data.ok) throw new Error('Expected candidate project.');
+    expect(data.data.presentation.candidateId).toBe(candidateId);
+    expect(data.data.project.revisions[0]!.scene.layers[0]!.asset.sha256).toBe(
+      'efa97f238a11d55d31e0438887bddece3de757f2b4abf117c8f1895553977022',
+    );
+    const unknown = await postJson(updateProject, '/api/banner-ai/demo-project', {
+      action: 'open-candidate',
+      candidateId: 'samc_v1_' + 'f'.repeat(64),
+    });
+    expect(unknown.status).toBe(400);
+  });
   it('opens the one exact server-owned 300 by 200 fixture without network activity', async () => {
     const outbound = vi
       .spyOn(globalThis, 'fetch')
