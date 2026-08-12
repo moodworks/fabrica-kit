@@ -32,7 +32,8 @@ import {
   parseAndVerifySamMaskRequest,
   parseAndVerifySamMaskResponse,
 } from '../src/sam/sam-mask-validation.js';
-import { parsePngChunks } from '../src/security/raster-container.js';
+import { assertCanonicalNormalizedPng, parsePngChunks } from '../src/security/raster-container.js';
+import { extractLayerWithSamBoxPrompt } from '../src/server/sam-box-prompt-layer-extraction.js';
 import {
   consumeSamRunPodDirectV3DispatchCapability,
   createSamRunPodDirectV3Adapter,
@@ -58,9 +59,21 @@ import {
   SAM_RUNPOD_DIRECT_AUTHORIZATION_PROFILE_V3_SHA256,
   SAM_RUNPOD_DIRECT_HOSTING_PROFILE,
   SAM_RUNPOD_DIRECT_HOSTING_PROFILE_SHA256,
+  SamRunPodDirectV3BoxAuthorizationSchema,
   SamRunPodDirectV3AuthorizationSchema,
   type SamRunPodDirectV3Authorization,
 } from '../src/server/sam-runpod-direct-v3-profiles.js';
+import {
+  createTestOnlySamRunPodDirectV3AuthorizationSources,
+  mintTestOnlySamFirstInferenceV3Authorization,
+  mintTestOnlySamRunPodDirectV3BoxAuthorization,
+} from '../src/server/sam-runpod-direct-v3-authorization.js';
+import {
+  SAM_FIRST_INFERENCE_EXECUTION_IDENTITY,
+  SAM_FIRST_INFERENCE_WORKER_IMAGE_DIGEST,
+  prepareSamFirstInferenceV3BoxPromptRequest,
+  prepareSamFirstInferenceV3Request,
+} from '../src/server/sam-runpod-direct-v3-request-preparation.js';
 
 const packageRoot = resolve(import.meta.dirname, '..');
 const fixture = readFileSync(
@@ -176,6 +189,182 @@ const createDirectAuthorization = (
 };
 
 describe('SAM mask protocol', () => {
+  it('authorizes one exact native box request and rejects replay, mutation, and automatic authority', async () => {
+    const automaticPrepared = await prepareSamFirstInferenceV3Request();
+    const boxRequest = {
+      ...automaticPrepared.request,
+      segmentation: {
+        mode: 'box-prompt' as const,
+        prompt: {
+          kind: 'box' as const,
+          authority: 'server-validated-detector' as const,
+          box: { xBps: 1000, yBps: 1000, widthBps: 8000, heightBps: 8000 },
+        },
+      },
+      limits: { minMaskAreaPixels: 1, maxCandidates: 1 },
+    };
+    const prepared = prepareSamFirstInferenceV3BoxPromptRequest(boxRequest);
+    const sources = createTestOnlySamRunPodDirectV3AuthorizationSources({
+      nowMs: () => RUNPOD_DIRECT_DOCUMENTATION_RETRIEVED_AT_MS + 1,
+      authorizationId: () => '08dbe0ed-f7c0-4b55-b615-000000000991',
+    });
+    const sourcesNow = () => RUNPOD_DIRECT_DOCUMENTATION_RETRIEVED_AT_MS + 1;
+    const boxAuthorization = mintTestOnlySamRunPodDirectV3BoxAuthorization(prepared, sources);
+    const trustedBoxRequest = SamMaskRequestSchema.parse(boxRequest);
+    expect(
+      SamRunPodDirectV3BoxAuthorizationSchema.parse(boxAuthorization).automaticCandidatesOnly,
+    ).toBe(false);
+    const dispatches: string[] = [];
+    const transport: SamRunPodDirectV3TransportPort = {
+      transportKind: 'native-fetch-direct-v3',
+      secretReferenceName: 'RUNPOD_API_KEY',
+      async dispatch(input) {
+        consumeSamRunPodDirectV3DispatchCapability(input, 'native-fetch-direct-v3');
+        dispatches.push(input.requestBodyText);
+        const request = JSON.parse(input.requestBodyText) as SamMaskRequest;
+        const mask = new Uint8Array(request.source.width * request.source.height);
+        mask[request.source.width + 1] = 1;
+        const candidates = postprocessSamMasks(request, [
+          { mask, predictedIou: 1, stabilityScore: 1 },
+        ]).candidates;
+        const responseBase = {
+          contractVersion: SAM_MASK_CONTRACT_VERSION,
+          requestId: request.requestId,
+          workspaceId: request.workspaceId,
+          jobId: request.jobId,
+          attemptId: request.attemptId,
+          sourceSha256: request.source.sha256,
+          executionIdentity: SAM_FIRST_INFERENCE_EXECUTION_IDENTITY,
+          timing: { inferenceMs: 1, totalMs: 1 },
+          filterSummary: {
+            rawCandidateCount: 1,
+            exactDuplicateFiltered: 0,
+            tinyFiltered: 0,
+            fullCanvasFiltered: 0,
+            rleTooLargeFiltered: 0,
+            rleBudgetFiltered: 0,
+            candidateLimitFiltered: 0,
+            returnedCandidateCount: candidates.length,
+          },
+          candidateCount: candidates.length,
+          candidates,
+        };
+        return {
+          status: 200,
+          contentType: 'application/json',
+          bodyText: JSON.stringify({
+            ...responseBase,
+            responseSha256: canonicalResponseSha256(responseBase),
+          }),
+        };
+      },
+    };
+    const adapter = createSamRunPodDirectV3Adapter({
+      endpointId: prepared.endpointId,
+      expectedExecutionIdentity: SAM_FIRST_INFERENCE_EXECUTION_IDENTITY,
+      transport,
+      authorization: boxAuthorization,
+      configuredImageDigest: SAM_FIRST_INFERENCE_WORKER_IMAGE_DIGEST,
+      nowMs: () => RUNPOD_DIRECT_DOCUMENTATION_RETRIEVED_AT_MS + 1,
+    });
+    const mutableBoxRequest = JSON.parse(JSON.stringify(boxRequest)) as typeof boxRequest;
+    await expect(adapter.generate(mutableBoxRequest)).rejects.toMatchObject({
+      reason: 'UNAUTHORIZED',
+    });
+    expect(dispatches).toHaveLength(0);
+    const automaticAuthorization = mintTestOnlySamFirstInferenceV3Authorization(
+      automaticPrepared,
+      sources,
+    );
+    const automaticAdapter = createSamRunPodDirectV3Adapter({
+      endpointId: prepared.endpointId,
+      expectedExecutionIdentity: SAM_FIRST_INFERENCE_EXECUTION_IDENTITY,
+      transport,
+      authorization: automaticAuthorization,
+      configuredImageDigest: SAM_FIRST_INFERENCE_WORKER_IMAGE_DIGEST,
+      nowMs: sourcesNow,
+    });
+    await expect(automaticAdapter.generate(trustedBoxRequest)).rejects.toMatchObject({
+      reason: 'UNAUTHORIZED',
+    });
+    expect(dispatches).toHaveLength(0);
+    const reconstructed = JSON.parse(JSON.stringify(boxAuthorization)) as typeof boxAuthorization;
+    const reconstructedAdapter = createSamRunPodDirectV3Adapter({
+      endpointId: prepared.endpointId,
+      expectedExecutionIdentity: SAM_FIRST_INFERENCE_EXECUTION_IDENTITY,
+      transport,
+      authorization: reconstructed,
+      configuredImageDigest: SAM_FIRST_INFERENCE_WORKER_IMAGE_DIGEST,
+      nowMs: sourcesNow,
+    });
+    await expect(reconstructedAdapter.generate(trustedBoxRequest)).rejects.toMatchObject({
+      reason: 'UNAUTHORIZED',
+    });
+    expect(dispatches).toHaveLength(0);
+    const changed = {
+      ...boxRequest,
+      segmentation: {
+        ...boxRequest.segmentation,
+        prompt: {
+          ...boxRequest.segmentation.prompt,
+          box: { ...boxRequest.segmentation.prompt.box, xBps: 1001 },
+        },
+      },
+    };
+    const changedAdapter = createSamRunPodDirectV3Adapter({
+      endpointId: prepared.endpointId,
+      expectedExecutionIdentity: SAM_FIRST_INFERENCE_EXECUTION_IDENTITY,
+      transport,
+      authorization: boxAuthorization,
+      configuredImageDigest: SAM_FIRST_INFERENCE_WORKER_IMAGE_DIGEST,
+      nowMs: sourcesNow,
+    });
+    const trustedChanged = SamMaskRequestSchema.parse(changed);
+    await expect(changedAdapter.generate(trustedChanged)).rejects.toMatchObject({
+      reason: 'UNAUTHORIZED',
+    });
+    expect(dispatches).toHaveLength(0);
+    const sourceBytes = Uint8Array.from(
+      Buffer.from(automaticPrepared.request.source.pngBase64, 'base64'),
+    );
+    const extracted = await extractLayerWithSamBoxPrompt({
+      request: {
+        sourceAsset: {
+          assetId: automaticPrepared.request.requestId,
+          assetVersionId: automaticPrepared.request.attemptId,
+          sha256: automaticPrepared.request.source.sha256,
+          mediaType: 'image/png',
+          byteSize: automaticPrepared.request.source.byteSize,
+          pixelWidth: automaticPrepared.request.source.width,
+          pixelHeight: automaticPrepared.request.source.height,
+        },
+        part: {
+          partKey: 'subject',
+          label: 'Subject',
+          role: 'subject',
+          bounds: boxRequest.segmentation.prompt.box,
+        },
+        trimTransparentPixels: true,
+      },
+      normalizedPng: sourceBytes,
+      requestId: automaticPrepared.request.requestId,
+      workspaceId: automaticPrepared.request.workspaceId,
+      jobId: automaticPrepared.request.jobId,
+      attemptId: automaticPrepared.request.attemptId,
+      sam: adapter,
+    });
+    expect(extracted.layer.mediaType).toBe('image/png');
+    expect(() => assertCanonicalNormalizedPng(extracted.layer.bytes)).not.toThrow();
+    expect(dispatches).toHaveLength(1);
+    expect(JSON.parse(dispatches[0]!).segmentation).toEqual(boxRequest.segmentation);
+    expect(JSON.parse(dispatches[0]!).workerImageDigest).toBe(
+      SAM_FIRST_INFERENCE_WORKER_IMAGE_DIGEST,
+    );
+    await expect(adapter.generate(boxRequest)).rejects.toMatchObject({
+      reason: 'UNAUTHORIZED',
+    });
+    expect(dispatches).toHaveLength(1);
+  });
   it('consumes the same machine vectors as the Python worker', () => {
     const vectors = JSON.parse(
       readFileSync(resolve(packageRoot, '../../services/sam-worker/protocol-vectors.json'), 'utf8'),

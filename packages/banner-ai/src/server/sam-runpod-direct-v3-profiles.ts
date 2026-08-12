@@ -237,6 +237,31 @@ export const SAM_RUNPOD_DIRECT_AUTHORIZATION_PROFILE_V3 = Object.freeze({
 export const SAM_RUNPOD_DIRECT_AUTHORIZATION_PROFILE_V3_SHA256 =
   '194272140ae7e717a69f122f6a3e7b1083c80a5f3022f12ffd73ca0016183492' as const;
 
+/** Separate authority profile: automatic-candidates authority must never authorize box prompts. */
+export const SAM_RUNPOD_DIRECT_BOX_AUTHORIZATION_PROFILE_V3 = Object.freeze({
+  profileVersion: 'sam-runpod-direct-box-authorization-v3',
+  authorizationKind: 'single-box-prompt-sam-runpod-direct-v3',
+  baseAuthorizationProfileSha256: SAM_RUNPOD_DIRECT_AUTHORIZATION_PROFILE_V3_SHA256,
+  bindings: [
+    'canonical-request-sha256',
+    'canonical-request-byte-length',
+    'exact-segmentation-object',
+    'request-identity',
+  ],
+  activation: {
+    boxPromptOnly: true,
+    clientDispatchMaximum: 1,
+    applicationInferenceMaximum: 1,
+    clientRetryCount: 0,
+    pollCount: 0,
+    productionAdmissionAuthority: false,
+    webRouteActivated: false,
+  },
+  singleUse: { authorizationId: 'process-local', objectIdentity: true },
+} as const);
+export const SAM_RUNPOD_DIRECT_BOX_AUTHORIZATION_PROFILE_V3_SHA256 =
+  '1901a10d167a3df2b665ca1a3e28ea5cd249b0f5649ea16fdc6fa9912e1e77f3' as const;
+
 const profileDigest = (profile: unknown): string =>
   sha256Hex(Buffer.from(canonicalizeJson(profile), 'utf8'));
 
@@ -245,7 +270,9 @@ if (
   profileDigest(SAM_RUNPOD_DIRECT_ADAPTER_PROFILE_V3) !==
     SAM_RUNPOD_DIRECT_ADAPTER_PROFILE_V3_SHA256 ||
   profileDigest(SAM_RUNPOD_DIRECT_AUTHORIZATION_PROFILE_V3) !==
-    SAM_RUNPOD_DIRECT_AUTHORIZATION_PROFILE_V3_SHA256
+    SAM_RUNPOD_DIRECT_AUTHORIZATION_PROFILE_V3_SHA256 ||
+  profileDigest(SAM_RUNPOD_DIRECT_BOX_AUTHORIZATION_PROFILE_V3) !==
+    SAM_RUNPOD_DIRECT_BOX_AUTHORIZATION_PROFILE_V3_SHA256
 ) {
   throw new TypeError('SAM RunPod direct profile digest drifted.');
 }
@@ -323,3 +350,23 @@ export const SamRunPodDirectV3AuthorizationSchema = z
   .readonly();
 
 export type SamRunPodDirectV3Authorization = z.infer<typeof SamRunPodDirectV3AuthorizationSchema>;
+
+export const SamRunPodDirectV3BoxAuthorizationSchema = z
+  .strictObject({
+    ...SamRunPodDirectV3AuthorizationSchema.unwrap().shape,
+    kind: z.literal('single-box-prompt-sam-runpod-direct-v3'),
+    authorizationProfileSha256: z.literal(SAM_RUNPOD_DIRECT_BOX_AUTHORIZATION_PROFILE_V3_SHA256),
+    automaticCandidatesOnly: z.literal(false),
+  })
+  .superRefine((authorization, context) => {
+    if (authorization.executionIdentity.workerImageDigest !== authorization.imageDigest) {
+      context.addIssue({
+        code: 'custom',
+        message: 'Authorized worker image identities must agree.',
+      });
+    }
+  })
+  .readonly();
+export type SamRunPodDirectV3BoxAuthorization = z.infer<
+  typeof SamRunPodDirectV3BoxAuthorizationSchema
+>;

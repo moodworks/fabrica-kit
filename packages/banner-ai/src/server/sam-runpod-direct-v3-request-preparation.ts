@@ -49,6 +49,10 @@ export const SAM_FIRST_INFERENCE_REQUEST_LIMITS = Object.freeze({
   minMaskAreaPixels: 64 as const,
   maxCandidates: 8 as const,
 });
+export const SAM_FIRST_INFERENCE_BOX_REQUEST_LIMITS = Object.freeze({
+  minMaskAreaPixels: 1 as const,
+  maxCandidates: 1 as const,
+});
 
 /** Fixed one-milestone identifiers; they are not accepted from callers. */
 export const SAM_FIRST_INFERENCE_REQUEST_IDENTIFIERS = Object.freeze({
@@ -249,6 +253,30 @@ export const prepareSamFirstInferenceV3Request = async (
     limits: SAM_FIRST_INFERENCE_REQUEST_LIMITS,
     output: { maskEncoding: SAM_MASK_ENCODING },
   });
+  return prepareRequest({
+    endpointId: SAM_FIRST_INFERENCE_ENDPOINT_ID,
+    requestInput: request,
+    workerImageDigest: SAM_FIRST_INFERENCE_WORKER_IMAGE_DIGEST,
+    milestone: SAM_FIRST_INFERENCE_FIXTURE_ID,
+    expectedExecutionIdentity: SAM_FIRST_INFERENCE_EXECUTION_IDENTITY,
+  });
+};
+
+/** Strict server-internal preparation for the one approved box-prompt variant. */
+export const prepareSamFirstInferenceV3BoxPromptRequest = (requestInput: unknown) => {
+  const { request } = parseAndVerifySamMaskRequest(requestInput);
+  if (
+    request.requestId !== SAM_FIRST_INFERENCE_REQUEST_IDENTIFIERS.requestId ||
+    request.workspaceId !== SAM_FIRST_INFERENCE_REQUEST_IDENTIFIERS.workspaceId ||
+    request.jobId !== SAM_FIRST_INFERENCE_REQUEST_IDENTIFIERS.jobId ||
+    request.attemptId !== SAM_FIRST_INFERENCE_REQUEST_IDENTIFIERS.attemptId ||
+    request.source.sha256 !== SAM_FIRST_INFERENCE_FIXTURE.sha256 ||
+    request.source.byteSize !== SAM_FIRST_INFERENCE_FIXTURE.byteSize ||
+    request.source.width !== SAM_FIRST_INFERENCE_FIXTURE.width ||
+    request.source.height !== SAM_FIRST_INFERENCE_FIXTURE.height ||
+    request.segmentation.mode !== 'box-prompt'
+  )
+    throw new TypeError('The fixed SAM box milestone request identity drifted.');
   return prepareRequest({
     endpointId: SAM_FIRST_INFERENCE_ENDPOINT_ID,
     requestInput: request,

@@ -5,9 +5,13 @@ import {
   SamExecutionIdentitySchema,
   SamWorkerImageDigestSchema,
   type SamExecutionIdentity,
+  type SamMaskRequest,
   type SamMaskResponse,
 } from '../sam/sam-mask-contracts.js';
-import { parseAndVerifySamMaskResponse } from '../sam/sam-mask-validation.js';
+import {
+  parseAndVerifySamMaskRequest,
+  parseAndVerifySamMaskResponse,
+} from '../sam/sam-mask-validation.js';
 import { canonicalizeJson } from '../scene/canonical-scene-json.js';
 import {
   RUNPOD_API_KEY_REFERENCE,
@@ -17,12 +21,16 @@ import {
   RUNPOD_DIRECT_TIMEOUT_MAXIMUM_MS,
   SAM_RUNPOD_DIRECT_ADAPTER_PROFILE_V3_SHA256,
   SAM_RUNPOD_DIRECT_AUTHORIZATION_PROFILE_V3_SHA256,
+  SAM_RUNPOD_DIRECT_BOX_AUTHORIZATION_PROFILE_V3_SHA256,
   SAM_RUNPOD_DIRECT_HOSTING_PROFILE_SHA256,
   SamRunPodDirectEndpointIdSchema,
   SamRunPodDirectV3AuthorizationSchema,
+  SamRunPodDirectV3BoxAuthorizationSchema,
   deriveSamRunPodDirectV3Endpoint as deriveEndpoint,
   type SamRunPodDirectV3Authorization,
+  type SamRunPodDirectV3BoxAuthorization,
 } from './sam-runpod-direct-v3-profiles.js';
+import { validateSamRunPodDirectV3BoxAuthorization } from './sam-runpod-direct-v3-authorization.js';
 import {
   inspectSamRunPodDirectV3PreparedRequest,
   prepareSamRunPodDirectV3Request,
@@ -105,7 +113,7 @@ const identitiesMatch = (left: SamExecutionIdentity, right: SamExecutionIdentity
   canonicalizeJson(left) === canonicalizeJson(right);
 
 const assertEvidenceAndAuthorizationWindow = (
-  authorization: SamRunPodDirectV3Authorization,
+  authorization: SamRunPodDirectV3Authorization | SamRunPodDirectV3BoxAuthorization,
   currentTime: number,
 ): void => {
   if (
@@ -149,22 +157,30 @@ export const createSamRunPodDirectV3Adapter = (input: {
     throw new TypeError('SAM direct execution identity and transport configuration disagree.');
   }
   const nowMs = input.nowMs ?? Date.now;
-  let liveAuthorization: SamRunPodDirectV3Authorization | undefined;
+  let liveAuthorization:
+    SamRunPodDirectV3Authorization | SamRunPodDirectV3BoxAuthorization | undefined;
+  let boxAuthorization = false;
   let configuredImageDigest: string | undefined;
   if (native) {
-    liveAuthorization = SamRunPodDirectV3AuthorizationSchema.parse(input.authorization);
+    const parsedBox = SamRunPodDirectV3BoxAuthorizationSchema.safeParse(input.authorization);
+    boxAuthorization = parsedBox.success;
+    liveAuthorization = boxAuthorization
+      ? parsedBox.data
+      : SamRunPodDirectV3AuthorizationSchema.parse(input.authorization);
     configuredImageDigest = SamWorkerImageDigestSchema.parse(input.configuredImageDigest);
-    assertEvidenceAndAuthorizationWindow(liveAuthorization, nowMs());
+    assertEvidenceAndAuthorizationWindow(liveAuthorization!, nowMs());
     if (
-      liveAuthorization.endpointId !== endpointId ||
-      liveAuthorization.imageDigest !== configuredImageDigest ||
+      liveAuthorization!.endpointId !== endpointId ||
+      liveAuthorization!.imageDigest !== configuredImageDigest ||
       expectedExecutionIdentity.kind !== 'meta-sam2.1' ||
       expectedExecutionIdentity.workerImageDigest !== configuredImageDigest ||
-      liveAuthorization.hostingProfileSha256 !== SAM_RUNPOD_DIRECT_HOSTING_PROFILE_SHA256 ||
-      liveAuthorization.adapterProfileSha256 !== SAM_RUNPOD_DIRECT_ADAPTER_PROFILE_V3_SHA256 ||
-      liveAuthorization.authorizationProfileSha256 !==
-        SAM_RUNPOD_DIRECT_AUTHORIZATION_PROFILE_V3_SHA256 ||
-      !identitiesMatch(liveAuthorization.executionIdentity, expectedExecutionIdentity)
+      liveAuthorization!.hostingProfileSha256 !== SAM_RUNPOD_DIRECT_HOSTING_PROFILE_SHA256 ||
+      liveAuthorization!.adapterProfileSha256 !== SAM_RUNPOD_DIRECT_ADAPTER_PROFILE_V3_SHA256 ||
+      liveAuthorization!.authorizationProfileSha256 !==
+        (boxAuthorization
+          ? SAM_RUNPOD_DIRECT_BOX_AUTHORIZATION_PROFILE_V3_SHA256
+          : SAM_RUNPOD_DIRECT_AUTHORIZATION_PROFILE_V3_SHA256) ||
+      !identitiesMatch(liveAuthorization!.executionIdentity, expectedExecutionIdentity)
     ) {
       throw new TypeError('Native SAM direct construction requires exact reviewed authorization.');
     }
@@ -209,8 +225,23 @@ export const createSamRunPodDirectV3Adapter = (input: {
     if (native) {
       const authorization = liveAuthorization!;
       assertEvidenceAndAuthorizationWindow(authorization, nowMs());
+      if (boxAuthorization) {
+        try {
+          validateSamRunPodDirectV3BoxAuthorization({
+            prepared,
+            authorization: input.authorization,
+            currentTimeMs: nowMs(),
+          });
+        } catch (error) {
+          throw new SamRunPodDirectV3Error(
+            'UNAUTHORIZED',
+            'SAM direct box authorization is absent, consumed, or request-inexact.',
+            { cause: error },
+          );
+        }
+      }
       if (
-        request.segmentation.mode !== 'automatic-candidates' ||
+        (!boxAuthorization && request.segmentation.mode !== 'automatic-candidates') ||
         authorization.fixture.sha256 !== request.source.sha256 ||
         authorization.fixture.byteSize !== request.source.byteSize ||
         authorization.fixture.width !== request.source.width ||
@@ -365,6 +396,42 @@ export const createSamRunPodDirectV3Adapter = (input: {
     }
   };
 
+  const validateResponseForCallerRequest = (
+    requestInput: SamMaskRequest,
+    response: SamMaskResponse,
+  ): SamMaskResponse => {
+    return parseAndVerifySamMaskResponse({
+      response,
+      request: requestInput as SamMaskRequest,
+      expectedExecutionKind: expectedKind,
+    });
+  };
+
+  const assertDeepFrozenPlainRequest = (value: unknown): SamMaskRequest => {
+    const visit = (current: unknown): void => {
+      if (current === null || typeof current !== 'object') return;
+      const prototype = Object.getPrototypeOf(current);
+      if (prototype !== Object.prototype && prototype !== null && !Array.isArray(current)) {
+        throw new SamRunPodDirectV3Error('UNAUTHORIZED', 'SAM request has an untrusted prototype.');
+      }
+      if (!Object.isFrozen(current)) {
+        throw new SamRunPodDirectV3Error('UNAUTHORIZED', 'SAM request is not deeply immutable.');
+      }
+      for (const key of Object.keys(current)) {
+        const descriptor = Object.getOwnPropertyDescriptor(current, key);
+        if (descriptor?.get !== undefined || descriptor?.set !== undefined) {
+          throw new SamRunPodDirectV3Error('UNAUTHORIZED', 'SAM request contains an accessor.');
+        }
+        visit((current as Record<string, unknown>)[key]);
+      }
+    };
+    visit(value);
+    if (typeof value !== 'object' || value === null) {
+      throw new SamRunPodDirectV3Error('UNAUTHORIZED', 'SAM request is absent or malformed.');
+    }
+    return value as SamMaskRequest;
+  };
+
   return Object.freeze({
     async generate(
       requestInput: unknown,
@@ -375,7 +442,16 @@ export const createSamRunPodDirectV3Adapter = (input: {
         requestInput,
         ...(native ? { workerImageDigest: configuredImageDigest! } : {}),
       });
-      return dispatchPrepared(prepared, options);
+      const callerRequest = assertDeepFrozenPlainRequest(requestInput);
+      const parsedCallerRequest = parseAndVerifySamMaskRequest(callerRequest).request;
+      if (canonicalizeJson(parsedCallerRequest) !== canonicalizeJson(prepared.request)) {
+        throw new SamRunPodDirectV3Error(
+          'UNAUTHORIZED',
+          'SAM request identity differs from prepared request.',
+        );
+      }
+      const response = await dispatchPrepared(prepared, options);
+      return validateResponseForCallerRequest(callerRequest, response);
     },
     dispatchPrepared,
   });

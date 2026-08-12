@@ -9,18 +9,24 @@ import {
   RUNPOD_DIRECT_DOCUMENTATION_RETRIEVED_AT_MS,
   SAM_RUNPOD_DIRECT_ADAPTER_PROFILE_V3_SHA256,
   SAM_RUNPOD_DIRECT_AUTHORIZATION_PROFILE_V3_SHA256,
+  SAM_RUNPOD_DIRECT_BOX_AUTHORIZATION_PROFILE_V3_SHA256,
   SAM_RUNPOD_DIRECT_HOSTING_PROFILE_SHA256,
   SamRunPodDirectV3AuthorizationSchema,
+  SamRunPodDirectV3BoxAuthorizationSchema,
   type SamRunPodDirectV3Authorization,
+  type SamRunPodDirectV3BoxAuthorization,
 } from './sam-runpod-direct-v3-profiles.js';
 import {
   SAM_FIRST_INFERENCE_CLIENT_TIMEOUT_MS,
   SAM_FIRST_INFERENCE_COST_MAXIMUM_MICRO_USD,
   SAM_FIRST_INFERENCE_EXECUTION_IDENTITY,
   SAM_FIRST_INFERENCE_FIXTURE,
+  SAM_FIRST_INFERENCE_ENDPOINT_ID,
   SAM_FIRST_INFERENCE_REQUEST_LIMITS,
+  SAM_FIRST_INFERENCE_BOX_REQUEST_LIMITS,
   SAM_FIRST_INFERENCE_WORKER_IMAGE_DIGEST,
   assertSamFirstInferenceV3PreparedRequest,
+  inspectSamRunPodDirectV3PreparedRequest,
   type SamRunPodDirectV3PreparedRequest,
 } from './sam-runpod-direct-v3-request-preparation.js';
 
@@ -32,6 +38,10 @@ interface AuthorizationPrivateState {
   readonly canonicalBodyByteLength: number;
   readonly issuedAtMs: number;
   readonly expiresAtMs: number;
+}
+interface BoxAuthorizationPrivateState extends AuthorizationPrivateState {
+  readonly segmentationCanonical: string;
+  readonly requestIdentityCanonical: string;
 }
 
 interface TestOnlyAuthorizationSourcesState {
@@ -49,6 +59,7 @@ export interface SamRunPodDirectV3AuthorizedDispatch {
 }
 
 const authorizationState = new WeakMap<object, AuthorizationPrivateState>();
+const boxAuthorizationState = new WeakMap<object, BoxAuthorizationPrivateState>();
 const testOnlySourcesState = new WeakMap<object, TestOnlyAuthorizationSourcesState>();
 const authorizedDispatchState = new WeakMap<
   object,
@@ -167,6 +178,146 @@ export const mintTestOnlySamFirstInferenceV3Authorization = (
     throw new TypeError('SAM test authorization sources are foreign or reconstructed.');
   }
   return mint(prepared, privateSources);
+};
+
+/** Test-only box authority minted only from a private-state-backed prepared request. */
+export const mintTestOnlySamRunPodDirectV3BoxAuthorization = (
+  prepared: SamRunPodDirectV3PreparedRequest,
+  sources: SamRunPodDirectV3TestOnlyAuthorizationSources,
+): SamRunPodDirectV3BoxAuthorization => {
+  const preparedState = inspectSamRunPodDirectV3PreparedRequest(prepared);
+  if (preparedState.request.segmentation.mode !== 'box-prompt') {
+    throw new TypeError('SAM box authority requires an exact box-prompt prepared request.');
+  }
+  if (
+    preparedState.endpointId !== SAM_FIRST_INFERENCE_ENDPOINT_ID ||
+    preparedState.workerImageDigest !== SAM_FIRST_INFERENCE_WORKER_IMAGE_DIGEST ||
+    preparedState.request.source.sha256 !== SAM_FIRST_INFERENCE_FIXTURE.sha256 ||
+    preparedState.request.source.byteSize !== SAM_FIRST_INFERENCE_FIXTURE.byteSize ||
+    preparedState.request.source.width !== SAM_FIRST_INFERENCE_FIXTURE.width ||
+    preparedState.request.source.height !== SAM_FIRST_INFERENCE_FIXTURE.height ||
+    canonicalizeJson(preparedState.request.limits) !==
+      canonicalizeJson(SAM_FIRST_INFERENCE_BOX_REQUEST_LIMITS) ||
+    preparedState.request.output.maskEncoding !== 'fabrica-binary-rle-v1' ||
+    canonicalizeJson(preparedState.expectedExecutionIdentity) !==
+      canonicalizeJson(SAM_FIRST_INFERENCE_EXECUTION_IDENTITY)
+  )
+    throw new TypeError('SAM box prepared request is outside the strict milestone identity.');
+  const privateSources = testOnlySourcesState.get(sources);
+  if (privateSources === undefined) {
+    throw new TypeError('SAM test authorization sources are foreign or reconstructed.');
+  }
+  const issuedAtMs = assertClockValue(privateSources.nowMs());
+  const expiresAtMs = issuedAtMs + SAM_FIRST_INFERENCE_AUTHORIZATION_LIFETIME_MS;
+  if (
+    !Number.isSafeInteger(expiresAtMs) ||
+    expiresAtMs > RUNPOD_DIRECT_DOCUMENTATION_EXPIRES_AT_MS
+  ) {
+    throw new TypeError('SAM box authorization cannot fit inside the reviewed evidence window.');
+  }
+  const authorization = SamRunPodDirectV3BoxAuthorizationSchema.parse({
+    kind: 'single-box-prompt-sam-runpod-direct-v3',
+    authorizationId: assertAuthorizationId(privateSources.authorizationId()),
+    endpointId: preparedState.endpointId,
+    imageDigest: SAM_FIRST_INFERENCE_WORKER_IMAGE_DIGEST,
+    secretReferenceName: RUNPOD_API_KEY_REFERENCE,
+    executionIdentity: SAM_FIRST_INFERENCE_EXECUTION_IDENTITY,
+    hostingProfileSha256: SAM_RUNPOD_DIRECT_HOSTING_PROFILE_SHA256,
+    adapterProfileSha256: SAM_RUNPOD_DIRECT_ADAPTER_PROFILE_V3_SHA256,
+    authorizationProfileSha256: SAM_RUNPOD_DIRECT_BOX_AUTHORIZATION_PROFILE_V3_SHA256,
+    documentationEvidence: {
+      retrievedAt: RUNPOD_DIRECT_DOCUMENTATION_RETRIEVED_AT,
+      expiresAt: RUNPOD_DIRECT_DOCUMENTATION_EXPIRES_AT,
+      hostingProfileSha256: SAM_RUNPOD_DIRECT_HOSTING_PROFILE_SHA256,
+    },
+    fixture: {
+      sha256: preparedState.request.source.sha256,
+      byteSize: preparedState.request.source.byteSize,
+      width: preparedState.request.source.width,
+      height: preparedState.request.source.height,
+    },
+    requestLimits: preparedState.request.limits,
+    output: preparedState.request.output,
+    automaticCandidatesOnly: false,
+    clientDispatchMaximum: 1,
+    applicationInferenceMaximum: 1,
+    providerBillingGuarantee: false,
+    clientRetryCount: 0,
+    pollCount: 0,
+    clientWallTimeoutMs: SAM_FIRST_INFERENCE_CLIENT_TIMEOUT_MS,
+    costMaximumMicroUsd: SAM_FIRST_INFERENCE_COST_MAXIMUM_MICRO_USD,
+    issuedAtMs,
+    expiresAtMs,
+    executionAuthorized: true,
+    productionAdmissionAuthority: false,
+    webRouteActivated: false,
+  });
+  boxAuthorizationState.set(
+    authorization,
+    Object.freeze({
+      prepared,
+      canonicalBodySha256: preparedState.canonicalBodySha256,
+      canonicalBodyByteLength: preparedState.canonicalBodyByteLength,
+      issuedAtMs,
+      expiresAtMs,
+      segmentationCanonical: canonicalizeJson(preparedState.request.segmentation),
+      requestIdentityCanonical: canonicalizeJson({
+        requestId: preparedState.request.requestId,
+        workspaceId: preparedState.request.workspaceId,
+        jobId: preparedState.request.jobId,
+        attemptId: preparedState.request.attemptId,
+      }),
+    }),
+  );
+  return authorization;
+};
+
+export const validateSamRunPodDirectV3BoxAuthorization = (input: {
+  readonly prepared: SamRunPodDirectV3PreparedRequest;
+  readonly authorization: unknown;
+  readonly currentTimeMs?: number;
+}): SamRunPodDirectV3BoxAuthorization => {
+  const preparedState = inspectSamRunPodDirectV3PreparedRequest(input.prepared);
+  const authState =
+    typeof input.authorization === 'object' && input.authorization !== null
+      ? boxAuthorizationState.get(input.authorization)
+      : undefined;
+  if (
+    authState === undefined ||
+    authState.canonicalBodySha256 !== preparedState.canonicalBodySha256 ||
+    authState.canonicalBodyByteLength !== preparedState.canonicalBodyByteLength ||
+    preparedState.request.segmentation.mode !== 'box-prompt' ||
+    authState.segmentationCanonical !== canonicalizeJson(preparedState.request.segmentation) ||
+    authState.requestIdentityCanonical !==
+      canonicalizeJson({
+        requestId: preparedState.request.requestId,
+        workspaceId: preparedState.request.workspaceId,
+        jobId: preparedState.request.jobId,
+        attemptId: preparedState.request.attemptId,
+      })
+  )
+    throw new TypeError('SAM box authorization is foreign, reconstructed, or request-mismatched.');
+  const authorization = SamRunPodDirectV3BoxAuthorizationSchema.parse(input.authorization);
+  const now = assertClockValue(input.currentTimeMs ?? Date.now());
+  if (
+    authorization.issuedAtMs !== authState.issuedAtMs ||
+    authorization.expiresAtMs !== authState.expiresAtMs ||
+    now < authorization.issuedAtMs ||
+    now >= authorization.expiresAtMs ||
+    authorization.expiresAtMs > RUNPOD_DIRECT_DOCUMENTATION_EXPIRES_AT_MS ||
+    authorization.endpointId !== preparedState.endpointId ||
+    authorization.imageDigest !== preparedState.workerImageDigest ||
+    authorization.fixture.sha256 !== preparedState.request.source.sha256 ||
+    authorization.fixture.byteSize !== preparedState.request.source.byteSize ||
+    authorization.fixture.width !== preparedState.request.source.width ||
+    authorization.fixture.height !== preparedState.request.source.height ||
+    authorization.requestLimits.minMaskAreaPixels !==
+      preparedState.request.limits.minMaskAreaPixels ||
+    authorization.requestLimits.maxCandidates !== preparedState.request.limits.maxCandidates ||
+    authorization.output.maskEncoding !== preparedState.request.output.maskEncoding
+  )
+    throw new TypeError('SAM box authorization is stale or identity-mismatched.');
+  return authorization;
 };
 
 const validateAt = (input: {
