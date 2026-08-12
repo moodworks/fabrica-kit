@@ -13,7 +13,6 @@ import {
   createProviderFreeBannerExporterV1,
   createProviderFreeInternalValidatorV1,
   createProviderFreeSceneReferenceResolver,
-  materializeProviderFreeFixtureProjectV1,
   parseBannerSceneV1,
   validateBannerExportResult,
   validateInternalGdnValidationResult,
@@ -22,6 +21,7 @@ import {
   type ProviderFreeBannerProjectV1,
   type ProviderFreeFixtureMaterializationV1,
 } from '@fabrica/banner-ai';
+import { materializeProviderFreeAngelProjectWithDeterministicSamBoxPromptsV1 } from '@fabrica/banner-ai/server/sam-box-prompt-layer-extraction';
 
 import type {
   ProviderFreeExportData,
@@ -37,7 +37,7 @@ const MAX_EXPORT_RESPONSE_BYTES = 2_097_152;
 let materializationPromise: Promise<ProviderFreeFixtureMaterializationV1> | null = null;
 
 const materialization = (): Promise<ProviderFreeFixtureMaterializationV1> => {
-  materializationPromise ??= materializeProviderFreeFixtureProjectV1();
+  materializationPromise ??= materializeProviderFreeAngelProjectWithDeterministicSamBoxPromptsV1();
   return materializationPromise;
 };
 

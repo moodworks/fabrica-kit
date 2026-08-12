@@ -161,6 +161,12 @@ const layerIdentity = Object.freeze({
 
 type ForegroundPartKey = keyof typeof layerIdentity;
 
+export type ProviderFreeAngelForegroundPngsV1 = Readonly<{
+  'angel.body': Uint8Array;
+  'wing.left': Uint8Array;
+  'wing.right': Uint8Array;
+}>;
+
 const materializeThumbnail = async (
   bytes: Uint8Array,
   filename: string,
@@ -208,158 +214,185 @@ export const createProviderFreeSceneReferenceResolver = (
   };
 };
 
-export const materializeProviderFreeFixtureProjectV1 =
-  async (): Promise<ProviderFreeFixtureMaterializationV1> => {
-    const source = createAngelBenchmarkFixtureSourceV1('png');
-    const normalizedSource = await normalizeRasterUpload({
-      bytes: byteSourceFrom(source.bytes),
-      declaredMediaType: source.declaredMediaType,
-      filename: source.filename,
+const materializeProviderFreeFixtureProjectCoreV1 = async (
+  foregroundPngs?: ProviderFreeAngelForegroundPngsV1,
+): Promise<ProviderFreeFixtureMaterializationV1> => {
+  const source = createAngelBenchmarkFixtureSourceV1('png');
+  const normalizedSource = await normalizeRasterUpload({
+    bytes: byteSourceFrom(source.bytes),
+    declaredMediaType: source.declaredMediaType,
+    filename: source.filename,
+  });
+  const expectedSource = ANGEL_PROVIDER_FREE_BENCHMARK_CASE_V1.input.sourceAsset;
+  if (
+    normalizedSource.sha256 !== expectedSource.sha256 ||
+    normalizedSource.byteSize !== expectedSource.byteSize ||
+    normalizedSource.width !== expectedSource.pixelWidth ||
+    normalizedSource.height !== expectedSource.pixelHeight
+  ) {
+    throw new TypeError('The approved provider-free fixture source identity drifted.');
+  }
+
+  const canvasEncoded = await sharp(normalizedSource.bytes)
+    .resize(CANVAS_WIDTH, CANVAS_HEIGHT, { fit: 'fill', kernel: sharp.kernel.nearest })
+    .png(generatedPngOptions)
+    .toBuffer();
+  const canvasVisualization = await normalizeGeneratedPng(canvasEncoded, 'angel-canvas-visual.png');
+  const backgroundThumbnail = await materializeThumbnail(
+    canvasVisualization.bytes,
+    'background-thumbnail.png',
+  );
+
+  const backgroundEvidence = ANGEL_PROVIDER_FREE_EXPECTED_LAYERS_V1[0]!.proposal;
+  if (backgroundEvidence.partKey !== 'background' || backgroundEvidence.role !== 'background') {
+    throw new TypeError('The approved fixture background evidence drifted.');
+  }
+
+  const layerAssets: FakeExportAsset[] = [];
+  const sceneLayers: BannerSceneV1['layers'][number][] = [];
+  const presentationParts: ProviderFreePresentationPartV1[] = [
+    {
+      partKey: backgroundEvidence.partKey,
+      targetId: PROVIDER_FREE_BACKGROUND_PART_ID_V1,
+      name: backgroundEvidence.label,
+      role: backgroundEvidence.role,
+      bounds: boundsToPixels(backgroundEvidence.bounds),
+      thumbnail: thumbnailFrom(backgroundThumbnail),
+    },
+  ];
+
+  for (const [index, evidence] of ANGEL_PROVIDER_FREE_EXPECTED_LAYERS_V1.slice(1).entries()) {
+    const proposal = evidence.proposal;
+    if (!(proposal.partKey in layerIdentity)) {
+      throw new TypeError('The approved fixture foreground evidence drifted.');
+    }
+    const identity = layerIdentity[proposal.partKey as ForegroundPartKey];
+    const bounds = boundsToPixels(proposal.bounds);
+    const encoded =
+      foregroundPngs === undefined
+        ? await sharp(canvasVisualization.bytes)
+            .extract({ left: bounds.x, top: bounds.y, width: bounds.width, height: bounds.height })
+            .tint(identity.tint)
+            .png(generatedPngOptions)
+            .toBuffer()
+        : foregroundPngs[proposal.partKey as ForegroundPartKey];
+    const normalized = await normalizeGeneratedPng(encoded, identity.filename);
+    const reference = assetReference({
+      assetId: identity.assetId,
+      assetVersionId: identity.assetVersionId,
+      normalized,
     });
-    const expectedSource = ANGEL_PROVIDER_FREE_BENCHMARK_CASE_V1.input.sourceAsset;
+    layerAssets.push({ reference, bytes: Uint8Array.from(normalized.bytes) });
+    sceneLayers.push({
+      id: identity.layerId as BannerSceneV1['layers'][number]['id'],
+      name: proposal.label,
+      order: index,
+      included: true,
+      visible: true,
+      opacity: 1,
+      asset: reference,
+      frame: bounds,
+      transform: {
+        anchorX: 0.5,
+        anchorY: 0.5,
+        translateX: 0,
+        translateY: 0,
+        scaleX: 1,
+        scaleY: 1,
+        rotationDegrees: 0,
+      },
+    });
+    const thumbnail = await materializeThumbnail(normalized.bytes, `${proposal.partKey}.png`);
+    presentationParts.push({
+      partKey: proposal.partKey,
+      targetId: identity.layerId,
+      name: proposal.label,
+      role: proposal.role as 'subject' | 'decoration',
+      bounds,
+      thumbnail: thumbnailFrom(thumbnail),
+    });
+  }
+
+  const sourceReference = AssetVersionRefV1Schema.parse(expectedSource);
+  const scene = BannerSceneV1Schema.parse({
+    schemaVersion: 1,
+    canvas: {
+      width: CANVAS_WIDTH,
+      height: CANVAS_HEIGHT,
+      background: PROVIDER_FREE_SOLID_BACKGROUND_V1,
+    },
+    sourceAsset: sourceReference,
+    layers: sceneLayers,
+    timeline: [],
+    exportSettings: {
+      kind: 'gdn-html5',
+      profileVersion: 1,
+      interaction: {
+        kind: 'single-exit',
+        destinationUrl: 'https://example.com/campaign',
+      },
+      validatorProfile: PROVIDER_FREE_INTERNAL_VALIDATOR_PROFILE_V1,
+    },
+  });
+  const project = createInitialProviderFreeBannerProjectV1(scene);
+  const materialization: ProviderFreeFixtureMaterializationV1 = Object.freeze({
+    fixtureId: PROVIDER_FREE_FIXTURE_ID_V1,
+    project,
+    scene,
+    assets: Object.freeze([
+      {
+        reference: sourceReference,
+        bytes: Uint8Array.from(normalizedSource.bytes),
+      },
+      ...layerAssets,
+    ]),
+    presentationParts: Object.freeze(presentationParts),
+  });
+  const referenceValidation = await validateSceneReferences(
+    scene,
+    {
+      workspaceId: WorkspaceIdSchema.parse(PROVIDER_FREE_DEVELOPMENT_WORKSPACE_ID_V1),
+      projectId: ProjectIdSchema.parse(PROVIDER_FREE_PROJECT_ID_V1),
+    },
+    createProviderFreeSceneReferenceResolver(materialization),
+  );
+  if (!referenceValidation.success) {
+    throw new TypeError('The materialized provider-free fixture references are invalid.');
+  }
+  for (const asset of materialization.assets) {
     if (
-      normalizedSource.sha256 !== expectedSource.sha256 ||
-      normalizedSource.byteSize !== expectedSource.byteSize ||
-      normalizedSource.width !== expectedSource.pixelWidth ||
-      normalizedSource.height !== expectedSource.pixelHeight
+      asset.bytes.byteLength !== asset.reference.byteSize ||
+      sha256Hex(asset.bytes) !== asset.reference.sha256 ||
+      !assetReferencesEqual(asset.reference, AssetVersionRefV1Schema.parse(asset.reference))
     ) {
-      throw new TypeError('The approved provider-free fixture source identity drifted.');
+      throw new TypeError('A materialized provider-free fixture asset identity drifted.');
     }
+  }
+  return materialization;
+};
 
-    const canvasEncoded = await sharp(normalizedSource.bytes)
-      .resize(CANVAS_WIDTH, CANVAS_HEIGHT, { fit: 'fill', kernel: sharp.kernel.nearest })
-      .png(generatedPngOptions)
-      .toBuffer();
-    const canvasVisualization = await normalizeGeneratedPng(
-      canvasEncoded,
-      'angel-canvas-visual.png',
-    );
-    const backgroundThumbnail = await materializeThumbnail(
-      canvasVisualization.bytes,
-      'background-thumbnail.png',
-    );
+export const materializeProviderFreeFixtureProjectV1 =
+  (): Promise<ProviderFreeFixtureMaterializationV1> =>
+    materializeProviderFreeFixtureProjectCoreV1();
 
-    const backgroundEvidence = ANGEL_PROVIDER_FREE_EXPECTED_LAYERS_V1[0]!.proposal;
-    if (backgroundEvidence.partKey !== 'background' || backgroundEvidence.role !== 'background') {
-      throw new TypeError('The approved fixture background evidence drifted.');
+export const materializeProviderFreeAngelForegroundProjectV1 = async (
+  input: Record<string, unknown>,
+): Promise<ProviderFreeFixtureMaterializationV1> => {
+  const keys = Object.keys(input).toSorted();
+  if (keys.join('|') !== ['angel.body', 'wing.left', 'wing.right'].join('|')) {
+    throw new TypeError('Angel foreground PNG keys are fixed and exact.');
+  }
+  for (const key of keys) {
+    const bytes = input[key];
+    if (!(bytes instanceof Uint8Array) || bytes.byteLength === 0) {
+      throw new TypeError('Angel foreground PNG bytes are invalid.');
     }
-
-    const layerAssets: FakeExportAsset[] = [];
-    const sceneLayers: BannerSceneV1['layers'][number][] = [];
-    const presentationParts: ProviderFreePresentationPartV1[] = [
-      {
-        partKey: backgroundEvidence.partKey,
-        targetId: PROVIDER_FREE_BACKGROUND_PART_ID_V1,
-        name: backgroundEvidence.label,
-        role: backgroundEvidence.role,
-        bounds: boundsToPixels(backgroundEvidence.bounds),
-        thumbnail: thumbnailFrom(backgroundThumbnail),
-      },
-    ];
-
-    for (const [index, evidence] of ANGEL_PROVIDER_FREE_EXPECTED_LAYERS_V1.slice(1).entries()) {
-      const proposal = evidence.proposal;
-      if (!(proposal.partKey in layerIdentity)) {
-        throw new TypeError('The approved fixture foreground evidence drifted.');
-      }
-      const identity = layerIdentity[proposal.partKey as ForegroundPartKey];
-      const bounds = boundsToPixels(proposal.bounds);
-      const encoded = await sharp(canvasVisualization.bytes)
-        .extract({ left: bounds.x, top: bounds.y, width: bounds.width, height: bounds.height })
-        .tint(identity.tint)
-        .png(generatedPngOptions)
-        .toBuffer();
-      const normalized = await normalizeGeneratedPng(encoded, identity.filename);
-      const reference = assetReference({
-        assetId: identity.assetId,
-        assetVersionId: identity.assetVersionId,
-        normalized,
-      });
-      layerAssets.push({ reference, bytes: Uint8Array.from(normalized.bytes) });
-      sceneLayers.push({
-        id: identity.layerId as BannerSceneV1['layers'][number]['id'],
-        name: proposal.label,
-        order: index,
-        included: true,
-        visible: true,
-        opacity: 1,
-        asset: reference,
-        frame: bounds,
-        transform: {
-          anchorX: 0.5,
-          anchorY: 0.5,
-          translateX: 0,
-          translateY: 0,
-          scaleX: 1,
-          scaleY: 1,
-          rotationDegrees: 0,
-        },
-      });
-      const thumbnail = await materializeThumbnail(normalized.bytes, `${proposal.partKey}.png`);
-      presentationParts.push({
-        partKey: proposal.partKey,
-        targetId: identity.layerId,
-        name: proposal.label,
-        role: proposal.role as 'subject' | 'decoration',
-        bounds,
-        thumbnail: thumbnailFrom(thumbnail),
-      });
-    }
-
-    const sourceReference = AssetVersionRefV1Schema.parse(expectedSource);
-    const scene = BannerSceneV1Schema.parse({
-      schemaVersion: 1,
-      canvas: {
-        width: CANVAS_WIDTH,
-        height: CANVAS_HEIGHT,
-        background: PROVIDER_FREE_SOLID_BACKGROUND_V1,
-      },
-      sourceAsset: sourceReference,
-      layers: sceneLayers,
-      timeline: [],
-      exportSettings: {
-        kind: 'gdn-html5',
-        profileVersion: 1,
-        interaction: {
-          kind: 'single-exit',
-          destinationUrl: 'https://example.com/campaign',
-        },
-        validatorProfile: PROVIDER_FREE_INTERNAL_VALIDATOR_PROFILE_V1,
-      },
-    });
-    const project = createInitialProviderFreeBannerProjectV1(scene);
-    const materialization: ProviderFreeFixtureMaterializationV1 = Object.freeze({
-      fixtureId: PROVIDER_FREE_FIXTURE_ID_V1,
-      project,
-      scene,
-      assets: Object.freeze([
-        {
-          reference: sourceReference,
-          bytes: Uint8Array.from(normalizedSource.bytes),
-        },
-        ...layerAssets,
-      ]),
-      presentationParts: Object.freeze(presentationParts),
-    });
-    const referenceValidation = await validateSceneReferences(
-      scene,
-      {
-        workspaceId: WorkspaceIdSchema.parse(PROVIDER_FREE_DEVELOPMENT_WORKSPACE_ID_V1),
-        projectId: ProjectIdSchema.parse(PROVIDER_FREE_PROJECT_ID_V1),
-      },
-      createProviderFreeSceneReferenceResolver(materialization),
-    );
-    if (!referenceValidation.success) {
-      throw new TypeError('The materialized provider-free fixture references are invalid.');
-    }
-    for (const asset of materialization.assets) {
-      if (
-        asset.bytes.byteLength !== asset.reference.byteSize ||
-        sha256Hex(asset.bytes) !== asset.reference.sha256 ||
-        !assetReferencesEqual(asset.reference, AssetVersionRefV1Schema.parse(asset.reference))
-      ) {
-        throw new TypeError('A materialized provider-free fixture asset identity drifted.');
-      }
-    }
-    return materialization;
-  };
+  }
+  const normalized: Record<string, Uint8Array> = {};
+  for (const key of keys as ForegroundPartKey[]) {
+    normalized[key] = (await normalizeGeneratedPng(input[key] as Uint8Array, `${key}.png`)).bytes;
+  }
+  return materializeProviderFreeFixtureProjectCoreV1(
+    normalized as ProviderFreeAngelForegroundPngsV1,
+  );
+};

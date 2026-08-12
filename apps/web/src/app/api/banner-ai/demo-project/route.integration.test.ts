@@ -4,8 +4,8 @@ import {
   createDeterministicFakeZipEntriesV1,
   createExactZipContentPolicy,
   inspectZipBytes,
-  materializeProviderFreeFixtureProjectV1,
 } from '@fabrica/banner-ai';
+import { materializeProviderFreeAngelProjectWithDeterministicSamBoxPromptsV1 } from '@fabrica/banner-ai/server/sam-box-prompt-layer-extraction';
 import {
   isProviderFreeLayerIdV1,
   mutateProviderFreeBannerSceneV1,
@@ -117,7 +117,15 @@ describe('provider-free demo project route integration', () => {
         part.thumbnail.dataUrl.startsWith('data:image/png;base64,'),
       ),
     ).toBe(true);
-    expect(new Set(data.presentation.parts.map((part) => part.thumbnail.sha256)).size).toBe(4);
+    expect(data.presentation.parts).toHaveLength(4);
+    expect(new Set(data.presentation.parts.map((part) => part.partKey)).size).toBe(4);
+    const fixed = await materializeProviderFreeAngelProjectWithDeterministicSamBoxPromptsV1();
+    expect(data.presentation.parts.map((part) => [part.partKey, part.thumbnail.sha256])).toEqual(
+      fixed.presentationParts.map((part) => [part.partKey, part.thumbnail.sha256]),
+    );
+    expect(data.project.revisions[0]!.scene.layers.map((layer) => layer.asset.sha256)).toEqual(
+      fixed.scene.layers.map((layer) => layer.asset.sha256),
+    );
     expect(outbound).not.toHaveBeenCalled();
   });
 
@@ -197,6 +205,16 @@ describe('provider-free preview route integration', () => {
     expect(html).not.toContain('https://example.com/campaign');
     expect(html).not.toMatch(/<(?:iframe|form|object|base)\b/iu);
     expect(html).not.toMatch(/\b(?:fetch|XMLHttpRequest|WebSocket|EventSource)\s*\(/u);
+    const fixed = await materializeProviderFreeAngelProjectWithDeterministicSamBoxPromptsV1();
+    const encodedPlan = /input = decode\('([^']+)'\)/u.exec(html)?.[1];
+    expect(encodedPlan).toBeDefined();
+    const plan = JSON.parse(Buffer.from(encodedPlan!, 'base64').toString('utf8')) as {
+      sources: Record<string, string>;
+    };
+    for (const asset of fixed.assets.slice(1)) {
+      const dataUrl = `data:image/png;base64,${Buffer.from(asset.bytes).toString('base64')}`;
+      expect(Object.values(plan.sources)).toContain(dataUrl);
+    }
   });
 
   it('rejects malformed nonce, stale digest, foreign fields, and never returns raw HTML on failure', async () => {
@@ -238,7 +256,7 @@ describe('provider-free export route integration', () => {
       findings: [],
     });
 
-    const fixed = await materializeProviderFreeFixtureProjectV1();
+    const fixed = await materializeProviderFreeAngelProjectWithDeterministicSamBoxPromptsV1();
     const bytes = Buffer.from(first.data.artifact.bytesBase64, 'base64');
     const expectedEntries = createDeterministicFakeZipEntriesV1({
       scene: opened.project.revisions[0]!.scene,

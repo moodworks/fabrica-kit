@@ -11,6 +11,7 @@ import {
   canonicalizeJson,
   createInitialProviderFreeBannerProjectV1,
   materializeProviderFreeFixtureProjectV1,
+  materializeProviderFreeAngelForegroundProjectV1,
   mutateProviderFreeBannerSceneV1,
   parseProviderFreeBannerProjectV1,
   sha256BannerScene,
@@ -53,6 +54,50 @@ const pinnedMaterialization = {
 } as const;
 
 describe('provider-free Angel fixture project v1', () => {
+  it('materializes fixed supplied foreground PNGs with strict keys and references', async () => {
+    const legacy = await materializeProviderFreeFixtureProjectV1();
+    const input = Object.fromEntries(
+      legacy.assets
+        .slice(1)
+        .map((asset, index) => [
+          ['angel.body', 'wing.left', 'wing.right'][2 - index]!,
+          asset.bytes,
+        ]),
+    );
+    await expect(materializeProviderFreeAngelForegroundProjectV1({})).rejects.toThrow();
+    await expect(
+      materializeProviderFreeAngelForegroundProjectV1({ ...input, extra: input['angel.body'] }),
+    ).rejects.toThrow();
+    await expect(
+      materializeProviderFreeAngelForegroundProjectV1({ ...input, 'angel.body': new Uint8Array() }),
+    ).rejects.toThrow();
+    await expect(
+      materializeProviderFreeAngelForegroundProjectV1({ ...input, 'angel.body': Uint8Array.of(1) }),
+    ).rejects.toThrow();
+    const supplied = await materializeProviderFreeAngelForegroundProjectV1(input);
+    const suppliedAgain = await materializeProviderFreeAngelForegroundProjectV1(input);
+    expect(supplied.assets).toHaveLength(4);
+    expect(supplied.assets.slice(1).map((asset) => asset.reference.assetVersionId)).toEqual(
+      legacy.assets.slice(1).map((asset) => asset.reference.assetVersionId),
+    );
+    expect(supplied.assets[0]?.reference).toEqual(legacy.assets[0]?.reference);
+    expect(canonicalizeJson(supplied.project)).toBe(canonicalizeJson(suppliedAgain.project));
+    expect(supplied.assets.map((asset) => asset.bytes)).toEqual(
+      suppliedAgain.assets.map((asset) => asset.bytes),
+    );
+    expect(supplied.assets.slice(1).map((asset) => asset.reference.sha256)).not.toEqual(
+      legacy.assets.slice(1).map((asset) => asset.reference.sha256),
+    );
+    expect(supplied.scene.layers.map((layer) => layer.asset.sha256)).toEqual(
+      supplied.assets.slice(1).map((asset) => asset.reference.sha256),
+    );
+    expect(() =>
+      validateProviderFreeBannerProjectAgainstFixtureV1({
+        project: supplied.project,
+        initialScene: supplied.scene,
+      }),
+    ).not.toThrow();
+  });
   it('materializes identical pinned assets, thumbnails, scene, identities, and references', async () => {
     const first = await materializeProviderFreeFixtureProjectV1();
     const second = await materializeProviderFreeFixtureProjectV1();

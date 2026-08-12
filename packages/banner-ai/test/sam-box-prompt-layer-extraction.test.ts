@@ -9,8 +9,10 @@ import {
   createBoundedLayerPreview,
   createDeterministicSamBoxPromptAdapter,
   extractLayerWithSamBoxPrompt,
+  materializeProviderFreeAngelProjectWithDeterministicSamBoxPromptsV1,
 } from '../src/server/sam-box-prompt-layer-extraction.js';
 import { postprocessSamMasks } from '../src/sam/sam-mask-postprocess.js';
+import { assertCanonicalNormalizedPng } from '../src/security/raster-container.js';
 import {
   SamMaskResponseSchema,
   type SamMaskRequest,
@@ -104,6 +106,45 @@ const fakeSam = (calls: SamMaskRequest[], empty = false) => ({
 });
 
 describe('SAM box-prompt layer extraction', () => {
+  it('memoizes the deterministic Angel project with extracted foreground assets', async () => {
+    const [first, second] = await Promise.all([
+      materializeProviderFreeAngelProjectWithDeterministicSamBoxPromptsV1(),
+      materializeProviderFreeAngelProjectWithDeterministicSamBoxPromptsV1(),
+    ]);
+    expect(first).toBe(second);
+    expect(first.assets).toHaveLength(4);
+    expect(first.scene.layers).toHaveLength(3);
+    expect(first.scene.layers.map((layer) => layer.name)).toEqual([
+      'Angel body',
+      'Left wing',
+      'Right wing',
+    ]);
+    expect(first.scene.layers.map((layer) => layer.asset.sha256)).toEqual(
+      first.assets.slice(1).map((asset) => asset.reference.sha256),
+    );
+    expect(
+      first.assets.slice(1).every((asset) => {
+        const info = assertCanonicalNormalizedPng(asset.bytes);
+        return info.width > 0 && info.height > 0;
+      }),
+    ).toBe(true);
+    expect(first.scene.layers.map((layer) => layer.frame)).toEqual([
+      { x: 105, y: 30, width: 90, height: 160 },
+      { x: 15, y: 36, width: 105, height: 120 },
+      { x: 180, y: 36, width: 105, height: 120 },
+    ]);
+    const legacyTintDigests = new Set([
+      '5927efb1aff9e9f00f72265a6a3b744985f9b58fe0d848230fde163292e08ced',
+      '7a5b4061cb1917e365442a745404a9118898eab7a292b108b470f3796b19a28a',
+      'c38c7fe5e4f3f7fb11ce7487360dc97f70edf9c3cbce7355093c7087aa02eb6a',
+    ]);
+    expect(
+      first.assets.slice(1).every((asset) => !legacyTintDigests.has(asset.reference.sha256)),
+    ).toBe(true);
+    await expect(
+      materializeProviderFreeAngelProjectWithDeterministicSamBoxPromptsV1(),
+    ).resolves.toBe(first);
+  });
   it('uses the exact box in the deterministic adapter with one zero-network call', async () => {
     const input = await createInput();
     const fake = createDeterministicSamBoxPromptAdapter();
