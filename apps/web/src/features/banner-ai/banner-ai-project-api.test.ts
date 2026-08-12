@@ -13,7 +13,10 @@ import {
   requestProviderFreeExport,
   type ProviderFreeOperationCapture,
 } from './banner-ai-project-api';
-import { parseProviderFreeExportEnvelope } from './banner-ai-project-contract';
+import {
+  parseProviderFreeExportEnvelope,
+  parseProviderFreeProjectEnvelope,
+} from './banner-ai-project-contract';
 
 let firstCapture: ProviderFreeOperationCapture;
 let firstData: ProviderFreeExportData;
@@ -155,6 +158,55 @@ const identityMutators = [
 ] as const;
 
 describe('provider-free browser export acceptance', () => {
+  it('strictly accepts and binds the source reference presentation', async () => {
+    const opened = await openInitialDemoProject();
+    const envelope = { ok: true as const, data: opened };
+    expect(parseProviderFreeProjectEnvelope(envelope).ok).toBe(true);
+    const source = opened.presentation.source;
+    expect(() =>
+      parseProviderFreeProjectEnvelope({
+        ok: true,
+        data: { ...opened, presentation: { ...opened.presentation, source: undefined } },
+      }),
+    ).toThrow();
+    expect(() =>
+      parseProviderFreeProjectEnvelope({
+        ok: true,
+        data: {
+          ...opened,
+          presentation: { ...opened.presentation, source: { ...source, extra: true } },
+        },
+      }),
+    ).toThrow();
+    expect(() =>
+      parseProviderFreeProjectEnvelope({
+        ok: true,
+        data: {
+          ...opened,
+          presentation: {
+            ...opened.presentation,
+            source: { ...source, asset: { ...source.asset, sha256: otherSha256 } },
+          },
+        },
+      }),
+    ).toThrow();
+    expect(() =>
+      parseProviderFreeProjectEnvelope({
+        ok: true,
+        data: {
+          ...opened,
+          presentation: {
+            ...opened.presentation,
+            source: {
+              ...source,
+              asset: { ...source.asset, pixelWidth: source.asset.pixelWidth + 1 },
+            },
+          },
+        },
+      }),
+    ).toThrow();
+  });
+
   it('strictly parses the shared manifest and validation result contracts', () => {
     expect(() =>
       parseProviderFreeExportEnvelope({ ok: true, data: firstData, unknown: true }),

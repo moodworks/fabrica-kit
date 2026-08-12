@@ -731,6 +731,24 @@ export function BannerAiProjectEditor() {
         </div>
       ) : null}
 
+      <section className="editor-source-reference" aria-labelledby="editor-source-reference-title">
+        <div>
+          <p className="section-kicker">Immutable input</p>
+          <h2 id="editor-source-reference-title">Source banner</h2>
+          <p>Reference only — this is the original input, not an editable layer.</p>
+          <p className="editor-source-reference-meta">
+            876 × 221 · {projectData.presentation.source.asset.sha256}
+          </p>
+        </div>
+        {/* eslint-disable-next-line @next/next/no-img-element -- bounded in-memory validated data URL */}
+        <img
+          src={projectData.presentation.source.thumbnail.dataUrl}
+          alt="Source banner reference"
+          width={projectData.presentation.source.thumbnail.pixelWidth}
+          height={projectData.presentation.source.thumbnail.pixelHeight}
+        />
+      </section>
+
       <div className="editor-primary-grid">
         <BannerAiLayerControls
           parts={layerParts}

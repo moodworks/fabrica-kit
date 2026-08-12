@@ -103,6 +103,7 @@ export const projectOpenData = (
   presentation: {
     canvas: { width: 300, height: 200 },
     fixtureLabel: PROVIDER_FREE_FIXTURE_VISUALIZATION_LABEL_V1,
+    source: fixed.sourceReference,
     parts: fixed.presentationParts,
   },
 });

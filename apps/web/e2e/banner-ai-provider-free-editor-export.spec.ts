@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto';
 import { expect, test, type Download, type Locator, type Page } from '@playwright/test';
 
 const applicationOrigin = 'http://127.0.0.1:3102';
-const storageKey = 'fabrica.banner-ai.provider-free-project.v1';
+const storageKey = 'fabrica.banner-ai.verified-sam-replay-project.v1';
 
 const readDownload = async (download: Download): Promise<Buffer> => {
   const stream = await download.createReadStream();
@@ -65,18 +65,23 @@ test('open → edit → preset → save → preview → export → validate → 
   });
   const openButton = page.getByRole('button', { name: 'Open approved demo project' });
   await activateWithKeyboard(page, openButton);
-  await expect(page.getByRole('heading', { name: 'Angel provider-free demo' })).toBeVisible();
   await expect(
-    page.getByText('Provider-free fixture visualization; not segmentation-quality evidence.'),
+    page.getByRole('heading', { name: 'Development-only verified Meta SAM replay' }),
   ).toBeVisible();
+  await expect(
+    page.getByText(
+      'Development-only verified Meta SAM replay; automatic candidate 05, manually selected.',
+    ),
+  ).toBeVisible();
+  await expect(page.getByText('Source banner', { exact: true })).toBeVisible();
+  await expect(page.getByText('Reference only', { exact: false })).toBeVisible();
+  await expect(page.getByRole('img', { name: 'Source banner reference' })).toBeVisible();
 
   const layerRows = page.locator('.editor-layer-row');
-  await expect(layerRows).toHaveCount(4);
+  await expect(layerRows).toHaveCount(2);
   await expect(layerRows.locator('.editor-layer-name')).toHaveText([
-    'Background',
-    'Angel body',
-    'Left wing',
-    'Right wing',
+    'Solid background',
+    'banner-person-v1 subject',
   ]);
   const thumbnailState = await layerRows.locator('img').evaluateAll((images) =>
     images.map((image) => ({
@@ -86,7 +91,7 @@ test('open → edit → preset → save → preview → export → validate → 
       width: (image as HTMLImageElement).naturalWidth,
     })),
   );
-  expect(thumbnailState).toHaveLength(4);
+  expect(thumbnailState).toHaveLength(2);
   expect(
     thumbnailState.every(
       (thumbnail) =>
@@ -97,27 +102,27 @@ test('open → edit → preset → save → preview → export → validate → 
     ),
   ).toBe(true);
 
-  const leftWingRadio = page.getByRole('radio', { name: /^Left wing/u });
-  await leftWingRadio.focus();
-  await expect(leftWingRadio).toBeFocused();
-  const focusedOutline = await leftWingRadio.evaluate(
+  const subjectRadio = page.getByRole('radio', { name: /^banner-person-v1 subject/u });
+  await subjectRadio.focus();
+  await expect(subjectRadio).toBeFocused();
+  const focusedOutline = await subjectRadio.evaluate(
     (element) => getComputedStyle(element).outlineStyle,
   );
   expect(focusedOutline).not.toBe('none');
   await page.keyboard.press('Space');
-  await expect(leftWingRadio).toBeChecked();
+  await expect(subjectRadio).toBeChecked();
 
-  const showLeftWing = page.getByRole('checkbox', { name: 'Show Left wing' });
-  await showLeftWing.focus();
+  const showSubject = page.getByRole('checkbox', { name: 'Show banner-person-v1 subject' });
+  await showSubject.focus();
   await page.keyboard.press('Space');
-  await expect(showLeftWing).not.toBeChecked();
+  await expect(showSubject).not.toBeChecked();
 
-  const includeLeftWing = page.getByRole('checkbox', { name: 'Include Left wing' });
-  await includeLeftWing.focus();
+  const includeSubject = page.getByRole('checkbox', { name: 'Include banner-person-v1 subject' });
+  await includeSubject.focus();
   await page.keyboard.press('Space');
-  await expect(includeLeftWing).not.toBeChecked();
+  await expect(includeSubject).not.toBeChecked();
   await page.keyboard.press('Space');
-  await expect(includeLeftWing).toBeChecked();
+  await expect(includeSubject).toBeChecked();
 
   await activateWithKeyboard(page, page.getByRole('button', { name: 'Apply Gentle float' }));
   await expect(page.getByText('applied here', { exact: false })).toBeVisible();
@@ -146,13 +151,15 @@ test('open → edit → preset → save → preview → export → validate → 
     };
     readonly selectedPartId: string;
   };
-  const savedLeftWing = saveBody.scene.layers.find((layer) => layer.name === 'Left wing')!;
+  const savedSubject = saveBody.scene.layers.find(
+    (layer) => layer.name === 'banner-person-v1 subject',
+  )!;
   expect(saveBody.action).toBe('save');
-  expect(saveBody.selectedPartId).toBe(savedLeftWing.id);
-  expect(savedLeftWing).toMatchObject({ included: true, visible: false });
+  expect(saveBody.selectedPartId).toBe(savedSubject.id);
+  expect(savedSubject).toMatchObject({ included: true, visible: false });
   expect(saveBody.scene.timeline).toEqual([
     expect.objectContaining({
-      targetLayerId: savedLeftWing.id,
+      targetLayerId: savedSubject.id,
       preset: expect.objectContaining({ kind: 'float', distancePx: -6 }),
     }),
   ]);
@@ -171,10 +178,10 @@ test('open → edit → preset → save → preview → export → validate → 
     }[];
   };
   expect(storedProject).toMatchObject({
-    fixtureId: 'angel-local-png-v1',
+    fixtureId: 'banner-person-sam-replay-v1',
     projectId: '2a000000-0000-5000-8000-000000000001',
     currentAcceptedRevision: 2,
-    selectedPartId: savedLeftWing.id,
+    selectedPartId: savedSubject.id,
   });
   expect(storedProject.revisions[1]!.sceneSha256).toBe(acceptedDigest);
   expect(storedProject.revisions[1]!.parentSceneSha256).toBe(
@@ -186,7 +193,9 @@ test('open → edit → preset → save → preview → export → validate → 
 
   const previewButton = page.getByRole('button', { name: 'Preview accepted scene' });
   await activateWithKeyboard(page, previewButton);
-  const iframe = page.locator('iframe[title="Angel provider-free demo isolated preview"]');
+  const iframe = page.locator(
+    'iframe[title="Development-only verified Meta SAM replay isolated preview"]',
+  );
   await expect(iframe).toHaveAttribute('sandbox', 'allow-scripts');
   await expect(iframe).not.toHaveAttribute('allow-same-origin', /.*/u);
   await expect(page.getByText('The isolated preview completed.')).toBeVisible();
@@ -236,15 +245,23 @@ test('open → edit → preset → save → preview → export → validate → 
     .last()
     .textContent())!.trim();
   expect(createHash('sha256').update(firstZip).digest('hex')).toBe(firstArtifactSha);
-  expect(firstDownload.suggestedFilename()).toMatch(/^angel-provider-free-r2-[0-9a-f]{12}\.zip$/u);
+  expect(firstDownload.suggestedFilename()).toMatch(
+    /^verified-meta-sam-replay-r2-[0-9a-f]{12}\.zip$/u,
+  );
 
   await page.reload();
-  await expect(page.getByRole('heading', { name: 'Angel provider-free demo' })).toBeVisible();
+  await expect(
+    page.getByRole('heading', { name: 'Development-only verified Meta SAM replay' }),
+  ).toBeVisible();
   await expect(page.getByRole('heading', { name: 'Accepted revision 2' })).toBeVisible();
   await expect(page.locator('.editor-revision-strip .digest')).toHaveText(acceptedDigest);
-  await expect(page.getByRole('radio', { name: /^Left wing/u })).toBeChecked();
-  await expect(page.getByRole('checkbox', { name: 'Include Left wing' })).toBeChecked();
-  await expect(page.getByRole('checkbox', { name: 'Show Left wing' })).not.toBeChecked();
+  await expect(page.getByRole('radio', { name: /^banner-person-v1 subject/u })).toBeChecked();
+  await expect(
+    page.getByRole('checkbox', { name: 'Include banner-person-v1 subject' }),
+  ).toBeChecked();
+  await expect(
+    page.getByRole('checkbox', { name: 'Show banner-person-v1 subject' }),
+  ).not.toBeChecked();
   await expect(page.getByText('applied here', { exact: false })).toBeVisible();
 
   let injectedBody: unknown = null;
@@ -265,8 +282,10 @@ test('open → edit → preset → save → preview → export → validate → 
   await activateWithKeyboard(page, page.getByRole('button', { name: 'Generate HTML5 ZIP' }));
   await expect(page.getByText('Export failed')).toBeVisible();
   await expect(page.locator('.editor-revision-strip .digest')).toHaveText(acceptedDigest);
-  await expect(page.getByRole('radio', { name: /^Left wing/u })).toBeChecked();
-  await expect(page.getByRole('checkbox', { name: 'Show Left wing' })).not.toBeChecked();
+  await expect(page.getByRole('radio', { name: /^banner-person-v1 subject/u })).toBeChecked();
+  await expect(
+    page.getByRole('checkbox', { name: 'Show banner-person-v1 subject' }),
+  ).not.toBeChecked();
 
   await page.unroute('**/api/banner-ai/demo-project/export');
   const retryDownloadPromise = page.waitForEvent('download');
@@ -293,10 +312,10 @@ test('open → edit → preset → save → preview → export → validate → 
   expect(retryBody.sceneVersionId).toBe(failedBody.sceneVersionId);
   expect(retryBody.sceneSha256).toBe(acceptedDigest);
 
-  const leftWingVisibility = page.getByRole('checkbox', { name: 'Show Left wing' });
-  await leftWingVisibility.focus();
+  const subjectVisibility = page.getByRole('checkbox', { name: 'Show banner-person-v1 subject' });
+  await subjectVisibility.focus();
   await page.keyboard.press('Space');
-  await expect(leftWingVisibility).toBeChecked();
+  await expect(subjectVisibility).toBeChecked();
 
   let releaseDelayedSave!: () => void;
   const delayedSaveGate = new Promise<void>((resolve) => {

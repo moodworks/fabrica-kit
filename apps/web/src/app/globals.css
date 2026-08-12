@@ -931,13 +931,42 @@ summary:focus-visible {
 }
 
 .editor-open-card,
-.editor-preset-card {
+.editor-preset-card,
+.editor-source-reference {
   min-width: 0;
   padding: clamp(1rem, 4vw, 1.75rem);
   border: 1px solid var(--line);
   border-radius: 1.15rem;
   background: rgb(255 254 251 / 96%);
   box-shadow: var(--shadow);
+}
+
+.editor-source-reference {
+  display: flex;
+  gap: 1rem;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.editor-source-reference h2 {
+  margin: 0.2rem 0 0;
+}
+.editor-source-reference p {
+  margin: 0.45rem 0 0;
+  color: var(--muted);
+}
+.editor-source-reference-meta {
+  overflow-wrap: anywhere;
+  font:
+    0.72rem/1.4 ui-monospace,
+    monospace;
+}
+.editor-source-reference img {
+  width: min(30rem, 48%);
+  height: auto;
+  border: 1px solid var(--line);
+  border-radius: 0.7rem;
+  background: #222;
 }
 
 .editor-open-card {
@@ -1527,6 +1556,15 @@ summary:focus-visible {
 }
 
 @media (max-width: 420px) {
+  .editor-source-reference {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .editor-source-reference img {
+    width: 100%;
+  }
+
   .editor-project-header,
   .editor-revision-strip {
     align-items: stretch;

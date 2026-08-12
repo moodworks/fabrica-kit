@@ -151,6 +151,19 @@ export interface ProviderFreeProjectPresentationPart {
 export interface ProviderFreeProjectPresentation {
   readonly canvas: { readonly width: 300; readonly height: 200 };
   readonly fixtureLabel: string;
+  readonly source: {
+    readonly name: string;
+    readonly asset: {
+      readonly assetId: string;
+      readonly assetVersionId: string;
+      readonly sha256: string;
+      readonly mediaType: 'image/jpeg' | 'image/png';
+      readonly byteSize: number;
+      readonly pixelWidth: number;
+      readonly pixelHeight: number;
+    };
+    readonly thumbnail: ProviderFreeProjectPresentationPart['thumbnail'];
+  };
   readonly parts: readonly ProviderFreeProjectPresentationPart[];
 }
 
@@ -190,10 +203,13 @@ const parseThumbnail = (input: unknown): ProviderFreeProjectPresentationPart['th
   return input as unknown as ProviderFreeProjectPresentationPart['thumbnail'];
 };
 
-const parsePresentation = (input: unknown): ProviderFreeProjectPresentation => {
+const parsePresentation = (
+  input: unknown,
+  scene: BannerSceneV1,
+): ProviderFreeProjectPresentation => {
   if (
     !isRecord(input) ||
-    !hasExactKeys(input, ['canvas', 'fixtureLabel', 'parts']) ||
+    !hasExactKeys(input, ['canvas', 'fixtureLabel', 'parts', 'source']) ||
     !isRecord(input['canvas']) ||
     !hasExactKeys(input['canvas'], ['height', 'width']) ||
     input['canvas']['width'] !== 300 ||
@@ -204,6 +220,36 @@ const parsePresentation = (input: unknown): ProviderFreeProjectPresentation => {
   ) {
     throw new TypeError('The demo API returned an invalid project presentation.');
   }
+  const source = input['source'];
+  if (
+    !isRecord(source) ||
+    !hasExactKeys(source, ['asset', 'name', 'thumbnail']) ||
+    !isSafeText(source['name'], 80) ||
+    !isRecord(source['asset']) ||
+    !hasExactKeys(source['asset'], [
+      'assetId',
+      'assetVersionId',
+      'byteSize',
+      'mediaType',
+      'pixelHeight',
+      'pixelWidth',
+      'sha256',
+    ]) ||
+    !isSafeText(source['asset']['assetId'], 120) ||
+    !isSafeText(source['asset']['assetVersionId'], 120) ||
+    source['asset']['mediaType'] !== 'image/png' ||
+    typeof source['asset']['sha256'] !== 'string' ||
+    !sha256Pattern.test(source['asset']['sha256']) ||
+    !Number.isInteger(source['asset']['byteSize']) ||
+    Number(source['asset']['byteSize']) < 1 ||
+    !Number.isInteger(source['asset']['pixelWidth']) ||
+    Number(source['asset']['pixelWidth']) < 1 ||
+    !Number.isInteger(source['asset']['pixelHeight']) ||
+    Number(source['asset']['pixelHeight']) < 1 ||
+    JSON.stringify(source['asset']) !== JSON.stringify(scene.sourceAsset)
+  )
+    throw new TypeError('The demo API returned an invalid source reference.');
+  parseThumbnail(source['thumbnail']);
   for (const part of input['parts']) {
     if (
       !isRecord(part) ||
@@ -254,12 +300,14 @@ export const parseProviderFreeProjectEnvelope = (
   ) {
     throw new TypeError('The demo API returned an invalid project payload.');
   }
+  const project = parseProviderFreeProjectForClient(data['project']);
+  const scene = getAcceptedRevision(project).scene;
   return {
     ok: true,
     data: {
       canonicalProjectJson: data['canonicalProjectJson'],
-      presentation: parsePresentation(data['presentation']),
-      project: parseProviderFreeProjectForClient(data['project']),
+      presentation: parsePresentation(data['presentation'], scene),
+      project,
     },
   };
 };

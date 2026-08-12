@@ -69,6 +69,11 @@ export interface ProviderFreePresentationPartV1 {
   readonly bounds: ProviderFreePresentationBoundsV1;
   readonly thumbnail: ProviderFreePresentationThumbnailV1;
 }
+export interface ProviderFreeSourceReferenceV1 {
+  readonly name: string;
+  readonly asset: AssetVersionRefV1;
+  readonly thumbnail: ProviderFreePresentationThumbnailV1;
+}
 
 export interface ProviderFreeFixtureMaterializationV1 {
   readonly fixtureId: typeof PROVIDER_FREE_FIXTURE_ID_V1;
@@ -76,6 +81,7 @@ export interface ProviderFreeFixtureMaterializationV1 {
   readonly scene: BannerSceneV1;
   readonly assets: readonly FakeExportAsset[];
   readonly presentationParts: readonly ProviderFreePresentationPartV1[];
+  readonly sourceReference: ProviderFreeSourceReferenceV1;
 }
 
 const EXPECTED_SOURCE = Object.freeze({
@@ -242,6 +248,10 @@ const materializeProviderFreeFixtureProjectCoreV1 = async (input: {
   }
 
   const backgroundThumbnail = await materializeSolidBackgroundThumbnail();
+  const sourceThumbnail = await materializeThumbnail(
+    normalizedSource.bytes,
+    'source-reference.png',
+  );
 
   const backgroundEvidence = {
     partKey: 'background',
@@ -348,6 +358,11 @@ const materializeProviderFreeFixtureProjectCoreV1 = async (input: {
       ...layerAssets,
     ]),
     presentationParts: Object.freeze(presentationParts),
+    sourceReference: Object.freeze({
+      name: 'Source banner',
+      asset: sourceReference,
+      thumbnail: thumbnailFrom(sourceThumbnail),
+    }),
   });
   const referenceValidation = await validateSceneReferences(
     scene,

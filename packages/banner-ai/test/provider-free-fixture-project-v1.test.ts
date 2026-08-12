@@ -40,6 +40,7 @@ const pinnedMaterialization = {
     ['background', 207, '4237837fa98436d44fda2ec3421253e17cfcc1a85c161a4686aa43ec3036c3d7'],
     ['subject', 9812, 'efcaae53e2a4ad62fdf1d5b63799beb981788f584ee8dcf5bf04e5d434a806db'],
   ],
+  sourceThumbnail: [7957, '61af239b98d3a4fc3250b16d9467f8be69e3d0e46b90fda5dbe7b848bba53baf'],
 } as const;
 
 describe('provider-free person fixture project v1', () => {
@@ -49,6 +50,11 @@ describe('provider-free person fixture project v1', () => {
     expect(first).toBe(second);
     expect(first.assets).toHaveLength(2);
     expect(first.presentationParts).toHaveLength(2);
+    expect([
+      first.sourceReference.thumbnail.byteSize,
+      first.sourceReference.thumbnail.sha256,
+    ]).toEqual(pinnedMaterialization.sourceThumbnail);
+    expect(first.sourceReference.asset).toEqual(first.scene.sourceAsset);
     expect(first.presentationParts.map((part) => part.partKey)).toEqual(['background', 'subject']);
     expect(
       first.assets.map((asset) => [

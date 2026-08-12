@@ -114,6 +114,11 @@ describe('provider-free demo project route integration', () => {
       ),
     ).toBe(true);
     expect(data.presentation.parts).toHaveLength(2);
+    expect(data.presentation.source.name).toBe('Source banner');
+    expect(data.presentation.source.asset).toEqual(data.project.revisions[0]!.scene.sourceAsset);
+    expect(data.presentation.source.thumbnail.sha256).toBe(
+      '61af239b98d3a4fc3250b16d9467f8be69e3d0e46b90fda5dbe7b848bba53baf',
+    );
     expect(new Set(data.presentation.parts.map((part) => part.partKey)).size).toBe(2);
     const fixed = await materializeProviderFreePersonSamReplayProjectV1();
     expect(data.presentation.parts.map((part) => [part.partKey, part.thumbnail.sha256])).toEqual(
