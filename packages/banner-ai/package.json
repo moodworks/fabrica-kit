@@ -18,6 +18,7 @@
     "build": "tsc -p tsconfig.json --noEmit",
     "benchmark:qwen:dry-run": "node --import tsx src/server/qwen-four-fixture-benchmark-cli.ts --dry-run",
     "benchmark:qwen:live": "node --import tsx src/server/qwen-four-fixture-benchmark-cli.ts --live",
+    "benchmark:qwen:v6-author": "node --import tsx src/server/qwen-v6-authorization-author-cli.ts",
     "benchmark:qwen:replay": "node --import tsx src/server/qwen-response-replay-cli.ts",
     "demo:sam-fake": "node --import tsx src/server/sam-fake-vertical-slice-cli.ts",
     "demo:sam-visual-evaluation:fake": "node --import tsx src/server/sam-visual-evaluation-fake-cli.ts",

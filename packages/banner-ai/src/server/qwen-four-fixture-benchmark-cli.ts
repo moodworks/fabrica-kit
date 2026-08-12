@@ -7,14 +7,17 @@ import { createDeterministicOracleMatchingQwenSemanticOutputV1 } from '../evalua
 import { createDeterministicQwenTransport } from './qwen3-vl-deterministic-fake-transport.js';
 import {
   createQwenDryRunExecutionAuthorization,
+  finalizeQwenV6AuthorizedReport,
   finalizeQwenDiagnosticReportForAuthorizationV1,
   preflightQwenLiveExecutionAuthorization,
+  reserveQwenV6AuthorizedExecution,
   releaseQwenDiagnosticArtifactsForAuthorizationV1,
   reserveQwenDiagnosticArtifactsForAuthorizationV1,
   type QwenAdapterClockPort,
 } from './qwen3-vl-scene-analysis-adapter.js';
 import {
   QWEN_SINGAPORE_V5_REPORT_PATH,
+  QWEN_SINGAPORE_V6_REPORT_PATH,
   runQwenFourFixtureBenchmark,
   serializeQwenFourFixtureBenchmarkReport,
 } from './qwen-four-fixture-benchmark.js';
@@ -99,6 +102,15 @@ const authorizationPathFromArguments = (): string => {
   return resolve(candidate);
 };
 
+const fixedV6AuthorizationPath = resolve(
+  fileURLToPath(
+    new URL(
+      '../../../../.local-data/banner-ai/qwen-four-fixture-live-v6/authorization.json',
+      import.meta.url,
+    ),
+  ),
+);
+
 const assertCleanWorkingTree = (): void => {
   const status = execFileSync('git', ['status', '--porcelain'], {
     encoding: 'utf8',
@@ -131,6 +143,14 @@ const runLive = async (): Promise<void> => {
     throw new TypeError('Live Qwen execution authorization file is outside its size bound.');
   }
   const packet = JSON.parse(authorizationBytes.toString('utf8')) as unknown;
+  if (
+    typeof packet === 'object' &&
+    packet !== null &&
+    (packet as { authorizationVersion?: unknown }).authorizationVersion === 6 &&
+    authorizationPathFromArguments() !== fixedV6AuthorizationPath
+  ) {
+    throw new TypeError('Qwen V6 authorization must use the fixed authorization path.');
+  }
   const authorization = preflightQwenLiveExecutionAuthorization({
     packet,
     secretPresent: true,
@@ -138,6 +158,8 @@ const runLive = async (): Promise<void> => {
     currentGitSha: execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim(),
     liveDispatchGitGuard,
   });
+  const v6 = authorization.authorizationVersion === 6;
+  if (v6) reserveQwenV6AuthorizedExecution(authorization);
   const diagnosticEnabled = authorization.diagnosticCapture !== null;
   if (diagnosticEnabled) await reserveQwenDiagnosticArtifactsForAuthorizationV1(authorization);
   try {
@@ -150,10 +172,16 @@ const runLive = async (): Promise<void> => {
       secret,
       cancellation: cancellationState,
     });
-    const reportPath =
-      authorization.diagnosticCapture?.diagnosticReportRelativePath ??
-      QWEN_SINGAPORE_V5_REPORT_PATH;
-    if (diagnosticEnabled) {
+    const reportPath = v6
+      ? QWEN_SINGAPORE_V6_REPORT_PATH
+      : (authorization.diagnosticCapture?.diagnosticReportRelativePath ??
+        QWEN_SINGAPORE_V5_REPORT_PATH);
+    if (v6) {
+      await finalizeQwenV6AuthorizedReport({
+        authorization,
+        bytes: Buffer.from(serializeQwenFourFixtureBenchmarkReport(report), 'utf8'),
+      });
+    } else if (diagnosticEnabled) {
       await finalizeQwenDiagnosticReportForAuthorizationV1({
         authorization,
         bytes: Buffer.from(serializeQwenFourFixtureBenchmarkReport(report), 'utf8'),

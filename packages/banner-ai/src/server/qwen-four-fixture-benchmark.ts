@@ -95,6 +95,8 @@ export const QWEN_SINGAPORE_V4_REPORT_PATH =
   '.local-data/banner-ai/qwen3-vl-four-fixture-benchmark-singapore-v4.json' as const;
 export const QWEN_SINGAPORE_V5_REPORT_PATH =
   '.local-data/banner-ai/qwen3-vl-four-fixture-benchmark-singapore-v5.json' as const;
+export const QWEN_SINGAPORE_V6_REPORT_PATH =
+  '.local-data/banner-ai/qwen-four-fixture-live-v6/report.json' as const;
 
 export const QwenBenchmarkClassifiedFailureReasonSchema = z.enum([
   'authorization-missing',
@@ -557,6 +559,49 @@ const QwenFourFixtureBenchmarkReportV5CoreSchema = z.strictObject({
     .optional(),
 });
 
+/** V6 is a live, four-fixture execution only; diagnostic fields are explicitly forbidden. */
+export const QwenFourFixtureBenchmarkReportV6Schema =
+  QwenFourFixtureBenchmarkReportV5CoreSchema.extend({
+    reportVersion: z.literal(6),
+    authorizationVersion: z.literal(6),
+    mode: z.literal('live-provider'),
+  })
+    .superRefine((report, context) => {
+      if (
+        report.providerNetworkUsed !== report.providerCallCount > 0 ||
+        report.fixtureResults.length > 4 ||
+        report.retryCount !== 0 ||
+        Object.hasOwn(report, 'diagnosticOneFixtureMode') ||
+        Object.hasOwn(report, 'diagnosticReportRelativePath') ||
+        Object.hasOwn(report, 'diagnosticCaptureVersion') ||
+        Object.hasOwn(report, 'diagnosticCapsSha256') ||
+        Object.hasOwn(report, 'diagnosticCaps') ||
+        (report.overallPass && report.fixtureResults.length !== 4) ||
+        report.providerCallCount > 4 ||
+        parseMicros(report.totalCalculatedListCost.knownAttemptCostMicros) > 500000n ||
+        report.providerCallCount !==
+          report.fixtureResults.reduce((sum, result) => sum + result.providerCallCount, 0) ||
+        report.successfulRunCount !==
+          report.fixtureResults.filter((result) => result.quality !== null).length ||
+        report.overallPass !==
+          (!report.stoppedEarly &&
+            report.fixtureResults.length === 4 &&
+            report.fixtureResults.every((result) => result.status === 'pass')) ||
+        (!report.stoppedEarly && report.terminalFailureReason !== 'none') ||
+        (report.stoppedEarly && report.terminalFailureReason === 'none') ||
+        report.fixtureResults.some(
+          (result, index) =>
+            result.fixtureId !== QWEN_FOUR_FIXTURE_CANONICAL_REQUEST_CATALOG_V1[index]?.fixtureId,
+        )
+      ) {
+        context.addIssue({ code: 'custom', message: 'Qwen V6 report invariants drifted.' });
+      }
+    })
+    .readonly();
+export type QwenFourFixtureBenchmarkReportV6 = z.infer<
+  typeof QwenFourFixtureBenchmarkReportV6Schema
+>;
+
 type QwenFourFixtureBenchmarkReportCore =
   | z.infer<typeof QwenFourFixtureBenchmarkReportV1CoreSchema>
   | z.infer<typeof QwenFourFixtureBenchmarkReportV2CoreSchema>
@@ -798,7 +843,8 @@ const deadlineFailureReason = (remaining: {
 
 export const serializeQwenFourFixtureBenchmarkReport = (report: unknown): string =>
   `${canonicalizeJson(
-    QwenFourFixtureBenchmarkReportV5Schema.or(QwenFourFixtureBenchmarkReportV4Schema)
+    QwenFourFixtureBenchmarkReportV6Schema.or(QwenFourFixtureBenchmarkReportV5Schema)
+      .or(QwenFourFixtureBenchmarkReportV4Schema)
       .or(QwenFourFixtureBenchmarkReportV3Schema)
       .or(QwenFourFixtureBenchmarkReportV2Schema)
       .or(QwenFourFixtureBenchmarkReportV1Schema)
@@ -845,6 +891,7 @@ export const runQwenFourFixtureBenchmark = async (input: {
   | QwenFourFixtureBenchmarkReportV3
   | QwenFourFixtureBenchmarkReportV4
   | QwenFourFixtureBenchmarkReportV5
+  | QwenFourFixtureBenchmarkReportV6
 > => {
   const clock = input.clock ?? defaultClock;
   const benchmarkStartedAt = clock.nowMonotonicMs();
@@ -1165,7 +1212,7 @@ export const runQwenFourFixtureBenchmark = async (input: {
     fixtureResults.length === QWEN_FOUR_FIXTURE_BENCHMARK_CAPS_V1.fixtureCount &&
     fixtureResults.every((result) => result.status === 'pass');
   const reportInput = {
-    reportVersion: 5,
+    reportVersion: input.authorization.authorizationVersion === 6 ? 6 : 5,
     authorizationVersion: input.authorization.authorizationVersion,
     gitSha: input.authorization.gitSha,
     manualReleaseSha256: input.authorization.manualReleaseSha256,
@@ -1230,5 +1277,7 @@ export const runQwenFourFixtureBenchmark = async (input: {
           diagnosticCaps: QWEN_SINGLE_FIXTURE_DIAGNOSTIC_CAPS_V3,
         }),
   };
-  return QwenFourFixtureBenchmarkReportV5Schema.parse(reportInput);
+  return input.authorization.authorizationVersion === 6
+    ? QwenFourFixtureBenchmarkReportV6Schema.parse(reportInput)
+    : QwenFourFixtureBenchmarkReportV5Schema.parse(reportInput);
 };
