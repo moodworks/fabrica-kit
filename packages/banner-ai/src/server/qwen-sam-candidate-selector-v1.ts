@@ -266,10 +266,12 @@ export interface QwenSamAuthorization {
 export interface QwenSamGitSource {
   readonly head: () => string;
   readonly status: () => string;
+  readonly root: () => string;
 }
 const defaultGit: QwenSamGitSource = {
   head: () => execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim(),
   status: () => execFileSync('git', ['status', '--porcelain'], { encoding: 'utf8' }),
+  root: () => execFileSync('git', ['rev-parse', '--show-toplevel'], { encoding: 'utf8' }).trim(),
 };
 const consumed = new WeakSet<object>();
 const authorizationStates = new WeakMap<
@@ -384,8 +386,10 @@ export function assertQwenSamAuthorizationLive(
 export async function reserveQwenSamSelection(
   id: string,
 ): Promise<{ responsePath: string; reportPath: string }> {
-  const dir = join(process.cwd(), '.local-data/banner-ai/qwen-sam-candidate-selection-v1', id);
-  await mkdir(join(process.cwd(), '.local-data/banner-ai/qwen-sam-candidate-selection-v1'), {
+  const repoRoot = defaultGit.root();
+  const parent = join(repoRoot, '.local-data/banner-ai/qwen-sam-candidate-selection-v1');
+  const dir = join(parent, id);
+  await mkdir(parent, {
     recursive: true,
     mode: 0o700,
   });

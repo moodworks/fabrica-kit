@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { execFileSync } from 'node:child_process';
-import { mkdtemp, rm, unlink, symlink, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, unlink, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { sha256Hex } from '../src/scene/canonical-scene-json.js';
@@ -182,10 +182,7 @@ describe.sequential('Qwen SAM candidate selector preparation', () => {
     expect(buildQwenSamRequest(c, s)).not.toHaveProperty('secret');
   });
   it('rejects a replaced reservation path before transport', async () => {
-    const previousCwd = process.cwd();
-    const temporaryCwd = await mkdtemp(join(tmpdir(), 'fabrica-qwen-reservation-'));
-    process.chdir(temporaryCwd);
-    try {
+    await inCleanGitRepo(async () => {
       const reservation = await reserveQwenSamSelection(`test-${crypto.randomUUID()}`);
       await unlink(reservation.responsePath);
       await symlink(reservation.reportPath, reservation.responsePath);
@@ -193,10 +190,7 @@ describe.sequential('Qwen SAM candidate selector preparation', () => {
         'Reservation integrity failure',
       );
       await closeQwenSamReservation(reservation);
-    } finally {
-      process.chdir(previousCwd);
-      await rm(temporaryCwd, { recursive: true, force: true });
-    }
+    });
   });
   it.each([
     ['malformed', '{', 'invalid'],
@@ -244,6 +238,67 @@ describe.sequential('Qwen SAM candidate selector preparation', () => {
       expect(report.terminal).toBe('success');
       expect(JSON.stringify(report)).not.toContain('sentinel-secret');
       expect(JSON.stringify(report)).not.toContain('qwen-test');
+    });
+  });
+  it('anchors reservations at the git top level from a nested package cwd', async () => {
+    const catalog = await verifyQwenSamEvidence();
+    const sheet = await buildQwenSamContactSheet();
+    const request = buildQwenSamRequest(catalog, sheet);
+    await inCleanGitRepo(async () => {
+      const repoRoot = process.cwd();
+      await mkdir(join(repoRoot, 'packages', 'banner-ai'), { recursive: true });
+      process.chdir(join(repoRoot, 'packages', 'banner-ai'));
+      const auth = createQwenSamAuthorization(
+        'RUN THE ONE QWEN SAM CANDIDATE SELECTION CALL',
+        catalog,
+        sheet,
+        request.requestBodyText,
+      );
+      let calls = 0;
+      const result = await executeQwenSamSelection({
+        authorization: auth,
+        catalog,
+        sheet,
+        request,
+        secret: 'x',
+        transport: async () => {
+          calls += 1;
+          return {
+            status: 200,
+            bodyText: providerBody({
+              selection: 'none',
+              candidateId: null,
+              semanticRole: null,
+              rationale: 'none',
+            }),
+          };
+        },
+      });
+      expect(calls).toBe(1);
+      expect(result.reportPath).toBe(
+        join(
+          repoRoot,
+          '.local-data/banner-ai/qwen-sam-candidate-selection-v1',
+          auth.id,
+          'report.json',
+        ),
+      );
+      expect(() =>
+        execFileSync('git', ['status', '--porcelain'], { encoding: 'utf8' }),
+      ).not.toThrow();
+      expect(execFileSync('git', ['status', '--porcelain'], { encoding: 'utf8' })).toBe('');
+      expect(
+        await (async () => {
+          try {
+            await import('node:fs/promises').then((fs) =>
+              fs.stat(join(repoRoot, 'packages', 'banner-ai', '.local-data')),
+            );
+            return true;
+          } catch {
+            return false;
+          }
+        })(),
+      ).toBe(false);
     });
   });
   it('uses one durable operation id across auth minting and blocks reruns', async () => {
