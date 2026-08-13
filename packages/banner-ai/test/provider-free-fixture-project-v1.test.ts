@@ -20,8 +20,8 @@ import {
 } from '../src/server/sam-box-prompt-layer-extraction.js';
 
 const pinnedMaterialization = {
-  sceneSha256: '925403565f3252c06dffaa947726354a6f4f45c41f9e25a34212e70d75504d7e',
-  sceneVersionId: '5a07a700-eb78-5dd9-b586-9a0d160ea1c4',
+  sceneSha256: 'a7228740596d4033329f24bd366b7528703ed56491f4f7b9c9a3ce8fb8494f2e',
+  sceneVersionId: '427f573c-a043-52ef-abb5-c45ef0fc3b12',
   initialWorkflowSha256: 'e3784eefd371b1bf343db9e2dfb97697f2fe5889c8374fe777316add8a59230c',
   editWorkflowSha256: '5f3e1ef067095795128d7a0db59605e2ebd53fe8347d2cd0ccb8a94be109450e',
   assets: [
@@ -76,7 +76,7 @@ describe('provider-free person fixture project v1', () => {
       name: 'banner-person-v1 subject',
       included: true,
       visible: true,
-      frame: { x: 195, y: 5, width: 54, height: 195 },
+      frame: { x: 195, y: 64, width: 54, height: 74 },
     });
     expect(first.scene.layers.map((layer) => layer.asset.sha256)).toEqual([
       pinnedMaterialization.assets[1][2],

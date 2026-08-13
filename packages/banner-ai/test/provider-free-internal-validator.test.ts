@@ -22,7 +22,7 @@ const cancellation = Object.freeze({
 
 const pinnedProviderFreeZip = Object.freeze({
   byteSize: 64_476,
-  sha256: 'ea5127b1cc6aafcdb50d555e2877496bf5e3b8608d2733c48cb96f7f1ae0e0ee',
+  sha256: '528e7d8efbbfccbee6b68f86c7ed1e2b66c6e1316ac2af6b8f6cb676e938dc49',
   exportWorkflowSha256: '88d7bfe729ac99474172944bbf2de27c650dccd858c54f2acbfacb3dce1f4355',
   exporterBuildSha256: 'f3ad1dd6128df6986515badd28115416b59e2ae7d14b82b524b2d064fe812504',
   validatorRulesSha256: '2193e3352520f6ad608c81ded65ab3b3d595c9921728fe5e266a13a8235f993f',

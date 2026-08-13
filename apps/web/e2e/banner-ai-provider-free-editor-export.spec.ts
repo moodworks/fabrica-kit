@@ -113,7 +113,7 @@ test('open → edit → preset → save → preview → export → validate → 
   expect(revisionOneSubject.asset.sha256).toBe(
     'efa97f238a11d55d31e0438887bddece3de757f2b4abf117c8f1895553977022',
   );
-  expect(revisionOneSubject.frame).toEqual({ x: 258, y: 0, width: 42, height: 69 });
+  expect(revisionOneSubject.frame).toEqual({ x: 258, y: 62, width: 42, height: 26 });
   const thumbnailState = await layerRows.locator('img').evaluateAll((images) =>
     images.map((image) => ({
       complete: (image as HTMLImageElement).complete,
@@ -157,9 +157,17 @@ test('open → edit → preset → save → preview → export → validate → 
 
   await activateWithKeyboard(page, page.getByRole('button', { name: 'Apply Gentle float' }));
   await expect(page.getByText('applied here', { exact: false })).toBeVisible();
-  await activateWithKeyboard(page, page.getByRole('button', { name: 'Save changes' }));
+  const presetCard = page.locator('.editor-preset-card');
+  const localSaveButton = presetCard.getByRole('button', { name: 'Save animation changes' });
+  await expect(localSaveButton).toBeEnabled();
+  await expect(page.getByRole('button', { name: 'Preview accepted scene' })).toBeDisabled();
+  await expect(page.getByRole('button', { name: 'Generate HTML5 ZIP' })).toBeDisabled();
+  await activateWithKeyboard(page, localSaveButton);
   await expect(page.getByRole('heading', { name: 'Accepted revision 2' })).toBeVisible();
   await expect(page.getByText('Saved locally and accepted.', { exact: false })).toBeVisible();
+  await expect(localSaveButton).toBeDisabled();
+  await expect(page.getByRole('button', { name: 'Preview accepted scene' })).toBeEnabled();
+  await expect(page.getByRole('button', { name: 'Generate HTML5 ZIP' })).toBeEnabled();
 
   const acceptedDigest = (await page
     .locator('.editor-revision-strip .digest')

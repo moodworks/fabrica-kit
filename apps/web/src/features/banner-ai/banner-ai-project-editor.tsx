@@ -504,12 +504,12 @@ export function BannerAiProjectEditor() {
   );
 
   const previewAccepted = (): void => {
-    if (projectData === null) return;
+    if (projectData === null || state.draftStatus !== 'clean') return;
     void startPreview(captureAcceptedProviderFreeRevision(projectData.project));
   };
 
   const retryPreview = (): void => {
-    if (state.preview.capture === null) return;
+    if (state.draftStatus !== 'clean' || state.preview.capture === null) return;
     void startPreview(state.preview.capture);
   };
 
@@ -600,12 +600,12 @@ export function BannerAiProjectEditor() {
   };
 
   const exportAccepted = (): void => {
-    if (projectData === null) return;
+    if (projectData === null || state.draftStatus !== 'clean') return;
     void startExport(captureAcceptedProviderFreeRevision(projectData.project));
   };
 
   const retryExport = (): void => {
-    if (state.export.capture === null) return;
+    if (state.draftStatus !== 'clean' || state.export.capture === null) return;
     void startExport(state.export.capture);
   };
 
@@ -709,6 +709,7 @@ export function BannerAiProjectEditor() {
   const selectedLayer = draftScene.layers.find((layer) => layer.id === state.selectedPartId);
   const presetTarget = draftScene.timeline[0]?.targetLayerId ?? null;
   const working = state.draftStatus === 'saving';
+  const acceptedOperationsDisabled = state.draftStatus !== 'clean';
   const exportResultForDigest =
     state.export.result?.sceneSha256 === state.export.sceneSha256 ? state.export.result : null;
 
@@ -832,6 +833,11 @@ export function BannerAiProjectEditor() {
             Moves one foreground layer by −6 px on the y axis for two alternating 1.2-second
             iterations with ease-in-out timing.
           </p>
+          {acceptedOperationsDisabled ? (
+            <p className="editor-disabled-explanation" role="status">
+              Unsaved changes are present. Save changes before preview or export.
+            </p>
+          ) : null}
           {selectedLayer === undefined ? (
             <p className="editor-disabled-explanation">
               Select a foreground layer to apply this preset. The canvas background cannot animate.
@@ -865,6 +871,17 @@ export function BannerAiProjectEditor() {
             >
               Clear Gentle float
             </button>
+            <button
+              type="button"
+              onClick={() => void save()}
+              disabled={
+                working ||
+                (state.draftStatus !== 'dirty' && state.draftStatus !== 'save-failed') ||
+                state.persistence === 'corrupt'
+              }
+            >
+              {working ? 'Saving animation changes…' : 'Save animation changes'}
+            </button>
           </div>
         </section>
       </div>
@@ -880,7 +897,7 @@ export function BannerAiProjectEditor() {
           progressBps={state.preview.progressBps}
           errorMessage={state.preview.error?.message}
           reducedMotion={reducedMotion}
-          disabled={working}
+          disabled={acceptedOperationsDisabled}
           onPreview={previewAccepted}
           onRetry={retryPreview}
         />
@@ -891,7 +908,7 @@ export function BannerAiProjectEditor() {
           artifact={exportResultForDigest?.artifact ?? null}
           validation={exportResultForDigest?.validation ?? null}
           errorMessage={state.export.error?.message}
-          disabled={working}
+          disabled={acceptedOperationsDisabled}
           onGenerate={exportAccepted}
           onRetry={retryExport}
           onDownload={downloadPriorExport}

@@ -22,7 +22,7 @@ describe('preserved Meta SAM automatic candidate catalog', () => {
     expect(project.scene.layers[0]!.asset.sha256).toBe(
       'efa97f238a11d55d31e0438887bddece3de757f2b4abf117c8f1895553977022',
     );
-    expect(project.scene.layers[0]!.frame).toEqual({ x: 258, y: 0, width: 42, height: 69 });
+    expect(project.scene.layers[0]!.frame).toEqual({ x: 258, y: 62, width: 42, height: 26 });
   });
 
   it('materializes every preserved candidate with its pinned cutout identity', async () => {

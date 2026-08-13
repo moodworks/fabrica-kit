@@ -123,6 +123,27 @@ const boundsToPixels = (bounds: {
   height: Math.round((bounds.heightBps * CANVAS_HEIGHT) / 10_000),
 });
 
+const candidateFrameToPixels = (input: {
+  readonly bounds: {
+    readonly xBps: number;
+    readonly yBps: number;
+  };
+  readonly sourceWidth: number;
+  readonly sourceHeight: number;
+  readonly cutoutWidth: number;
+  readonly cutoutHeight: number;
+}): ProviderFreePresentationBoundsV1 => {
+  const scale = Math.min(CANVAS_WIDTH / input.sourceWidth, CANVAS_HEIGHT / input.sourceHeight);
+  const offsetX = (CANVAS_WIDTH - input.sourceWidth * scale) / 2;
+  const offsetY = (CANVAS_HEIGHT - input.sourceHeight * scale) / 2;
+  return {
+    x: Math.round(offsetX + (input.bounds.xBps * input.sourceWidth * scale) / 10_000),
+    y: Math.round(offsetY + (input.bounds.yBps * input.sourceHeight * scale) / 10_000),
+    width: Math.round(input.cutoutWidth * scale),
+    height: Math.round(input.cutoutHeight * scale),
+  };
+};
+
 const thumbnailFrom = (
   normalized: NormalizedRasterUpload,
 ): ProviderFreePresentationThumbnailV1 => ({
@@ -295,9 +316,15 @@ const materializeProviderFreeFixtureProjectCoreV1 = async (input: {
       throw new TypeError('The approved fixture foreground evidence drifted.');
     }
     const identity = input.subjectIdentity ?? layerIdentity[proposal.partKey as ForegroundPartKey];
-    const bounds = boundsToPixels(input.subjectIdentity?.bounds ?? proposal.bounds);
     const encoded = input.subject;
     const normalized = await normalizeGeneratedPng(encoded, identity.filename);
+    const bounds = candidateFrameToPixels({
+      bounds: input.subjectIdentity?.bounds ?? proposal.bounds,
+      sourceWidth: normalizedSource.width,
+      sourceHeight: normalizedSource.height,
+      cutoutWidth: normalized.width,
+      cutoutHeight: normalized.height,
+    });
     const reference = assetReference({
       assetId: identity.assetId,
       assetVersionId: identity.assetVersionId,

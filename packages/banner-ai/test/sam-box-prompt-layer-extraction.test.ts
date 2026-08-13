@@ -9,7 +9,9 @@ import {
   createBoundedLayerPreview,
   createDeterministicSamBoxPromptAdapter,
   extractLayerWithSamBoxPrompt,
+  materializeProviderFreePersonSamCandidateProjectV1,
   materializeProviderFreePersonSamReplayProjectV1,
+  PROVIDER_FREE_PERSON_SAM_CANDIDATES_V1,
   PROVIDER_FREE_PERSON_SAM_REPLAY_EVIDENCE_V1,
   validateProviderFreePersonSamReplayEvidenceV1,
 } from '../src/server/sam-box-prompt-layer-extraction.js';
@@ -163,7 +165,7 @@ describe('SAM box-prompt layer extraction', () => {
       }),
     ).toBe(true);
     expect(first.scene.layers.map((layer) => layer.frame)).toEqual([
-      { x: 195, y: 5, width: 54, height: 195 },
+      { x: 195, y: 64, width: 54, height: 74 },
     ]);
     const legacyTintDigests = new Set([
       '5927efb1aff9e9f00f72265a6a3b744985f9b58fe0d848230fde163292e08ced',
@@ -174,6 +176,34 @@ describe('SAM box-prompt layer extraction', () => {
       first.assets.slice(1).every((asset) => !legacyTintDigests.has(asset.reference.sha256)),
     ).toBe(true);
     await expect(materializeProviderFreePersonSamReplayProjectV1()).resolves.toBe(first);
+  });
+
+  it('maps every preserved candidate into the letterboxed canvas without stretching cutouts', async () => {
+    const materializations = await Promise.all(
+      PROVIDER_FREE_PERSON_SAM_CANDIDATES_V1.map((candidate) =>
+        materializeProviderFreePersonSamCandidateProjectV1(candidate.candidateId),
+      ),
+    );
+    expect(materializations).toHaveLength(8);
+    expect(materializations[0]!.scene.layers[0]!.frame).toEqual({
+      x: 258,
+      y: 62,
+      width: 42,
+      height: 26,
+    });
+    expect(materializations[4]!.scene.layers[0]!.frame).toEqual({
+      x: 195,
+      y: 64,
+      width: 54,
+      height: 74,
+    });
+    for (const materialization of materializations) {
+      const frame = materialization.scene.layers[0]!.frame;
+      const cutout = materialization.assets[1]!.reference;
+      const scale = Math.min(300 / 876, 200 / 221);
+      expect(Math.abs(frame.width - cutout.pixelWidth * scale)).toBeLessThanOrEqual(0.5);
+      expect(Math.abs(frame.height - cutout.pixelHeight * scale)).toBeLessThanOrEqual(0.5);
+    }
   });
   it('uses the exact box in the deterministic adapter with one zero-network call', async () => {
     const input = await createInput();
