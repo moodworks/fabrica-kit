@@ -30,6 +30,215 @@ export type BannerProjectFetch = (
   init?: RequestInit,
 ) => Promise<Response>;
 
+export interface UploadedBannerCandidate {
+  readonly candidateId: string;
+  readonly order: number;
+  readonly bounds: {
+    readonly x: number;
+    readonly y: number;
+    readonly width: number;
+    readonly height: number;
+  };
+  readonly pixelArea: number;
+  readonly areaRatioBps: number;
+  readonly thumbnail: {
+    readonly dataUrl: string;
+    readonly byteSize: number;
+    readonly pixelWidth: number;
+    readonly pixelHeight: number;
+    readonly sha256: string;
+  };
+  readonly provenance: 'Deterministic test output — NOT SAM OUTPUT';
+}
+
+export interface UploadedBannerOperationData {
+  readonly operationId: string;
+  readonly candidates: readonly UploadedBannerCandidate[];
+  readonly provenance: 'Deterministic test output — NOT SAM OUTPUT';
+}
+export interface UploadedBannerBinding {
+  readonly operationId: string;
+  readonly candidateId: string;
+}
+const uploadedBody = (binding: UploadedBannerBinding, body: Record<string, unknown>) => ({
+  ...body,
+  operationId: binding.operationId,
+  candidateId: binding.candidateId,
+});
+export const openUploadedBannerCandidate = async (
+  binding: UploadedBannerBinding,
+  fetchImplementation: BannerProjectFetch = fetch,
+): Promise<ProviderFreeProjectOpenData> => {
+  const response = await fetchImplementation('/api/banner-ai/uploaded-operation', {
+    method: 'PUT',
+    cache: 'no-store',
+    credentials: 'same-origin',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ action: 'select', ...binding }),
+  });
+  return resolveEnvelope(parseProviderFreeProjectEnvelope(await parseJsonResponse(response)));
+};
+export const saveUploadedBannerProject = async (
+  binding: UploadedBannerBinding,
+  input: {
+    readonly project: ProviderFreeBannerProjectV1;
+    readonly scene: BannerSceneV1;
+    readonly selectedPartId: string;
+  },
+  fetchImplementation: BannerProjectFetch = fetch,
+): Promise<ProviderFreeProjectOpenData> => {
+  const response = await fetchImplementation('/api/banner-ai/uploaded-operation', {
+    method: 'PUT',
+    cache: 'no-store',
+    credentials: 'same-origin',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(
+      uploadedBody(binding, {
+        action: 'save',
+        project: input.project,
+        scene: input.scene,
+        selectedPartId: input.selectedPartId,
+      }),
+    ),
+  });
+  return resolveEnvelope(parseProviderFreeProjectEnvelope(await parseJsonResponse(response)));
+};
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === 'object' && value !== null && !Array.isArray(value);
+
+const hasExactKeys = (record: Record<string, unknown>, expected: readonly string[]): boolean => {
+  const actual = Object.keys(record).sort();
+  const sortedExpected = [...expected].sort();
+  return (
+    actual.length === sortedExpected.length &&
+    actual.every((key, index) => key === sortedExpected[index])
+  );
+};
+
+const parseUploadedThumbnail = (input: unknown): void => {
+  if (
+    !isRecord(input) ||
+    !hasExactKeys(input, ['byteSize', 'dataUrl', 'pixelHeight', 'pixelWidth', 'sha256']) ||
+    typeof input['dataUrl'] !== 'string' ||
+    !/^data:image\/png;base64,[A-Za-z0-9+/]+={0,2}$/u.test(input['dataUrl']) ||
+    input['dataUrl'].length > 524_288 ||
+    !Number.isSafeInteger(input['byteSize']) ||
+    Number(input['byteSize']) < 1 ||
+    !Number.isSafeInteger(input['pixelWidth']) ||
+    Number(input['pixelWidth']) < 1 ||
+    !Number.isSafeInteger(input['pixelHeight']) ||
+    Number(input['pixelHeight']) < 1 ||
+    typeof input['sha256'] !== 'string' ||
+    !/^[0-9a-f]{64}$/u.test(input['sha256'])
+  ) {
+    throw new BannerProjectRequestError(
+      'INVALID_UPLOADED_OPERATION',
+      'The uploaded operation response contained an invalid thumbnail.',
+    );
+  }
+};
+
+export const requestUploadedBannerOperation = async (
+  file: File,
+  fetchImplementation: BannerProjectFetch = fetch,
+): Promise<UploadedBannerOperationData> => {
+  const formData = new FormData();
+  formData.append('file', file);
+  const response = await fetchImplementation('/api/banner-ai/uploaded-operation', {
+    method: 'POST',
+    body: formData,
+    cache: 'no-store',
+    credentials: 'same-origin',
+  });
+  const payload = await parseJsonResponse(response);
+  if (!isRecord(payload) || payload['ok'] !== true || !isRecord(payload['data'])) {
+    const error =
+      isRecord(payload) && isRecord(payload['error']) ? payload['error']['message'] : null;
+    throw new BannerProjectRequestError(
+      'UPLOADED_OPERATION_FAILED',
+      typeof error === 'string' ? error : 'The uploaded operation could not be created.',
+    );
+  }
+  return parseUploadedBannerOperationPayload(payload);
+};
+
+export const parseUploadedBannerOperationPayload = (
+  payload: unknown,
+): UploadedBannerOperationData => {
+  if (!isRecord(payload) || payload['ok'] !== true || !isRecord(payload['data'])) {
+    throw new BannerProjectRequestError(
+      'UPLOADED_OPERATION_FAILED',
+      'The uploaded operation could not be created.',
+    );
+  }
+  const data = payload['data'];
+  if (
+    !hasExactKeys(data, ['candidates', 'operationId', 'provenance']) ||
+    typeof data['operationId'] !== 'string' ||
+    !/^[0-9a-f]{64}$/u.test(data['operationId']) ||
+    !Array.isArray(data['candidates']) ||
+    data['candidates'].length < 1 ||
+    data['candidates'].length > 8 ||
+    data['provenance'] !== 'Deterministic test output — NOT SAM OUTPUT'
+  ) {
+    throw new BannerProjectRequestError(
+      'INVALID_UPLOADED_OPERATION',
+      'The uploaded operation response was invalid.',
+    );
+  }
+  const candidates = data['candidates'].map((candidate, index) => {
+    if (
+      !isRecord(candidate) ||
+      !hasExactKeys(candidate, [
+        'areaRatioBps',
+        'bounds',
+        'candidateId',
+        'order',
+        'pixelArea',
+        'provenance',
+        'thumbnail',
+      ]) ||
+      typeof candidate['candidateId'] !== 'string' ||
+      !/^samc_v1_[0-9a-f]{64}$/u.test(candidate['candidateId']) ||
+      candidate['order'] !== index + 1 ||
+      candidate['provenance'] !== 'Deterministic test output — NOT SAM OUTPUT' ||
+      !Number.isSafeInteger(candidate['pixelArea']) ||
+      Number(candidate['pixelArea']) < 64 ||
+      !Number.isSafeInteger(candidate['areaRatioBps']) ||
+      Number(candidate['areaRatioBps']) < 0 ||
+      Number(candidate['areaRatioBps']) > 10_000 ||
+      !isRecord(candidate['bounds']) ||
+      !hasExactKeys(candidate['bounds'], ['height', 'width', 'x', 'y']) ||
+      Object.values(candidate['bounds']).some(
+        (value) => typeof value !== 'number' || !Number.isInteger(value) || value < 0,
+      ) ||
+      Number(candidate['bounds']['width']) < 1 ||
+      Number(candidate['bounds']['height']) < 1 ||
+      Number(candidate['bounds']['x']) + Number(candidate['bounds']['width']) > 10_000 ||
+      Number(candidate['bounds']['y']) + Number(candidate['bounds']['height']) > 10_000
+    ) {
+      throw new BannerProjectRequestError(
+        'INVALID_UPLOADED_OPERATION',
+        'The uploaded operation response contained an invalid candidate.',
+      );
+    }
+    parseUploadedThumbnail(candidate['thumbnail']);
+    return candidate as unknown as UploadedBannerCandidate;
+  });
+  if (new Set(candidates.map((candidate) => candidate.candidateId)).size !== candidates.length) {
+    throw new BannerProjectRequestError(
+      'INVALID_UPLOADED_OPERATION',
+      'The uploaded operation response contained duplicate candidates.',
+    );
+  }
+  return {
+    operationId: data['operationId'],
+    candidates,
+    provenance: 'Deterministic test output — NOT SAM OUTPUT',
+  };
+};
+
 export class BannerProjectRequestError extends Error {
   readonly code: string;
 
@@ -174,6 +383,25 @@ export const requestProviderFreePreview = async (
   });
   return resolveEnvelope(parseProviderFreePreviewEnvelope(await parseJsonResponse(response)));
 };
+export const requestUploadedBannerPreview = async (
+  binding: UploadedBannerBinding,
+  capture: ProviderFreeOperationCapture,
+  nonce: string,
+  fetchImplementation: BannerProjectFetch = fetch,
+): Promise<ProviderFreePreviewData> => {
+  const response = await postJson(
+    fetchImplementation,
+    '/api/banner-ai/uploaded-operation/preview',
+    uploadedBody(binding, {
+      nonce,
+      project: capture.project,
+      revision: capture.revision,
+      sceneSha256: capture.sceneSha256,
+      sceneVersionId: capture.sceneVersionId,
+    }),
+  );
+  return resolveEnvelope(parseProviderFreePreviewEnvelope(await parseJsonResponse(response)));
+};
 
 export type ProviderFreeAcceptedExportData = ProviderFreeExportData;
 
@@ -240,6 +468,7 @@ const browserSha256Hex = async (bytes: Uint8Array): Promise<string> => {
 export const acceptProviderFreeExportForCapture = async (
   data: ProviderFreeExportData,
   capture: ProviderFreeOperationCapture,
+  filenamePrefix = 'verified-meta-sam-replay',
 ): Promise<ProviderFreeAcceptedExportData> => {
   const revision = getAcceptedRevision(capture.project);
   if (
@@ -260,7 +489,7 @@ export const acceptProviderFreeExportForCapture = async (
     data.artifact.mediaType !== 'application/zip' ||
     data.artifact.validationLabel !== PROVIDER_FREE_EXPORT_VALIDATION_LABEL_V1 ||
     data.artifact.filename !==
-      `verified-meta-sam-replay-r${String(capture.revision)}-${data.artifact.sha256.slice(0, 12)}.zip`
+      `${filenamePrefix}-r${String(capture.revision)}-${data.artifact.sha256.slice(0, 12)}.zip`
   ) {
     return rejectExportIdentity();
   }
@@ -331,4 +560,25 @@ export const requestProviderFreeExport = async (
   });
   const data = resolveEnvelope(parseProviderFreeExportEnvelope(await parseJsonResponse(response)));
   return acceptProviderFreeExportForCapture(data, capture);
+};
+export const requestUploadedBannerExport = async (
+  binding: UploadedBannerBinding,
+  capture: ProviderFreeOperationCapture,
+  fetchImplementation: BannerProjectFetch = fetch,
+): Promise<ProviderFreeAcceptedExportData> => {
+  const response = await postJson(
+    fetchImplementation,
+    '/api/banner-ai/uploaded-operation/export',
+    uploadedBody(binding, {
+      project: capture.project,
+      revision: capture.revision,
+      sceneSha256: capture.sceneSha256,
+      sceneVersionId: capture.sceneVersionId,
+    }),
+  );
+  return acceptProviderFreeExportForCapture(
+    resolveEnvelope(parseProviderFreeExportEnvelope(await parseJsonResponse(response))),
+    capture,
+    'uploaded-deterministic-test',
+  );
 };

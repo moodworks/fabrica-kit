@@ -254,11 +254,13 @@ const materializeProviderFreeFixtureProjectCoreV1 = async (input: {
     name: string;
   }>;
   readonly candidateId?: string;
+  readonly sourceFilename?: string;
+  readonly sourceIdentity?: { readonly assetId: string; readonly assetVersionId: string };
 }): Promise<ProviderFreeFixtureMaterializationV1> => {
   const normalizedSource = await normalizeRasterUpload({
     bytes: byteSourceFrom(input.source),
     declaredMediaType: 'image/png',
-    filename: 'banner-person-v1.png',
+    filename: input.sourceFilename ?? 'banner-person-v1.png',
   });
   const expectedSource = {
     assetId: 'asset_banner_person_source_v1',
@@ -270,10 +272,11 @@ const materializeProviderFreeFixtureProjectCoreV1 = async (input: {
     pixelHeight: EXPECTED_SOURCE.height,
   };
   if (
-    normalizedSource.sha256 !== EXPECTED_SOURCE.sha256 ||
-    normalizedSource.byteSize !== EXPECTED_SOURCE.byteSize ||
-    normalizedSource.width !== EXPECTED_SOURCE.width ||
-    normalizedSource.height !== EXPECTED_SOURCE.height
+    !input.sourceIdentity &&
+    (normalizedSource.sha256 !== EXPECTED_SOURCE.sha256 ||
+      normalizedSource.byteSize !== EXPECTED_SOURCE.byteSize ||
+      normalizedSource.width !== EXPECTED_SOURCE.width ||
+      normalizedSource.height !== EXPECTED_SOURCE.height)
   ) {
     throw new TypeError('The approved provider-free fixture source identity drifted.');
   }
@@ -307,7 +310,7 @@ const materializeProviderFreeFixtureProjectCoreV1 = async (input: {
   for (const [index, proposal] of [
     {
       partKey: 'subject',
-      label: 'banner-person-v1 subject',
+      label: input.sourceIdentity ? 'Uploaded cutout' : 'banner-person-v1 subject',
       role: 'subject',
       bounds: { xBps: 6506, yBps: 271, widthBps: 1794, heightBps: 9729 },
     },
@@ -354,14 +357,26 @@ const materializeProviderFreeFixtureProjectCoreV1 = async (input: {
     presentationParts.push({
       partKey: proposal.partKey,
       targetId: identity.layerId as unknown as ProviderFreeSelectedPartIdV1,
-      name: proposal.label,
+      name: input.subjectIdentity?.name ?? proposal.label,
       role: 'subject',
       bounds,
       thumbnail: thumbnailFrom(thumbnail),
     });
   }
 
-  const sourceReference = AssetVersionRefV1Schema.parse(expectedSource);
+  const sourceReference = AssetVersionRefV1Schema.parse(
+    input.sourceIdentity
+      ? {
+          assetId: input.sourceIdentity.assetId,
+          assetVersionId: input.sourceIdentity.assetVersionId,
+          sha256: normalizedSource.sha256,
+          mediaType: 'image/png',
+          byteSize: normalizedSource.byteSize,
+          pixelWidth: normalizedSource.width,
+          pixelHeight: normalizedSource.height,
+        }
+      : expectedSource,
+  );
   const scene = BannerSceneV1Schema.parse({
     schemaVersion: 1,
     canvas: {
@@ -478,5 +493,42 @@ export const materializeProviderFreePersonSamCandidateProjectV1 = async (input: 
       name: 'banner-person-v1 subject',
     },
     candidateId: input.candidate.candidateId,
+  });
+};
+
+/** Server-only uploaded operation materializer. The operation wrapper owns authorization and
+ * lifecycle; this function only creates the existing canvas/scene shape from exact bytes. */
+export const materializeUploadedBannerOperationProjectV1 = async (input: {
+  readonly source: Uint8Array;
+  readonly subject: Uint8Array;
+  readonly candidateId: string;
+  readonly bounds: {
+    readonly xBps: number;
+    readonly yBps: number;
+    readonly widthBps: number;
+    readonly heightBps: number;
+  };
+}): Promise<ProviderFreeFixtureMaterializationV1> => {
+  const source = (await normalizeGeneratedPng(input.source, 'uploaded-source.png')).bytes;
+  const subject = (await normalizeGeneratedPng(input.subject, 'uploaded-cutout.png')).bytes;
+  const digest = sha256Hex(source).slice(0, 24);
+  const shortId = input.candidateId.slice(-8);
+  return materializeProviderFreeFixtureProjectCoreV1({
+    source,
+    subject,
+    sourceFilename: 'uploaded-source.png',
+    sourceIdentity: {
+      assetId: `asset_uploaded_source_${digest}`,
+      assetVersionId: `asset_version_uploaded_source_${digest}`,
+    },
+    subjectIdentity: {
+      assetId: `asset_uploaded_cutout_${shortId}`,
+      assetVersionId: `asset_version_uploaded_cutout_${shortId}`,
+      layerId: PROVIDER_FREE_PERSON_SUBJECT_LAYER_ID_V1,
+      filename: `uploaded-${shortId}.cutout.png`,
+      bounds: input.bounds,
+      name: 'Uploaded cutout',
+    },
+    candidateId: input.candidateId,
   });
 };

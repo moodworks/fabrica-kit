@@ -329,3 +329,66 @@ describe('provider-free browser export acceptance', () => {
     expect(fetchImplementation).toHaveBeenCalledOnce();
   });
 });
+
+import { parseUploadedBannerOperationPayload } from './banner-ai-project-api';
+
+const uploadedCandidate = {
+  candidateId: `samc_v1_${'a'.repeat(64)}`,
+  order: 1,
+  bounds: { x: 10, y: 20, width: 100, height: 200 },
+  pixelArea: 200,
+  areaRatioBps: 100,
+  provenance: 'Deterministic test output — NOT SAM OUTPUT',
+  thumbnail: {
+    dataUrl: 'data:image/png;base64,AAAA',
+    byteSize: 3,
+    pixelWidth: 1,
+    pixelHeight: 1,
+    sha256: 'b'.repeat(64),
+  },
+};
+
+describe('uploaded operation client parser', () => {
+  it('accepts the exact bounded envelope', () => {
+    expect(
+      parseUploadedBannerOperationPayload({
+        ok: true,
+        data: {
+          operationId: 'c'.repeat(64),
+          candidates: [uploadedCandidate],
+          provenance: 'Deterministic test output — NOT SAM OUTPUT',
+        },
+      }).candidates,
+    ).toHaveLength(1);
+  });
+  type MutableParserPayload = {
+    data: {
+      candidates: Array<{ bounds: { x: number } }>;
+      [key: string]: unknown;
+    };
+  };
+  it.each([
+    (value: MutableParserPayload) => {
+      value.data.extra = true;
+    },
+    (value: MutableParserPayload) => {
+      value.data.candidates.push(uploadedCandidate);
+    },
+    (value: MutableParserPayload) => {
+      const first = value.data.candidates[0];
+      if (first === undefined) throw new Error('Expected one candidate.');
+      first.bounds.x = 1.5;
+    },
+  ])('rejects malformed or non-closed responses', (mutate) => {
+    const value = {
+      ok: true,
+      data: {
+        operationId: 'c'.repeat(64),
+        candidates: [structuredClone(uploadedCandidate)],
+        provenance: 'Deterministic test output — NOT SAM OUTPUT',
+      },
+    };
+    mutate(value);
+    expect(() => parseUploadedBannerOperationPayload(value)).toThrow();
+  });
+});

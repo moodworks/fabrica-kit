@@ -47,7 +47,8 @@ describe('Banner AI status rendering', () => {
     for (const label of ['Background', 'Angel body', 'Left wing', 'Right wing']) {
       expect(markup).toContain(label);
     }
-    expect(markup).toContain('Provider-free fixture proposal');
+    expect(markup).toContain('Deterministic test output — NOT SAM OUTPUT');
+    expect(markup).toContain('Deterministic automatic candidates are ready — NOT SAM OUTPUT.');
     expect(markup).toContain('Temporary deterministic integration previews exist');
     expect(markup).toContain('not real SAM output or segmentation-quality evidence');
     expect(markup.match(/<img /g)).toHaveLength(3);

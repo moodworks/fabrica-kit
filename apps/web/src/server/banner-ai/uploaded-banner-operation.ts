@@ -1,0 +1,437 @@
+import { randomBytes, randomUUID } from 'node:crypto';
+
+import {
+  byteSourceFrom,
+  normalizeRasterUpload,
+  type ActorWorkspaceContext,
+  appendProviderFreeBannerProjectRevisionV1,
+  canonicalizeJson,
+  createBannerSceneV1PreviewDocument,
+  createBannerSceneV1RenderPlan,
+  createProviderFreeBannerExporterV1,
+  createProviderFreeInternalValidatorV1,
+  BannerExportRequestSchema,
+  PROVIDER_FREE_BANNER_EXPORT_WORKFLOW_V1,
+  PROVIDER_FREE_EXPORTER_V1,
+  PROVIDER_FREE_INTERNAL_VALIDATOR_PROFILE_V1,
+  parseBannerSceneV1,
+  parseProviderFreeBannerProjectV1,
+  sha256BannerScene,
+  validateBannerExportResult,
+  validateInternalGdnValidationResult,
+} from '@fabrica/banner-ai';
+import {
+  generateUploadedBannerSamCandidates,
+  type UploadedBannerSamGenerator,
+  type UploadedBannerSamOperationResult,
+} from '@fabrica/banner-ai/server/uploaded-banner-sam-operation-v1';
+import { materializeUploadedBannerOperationProjectV1 } from '@fabrica/banner-ai';
+
+const OPERATION_TTL_MS = 5 * 60_000;
+const MAX_OPERATION_BYTES = 48 * 1024 * 1024;
+const MAX_PREVIEW_DOCUMENT_BYTES = 1_048_576;
+const MAX_EXPORT_RESPONSE_BYTES = 2_097_152;
+const operationIdPattern = /^[0-9a-f]{64}$/u;
+
+export class UploadedBannerOperationError extends Error {
+  constructor(
+    readonly code:
+      'AUTHORIZATION_REQUIRED' | 'OPERATION_INVALID' | 'OPERATION_EXPIRED' | 'CANDIDATE_INVALID',
+    message: string,
+  ) {
+    super(message);
+    this.name = 'UploadedBannerOperationError';
+  }
+}
+
+export interface UploadedBannerOperation {
+  readonly operationId: string;
+  readonly workspaceId: string;
+  readonly createdAtMs: number;
+  readonly expiresAtMs: number;
+  readonly source: UploadedBannerSamOperationResult['request']['source'];
+  readonly sourceBytes: Uint8Array;
+  readonly result: UploadedBannerSamOperationResult;
+  readonly projects: Map<
+    string,
+    Promise<Awaited<ReturnType<typeof materializeUploadedBannerOperationProjectV1>>>
+  >;
+  readonly saveLocks: Map<string, Promise<void>>;
+}
+
+const uploadedOperationRegistryKey = Symbol.for('fabrica.banner-ai.uploaded-operation.v1');
+const uploadedOperationRegistry = globalThis as typeof globalThis & {
+  [uploadedOperationRegistryKey]?: UploadedBannerOperation | null;
+};
+const getCurrent = (): UploadedBannerOperation | null =>
+  uploadedOperationRegistry[uploadedOperationRegistryKey] ?? null;
+const setCurrent = (value: UploadedBannerOperation | null): void => {
+  uploadedOperationRegistry[uploadedOperationRegistryKey] = value;
+};
+
+const assertId = (operationId: unknown): string => {
+  if (typeof operationId !== 'string' || !operationIdPattern.test(operationId)) {
+    throw new UploadedBannerOperationError(
+      'OPERATION_INVALID',
+      'The uploaded operation is invalid.',
+    );
+  }
+  return operationId;
+};
+
+const resolve = (
+  operationId: unknown,
+  authority: ActorWorkspaceContext,
+): UploadedBannerOperation => {
+  const id = assertId(operationId);
+  const operation = getCurrent();
+  if (
+    operation === null ||
+    operation.operationId !== id ||
+    operation.workspaceId !== authority.workspaceId
+  ) {
+    throw new UploadedBannerOperationError(
+      'OPERATION_INVALID',
+      'The uploaded operation is unknown or foreign.',
+    );
+  }
+  if (Date.now() >= operation.expiresAtMs) {
+    setCurrent(null);
+    throw new UploadedBannerOperationError(
+      'OPERATION_EXPIRED',
+      'The uploaded operation has expired.',
+    );
+  }
+  return operation;
+};
+
+export const createUploadedBannerOperation = async (input: {
+  readonly file: File;
+  readonly authority: ActorWorkspaceContext;
+  readonly generator?: UploadedBannerSamGenerator;
+}): Promise<{
+  readonly operationId: string;
+  readonly catalog: ReturnType<typeof uploadedCandidateCatalog>;
+}> => {
+  if (input.generator === undefined) {
+    throw new UploadedBannerOperationError(
+      'AUTHORIZATION_REQUIRED',
+      'Real SAM generation requires authorization before transport construction.',
+    );
+  }
+  const bytes = new Uint8Array(await input.file.arrayBuffer());
+  const normalized = await normalizeRasterUpload({
+    bytes: byteSourceFrom(bytes),
+    declaredMediaType: input.file.type,
+    filename: input.file.name,
+  });
+  const result = await generateUploadedBannerSamCandidates({
+    normalizedPng: normalized.bytes,
+    requestId: randomUUID(),
+    workspaceId: randomUUID(),
+    jobId: randomUUID(),
+    attemptId: randomUUID(),
+    generator: input.generator,
+  });
+  const aggregateBytes =
+    normalized.byteSize +
+    result.candidates.reduce(
+      (sum, candidate) =>
+        sum + candidate.materialization.cutoutPng.byteLength + candidate.preview.byteSize,
+      0,
+    );
+  if (aggregateBytes > MAX_OPERATION_BYTES) {
+    throw new UploadedBannerOperationError(
+      'OPERATION_INVALID',
+      'The uploaded operation exceeds its byte bound.',
+    );
+  }
+  const now = Date.now();
+  const operation: UploadedBannerOperation = Object.freeze({
+    operationId: randomBytes(32).toString('hex'),
+    workspaceId: input.authority.workspaceId,
+    createdAtMs: now,
+    expiresAtMs: now + OPERATION_TTL_MS,
+    source: result.request.source,
+    sourceBytes: Uint8Array.from(normalized.bytes),
+    result,
+    projects: new Map(),
+    saveLocks: new Map(),
+  });
+  setCurrent(operation);
+  return { operationId: operation.operationId, catalog: uploadedCandidateCatalog(operation) };
+};
+
+export const uploadedCandidateCatalog = (operation: UploadedBannerOperation) =>
+  Object.freeze(
+    operation.result.candidates.map((candidate, index) =>
+      Object.freeze({
+        candidateId: candidate.candidateId,
+        order: index + 1,
+        bounds: {
+          x: candidate.bounds.xBps,
+          y: candidate.bounds.yBps,
+          width: candidate.bounds.widthBps,
+          height: candidate.bounds.heightBps,
+        },
+        pixelArea: candidate.pixelArea,
+        areaRatioBps: candidate.areaRatioBps,
+        thumbnail: Object.freeze({
+          byteSize: candidate.preview.byteSize,
+          pixelWidth: candidate.preview.pixelWidth,
+          pixelHeight: candidate.preview.pixelHeight,
+          sha256: candidate.preview.sha256,
+          dataUrl: candidate.preview.dataUrl,
+        }),
+        provenance: 'Deterministic test output — NOT SAM OUTPUT' as const,
+      }),
+    ),
+  );
+
+export const resolveUploadedBannerOperation = (
+  operationId: unknown,
+  authority: ActorWorkspaceContext,
+) => resolve(operationId, authority);
+
+export const resolveUploadedBannerCandidate = (
+  operationId: unknown,
+  candidateId: unknown,
+  authority: ActorWorkspaceContext,
+) => {
+  const operation = resolve(operationId, authority);
+  if (typeof candidateId !== 'string') {
+    throw new UploadedBannerOperationError('CANDIDATE_INVALID', 'The candidate ID is invalid.');
+  }
+  const candidate = operation.result.candidates.find((entry) => entry.candidateId === candidateId);
+  if (candidate === undefined) {
+    throw new UploadedBannerOperationError(
+      'CANDIDATE_INVALID',
+      'The candidate is not owned by this operation.',
+    );
+  }
+  return { operation, candidate };
+};
+
+export const openUploadedBannerProject = async (input: {
+  readonly operationId: unknown;
+  readonly candidateId: unknown;
+  readonly authority: ActorWorkspaceContext;
+}) => {
+  const { operation, candidate } = resolveUploadedBannerCandidate(
+    input.operationId,
+    input.candidateId,
+    input.authority,
+  );
+  let project = operation.projects.get(candidate.candidateId);
+  if (project === undefined) {
+    project = materializeUploadedBannerOperationProjectV1({
+      source: operation.sourceBytes,
+      subject: candidate.materialization.cutoutPng,
+      candidateId: candidate.candidateId,
+      bounds: candidate.bounds,
+    });
+    operation.projects.set(candidate.candidateId, project);
+  }
+  return { operation, candidate, materialization: await project };
+};
+
+export const resetUploadedBannerOperationRegistryForTests = (): void => {
+  setCurrent(null);
+};
+
+const projectFor = async (
+  operationId: unknown,
+  candidateId: unknown,
+  authority: ActorWorkspaceContext,
+) => {
+  const opened = await openUploadedBannerProject({ operationId, candidateId, authority });
+  return opened;
+};
+
+const assertProject = async (input: {
+  readonly operationId: unknown;
+  readonly candidateId: unknown;
+  readonly project: unknown;
+  readonly authority: ActorWorkspaceContext;
+}) => {
+  const opened = await projectFor(input.operationId, input.candidateId, input.authority);
+  const project = parseProviderFreeBannerProjectV1(input.project);
+  if (canonicalizeJson(project) !== canonicalizeJson(opened.materialization.project)) {
+    throw new UploadedBannerOperationError(
+      'OPERATION_INVALID',
+      'The uploaded project is foreign to this operation.',
+    );
+  }
+  return { ...opened, project };
+};
+
+export const saveUploadedBannerProject = async (input: {
+  readonly operationId: unknown;
+  readonly candidateId: unknown;
+  readonly project: unknown;
+  readonly scene: unknown;
+  readonly selectedPartId: unknown;
+  readonly authority: ActorWorkspaceContext;
+}) => {
+  const initial = await resolveUploadedBannerCandidate(
+    input.operationId,
+    input.candidateId,
+    input.authority,
+  );
+  const prior = initial.operation.saveLocks.get(initial.candidate.candidateId) ?? Promise.resolve();
+  let release!: () => void;
+  const lock = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const queued = prior.then(() => lock);
+  initial.operation.saveLocks.set(initial.candidate.candidateId, queued);
+  await prior;
+  try {
+    const opened = await assertProject(input);
+    const parsed = parseBannerSceneV1(input.scene);
+    if (!parsed.success || typeof input.selectedPartId !== 'string') {
+      throw new UploadedBannerOperationError(
+        'OPERATION_INVALID',
+        'The uploaded scene draft is invalid.',
+      );
+    }
+    const project = appendProviderFreeBannerProjectRevisionV1({
+      project: opened.project,
+      scene: parsed.data,
+      selectedPartId: input.selectedPartId as never,
+    });
+    opened.operation.projects.set(
+      opened.candidate.candidateId,
+      Promise.resolve({ ...opened.materialization, project }),
+    );
+    return {
+      project,
+      canonicalProjectJson: canonicalizeJson(project),
+      presentation: opened.materialization,
+    };
+  } finally {
+    release();
+    if (initial.operation.saveLocks.get(initial.candidate.candidateId) === queued)
+      initial.operation.saveLocks.delete(initial.candidate.candidateId);
+  }
+};
+
+export const createUploadedBannerPreview = async (input: {
+  readonly operationId: unknown;
+  readonly candidateId: unknown;
+  readonly project: unknown;
+  readonly revision: unknown;
+  readonly sceneSha256: unknown;
+  readonly sceneVersionId: unknown;
+  readonly nonce: unknown;
+  readonly authority: ActorWorkspaceContext;
+}) => {
+  if (typeof input.nonce !== 'string' || !/^[0-9a-f]{32}$/u.test(input.nonce))
+    throw new UploadedBannerOperationError('OPERATION_INVALID', 'The preview nonce is invalid.');
+  const checked = await assertProject(input);
+  const revision = checked.project.revisions.at(-1)!;
+  if (
+    input.revision !== revision.revision ||
+    input.sceneSha256 !== revision.sceneSha256 ||
+    input.sceneVersionId !== revision.sceneVersionId
+  )
+    throw new UploadedBannerOperationError(
+      'OPERATION_INVALID',
+      'The uploaded scene capture is stale.',
+    );
+  const bytes = createBannerSceneV1PreviewDocument({
+    plan: createBannerSceneV1RenderPlan(revision.scene),
+    assets: checked.materialization.assets,
+    nonce: input.nonce,
+  });
+  if (bytes.byteLength > MAX_PREVIEW_DOCUMENT_BYTES)
+    throw new UploadedBannerOperationError(
+      'OPERATION_INVALID',
+      'The uploaded preview exceeds its response limit.',
+    );
+  return {
+    contentBase64: Buffer.from(bytes).toString('base64'),
+    mediaType: 'text/html',
+    byteSize: bytes.byteLength,
+    nonce: input.nonce,
+    sceneSha256: revision.sceneSha256,
+  };
+};
+
+export const createUploadedBannerExport = async (input: {
+  readonly operationId: unknown;
+  readonly candidateId: unknown;
+  readonly project: unknown;
+  readonly revision: unknown;
+  readonly sceneSha256: unknown;
+  readonly sceneVersionId: unknown;
+  readonly authority: ActorWorkspaceContext;
+}) => {
+  const checked = await assertProject(input);
+  const revision = checked.project.revisions.at(-1)!;
+  if (
+    input.revision !== revision.revision ||
+    input.sceneSha256 !== revision.sceneSha256 ||
+    input.sceneVersionId !== revision.sceneVersionId
+  )
+    throw new UploadedBannerOperationError(
+      'OPERATION_INVALID',
+      'The uploaded scene capture is stale.',
+    );
+  const request = BannerExportRequestSchema.parse({
+    scene: revision.scene,
+    sceneVersionId: revision.sceneVersionId,
+    sceneRevision: revision.revision,
+    sceneWorkflow: revision.sceneWorkflow,
+    exportWorkflow: {
+      workflowVersionId: PROVIDER_FREE_BANNER_EXPORT_WORKFLOW_V1.workflowVersionId,
+      workflowVersion: PROVIDER_FREE_BANNER_EXPORT_WORKFLOW_V1.workflowVersion,
+      definitionSha256: PROVIDER_FREE_BANNER_EXPORT_WORKFLOW_V1.definitionSha256,
+    },
+    exporter: PROVIDER_FREE_EXPORTER_V1,
+    assets: checked.materialization.assets,
+    deadlineAtMs: Date.now() + 60_000,
+    cancellation: Object.freeze({ cancelled: false, throwIfCancelled(): void {} }),
+  });
+  const result = await createProviderFreeBannerExporterV1().export(request);
+  const validated = await validateBannerExportResult({ request, result });
+  if (validated.artifact.mediaType !== 'application/zip') {
+    throw new UploadedBannerOperationError(
+      'OPERATION_INVALID',
+      'The uploaded exporter returned a non-ZIP artifact.',
+    );
+  }
+  const manifest = validated.manifest;
+  const bytesBase64 = Buffer.from(validated.artifact.bytes).toString('base64');
+  if (
+    bytesBase64.length > MAX_EXPORT_RESPONSE_BYTES ||
+    Buffer.byteLength(JSON.stringify({ ok: true, data: { artifact: { bytesBase64 } } }), 'utf8') >
+      MAX_EXPORT_RESPONSE_BYTES
+  )
+    throw new UploadedBannerOperationError(
+      'OPERATION_INVALID',
+      'The uploaded export exceeds its response limit.',
+    );
+  const validationRequest = {
+    artifact: validated.artifact,
+    profile: PROVIDER_FREE_INTERNAL_VALIDATOR_PROFILE_V1,
+  };
+  const validator = createProviderFreeInternalValidatorV1({ exportRequest: request, manifest });
+  const validation = validateInternalGdnValidationResult({
+    request: validationRequest,
+    result: await validator.validate(validationRequest),
+  });
+  return {
+    artifact: {
+      bytesBase64,
+      byteSize: validated.artifact.byteSize,
+      filename: `uploaded-deterministic-test-r${revision.revision}-${validated.artifact.sha256.slice(0, 12)}.zip`,
+      mediaType: validated.artifact.mediaType,
+      sha256: validated.artifact.sha256,
+      validationLabel: validated.artifact.validationLabel,
+    },
+    manifest,
+    sceneSha256: sha256BannerScene(revision.scene),
+    validation,
+  };
+};

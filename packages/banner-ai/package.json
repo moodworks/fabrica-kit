@@ -15,6 +15,10 @@
     "./server/sam-box-prompt-layer-extraction": {
       "types": "./src/server/sam-box-prompt-layer-extraction.ts",
       "default": "./src/server/sam-box-prompt-layer-extraction.ts"
+    },
+    "./server/uploaded-banner-sam-operation-v1": {
+      "types": "./src/server/uploaded-banner-sam-operation-v1.ts",
+      "default": "./src/server/uploaded-banner-sam-operation-v1.ts"
     }
   },
   "scripts": {

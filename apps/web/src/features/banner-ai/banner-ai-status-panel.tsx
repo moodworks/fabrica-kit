@@ -14,18 +14,18 @@ const statusLabel = Object.freeze({
   failed: 'Failed',
 } satisfies Record<BannerAiPhase, string>);
 
-const statusCopy = (phase: BannerAiPhase, ready: boolean): string => {
+export const bannerAiStatusCopy = (phase: BannerAiPhase, ready: boolean): string => {
   switch (phase) {
     case 'idle':
       return ready
-        ? 'The image is ready for the local fixture.'
+        ? 'The image is ready for bounded deterministic automatic candidates.'
         : 'Select one JPG or PNG to begin.';
     case 'validating':
       return 'Validating the selected image and decoding its dimensions in this browser.';
     case 'running':
-      return 'Running the trusted provider-free composition fixture.';
+      return 'Generating bounded deterministic automatic candidates — NOT SAM OUTPUT.';
     case 'succeeded':
-      return 'The provider-free fixture returned a validated composition proposal.';
+      return 'Deterministic automatic candidates are ready — NOT SAM OUTPUT.';
     case 'failed':
       return 'The current operation could not be completed.';
   }
@@ -83,7 +83,7 @@ export function BannerAiStatusPanel({
         <span className={`status-dot status-dot-${phase}`} aria-hidden="true" />
       </div>
       <p className="status-copy" role="status" aria-live="polite" aria-atomic="true">
-        {statusCopy(phase, ready)}
+        {bannerAiStatusCopy(phase, ready)}
       </p>
 
       {phase === 'validating' || phase === 'running' ? (
@@ -103,8 +103,8 @@ export function BannerAiStatusPanel({
         <div className="result-panel">
           <div className="result-heading">
             <div>
-              <p className="section-kicker">Provider-free fixture proposal</p>
-              <h3>Fixture-proposed parts</h3>
+              <p className="section-kicker">Deterministic test output — NOT SAM OUTPUT</p>
+              <h3>Candidate layer controls</h3>
             </div>
             <span>{result.proposal.parts.length} parts</span>
           </div>

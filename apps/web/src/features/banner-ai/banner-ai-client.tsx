@@ -1,9 +1,12 @@
 'use client';
 
 import Link from 'next/link';
-import { useEffect, useReducer, useRef, type ChangeEvent } from 'react';
+import { useEffect, useReducer, useRef, useState, type ChangeEvent } from 'react';
 
-import { requestLocalFixtureAnalysis } from './banner-ai-api';
+import {
+  requestUploadedBannerOperation,
+  type UploadedBannerOperationData,
+} from './banner-ai-project-api';
 import { BannerAiSourceImage } from './banner-ai-source-image';
 import { BannerAiStatusPanel } from './banner-ai-status-panel';
 import {
@@ -27,6 +30,9 @@ export function BannerAiClient() {
   const fileRef = useRef<File | null>(null);
   const previewUrlRef = useRef<string | null>(null);
   const requestRevisionRef = useRef(0);
+  const [uploadedOperation, setUploadedOperation] = useState<UploadedBannerOperationData | null>(
+    null,
+  );
 
   useEffect(
     () => () => {
@@ -48,6 +54,7 @@ export function BannerAiClient() {
 
   const selectFile = async (file: File | undefined): Promise<void> => {
     const requestRevision = nextRequestRevision();
+    setUploadedOperation(null);
     clearPreview();
     if (file === undefined) {
       dispatch({ type: 'selection_cleared', requestRevision });
@@ -88,11 +95,14 @@ export function BannerAiClient() {
     const requestRevision = nextRequestRevision();
     dispatch({ type: 'analysis_started', requestRevision });
     try {
-      const result = await requestLocalFixtureAnalysis(file);
+      const operation = await requestUploadedBannerOperation(file);
       if (requestRevisionRef.current !== requestRevision) return;
-      dispatch({ type: 'analysis_succeeded', requestRevision, result });
+      setUploadedOperation(operation);
+      if (requestRevisionRef.current !== requestRevision) return;
+      dispatch({ type: 'uploaded_succeeded', requestRevision });
     } catch (error) {
       if (requestRevisionRef.current !== requestRevision) return;
+      setUploadedOperation(null);
       dispatch({
         type: 'analysis_failed',
         requestRevision,
@@ -117,9 +127,9 @@ export function BannerAiClient() {
           <h1>See a banner as editable parts.</h1>
         </div>
         <p>
-          Upload one JPG or PNG. The trusted local boundary normalizes it, then an exact data-only
-          fixture proposes the scene composition—without a model, provider key, database, network,
-          or cost.
+          Upload one JPG or PNG. The trusted local boundary normalizes it, then bounded
+          deterministic automatic candidates are generated for manual selection. They are NOT SAM
+          OUTPUT and use no provider key, database, network, or cost.
         </p>
       </header>
 
@@ -221,17 +231,45 @@ export function BannerAiClient() {
 
           <div className="analysis-action">
             <div>
-              <strong>Trusted local fixture</strong>
-              <span>The server revalidates every byte before analysis.</span>
+              <strong>Bounded deterministic automatic candidates</strong>
+              <span>
+                Development test output — NOT SAM OUTPUT. The server revalidates every byte.
+              </span>
             </div>
             <button
               type="button"
               onClick={() => void analyze()}
               disabled={state.selection === null || busy}
             >
-              {state.phase === 'running' ? 'Analyzing…' : 'Analyze with local fixture'}
+              {state.phase === 'running'
+                ? 'Generating candidates…'
+                : 'Generate automatic candidates'}
             </button>
           </div>
+
+          {uploadedOperation !== null ? (
+            <section
+              aria-labelledby="uploaded-candidates-title"
+              className="editor-candidate-picker"
+            >
+              <p className="section-kicker">02 · Layers</p>
+              <h2 id="uploaded-candidates-title">Choose a cutout to edit</h2>
+              <p>These are deterministic development candidates, not live Meta SAM output.</p>
+              <div className="editor-candidate-choice">
+                {uploadedOperation.candidates.map((candidate) => (
+                  <Link
+                    key={candidate.candidateId}
+                    className="demo-project-link"
+                    href={`/banner-ai/editor?operation=${encodeURIComponent(uploadedOperation.operationId)}&candidate=${encodeURIComponent(candidate.candidateId)}`}
+                  >
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img src={candidate.thumbnail.dataUrl} alt={`Candidate ${candidate.order}`} />
+                    Candidate {candidate.order}
+                  </Link>
+                ))}
+              </div>
+            </section>
+          ) : null}
         </section>
 
         <BannerAiStatusPanel

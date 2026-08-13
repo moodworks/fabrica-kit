@@ -22,6 +22,11 @@ import {
   requestProviderFreeCandidateCatalog,
   openProviderFreeCandidate,
   saveProviderFreeProject,
+  openUploadedBannerCandidate,
+  saveUploadedBannerProject,
+  requestUploadedBannerPreview,
+  requestUploadedBannerExport,
+  type UploadedBannerBinding,
   type ProviderFreeOperationCapture,
 } from './banner-ai-project-api';
 import type { ProviderFreeCandidateChoice } from './banner-ai-project-contract';
@@ -99,17 +104,50 @@ interface OperationLease {
   readonly operationId: number;
 }
 
+type EditorQuery =
+  | { readonly kind: 'fixed' }
+  | { readonly kind: 'uploaded'; readonly binding: UploadedBannerBinding }
+  | { readonly kind: 'invalid' };
+
+const editorQueryFromLocation = (): EditorQuery => {
+  if (typeof window === 'undefined') return { kind: 'fixed' };
+  const params = new URLSearchParams(window.location.search);
+  const operation = params.get('operation');
+  const candidate = params.get('candidate');
+  const queryKeys = [...params.keys()];
+  if (queryKeys.length === 0) return { kind: 'fixed' };
+  if (
+    queryKeys.length !== 2 ||
+    new Set(queryKeys).size !== 2 ||
+    !queryKeys.includes('operation') ||
+    !queryKeys.includes('candidate')
+  ) {
+    return { kind: 'invalid' };
+  }
+  if (
+    operation !== null &&
+    candidate !== null &&
+    /^[0-9a-f]{64}$/u.test(operation) &&
+    /^samc_v1_[0-9a-f]{64}$/u.test(candidate)
+  ) {
+    return { kind: 'uploaded', binding: { operationId: operation, candidateId: candidate } };
+  }
+  return { kind: 'invalid' };
+};
+
 const sameLease = (left: OperationLease | null, right: OperationLease): boolean =>
   left?.lifecycleId === right.lifecycleId && left.operationId === right.operationId;
 
 export function BannerAiProjectEditor() {
   const [state, dispatch] = useReducer(bannerAiProjectReducer, initialBannerAiProjectState);
+  const [query, setQuery] = useState<EditorQuery | null>(null);
   const [resetConfirmation, setResetConfirmation] = useState(false);
   const [reducedMotion, setReducedMotion] = useState(false);
   const [candidateCatalog, setCandidateCatalog] = useState<
     readonly ProviderFreeCandidateChoice[] | null
   >(null);
   const [candidateChoice, setCandidateChoice] = useState<string | null>(null);
+  const uploadedBinding = query?.kind === 'uploaded' ? query.binding : null;
   const [catalogLoading, setCatalogLoading] = useState(false);
   const lifecycleIdRef = useRef(0);
   const operationIdRef = useRef(0);
@@ -175,7 +213,10 @@ export function BannerAiProjectEditor() {
     (data: Awaited<ReturnType<typeof requestProviderFreeProject>>, lifecycleId: number): void => {
       if (lifecycleIdRef.current !== lifecycleId) return;
       setCandidateChoice(data.presentation.candidateId);
-      const write = writeStoredProviderFreeProject(localStorage, data.canonicalProjectJson);
+      const write =
+        uploadedBinding === null
+          ? writeStoredProviderFreeProject(localStorage, data.canonicalProjectJson)
+          : { success: true as const };
       if (lifecycleIdRef.current !== lifecycleId) return;
       dispatch({
         type: 'open_succeeded',
@@ -184,13 +225,18 @@ export function BannerAiProjectEditor() {
         persistence: write.success ? 'available' : 'unavailable',
       });
     },
-    [],
+    [uploadedBinding],
   );
 
   const openFreshProject = useCallback(
     async (lifecycleId: number, candidateId: string): Promise<void> => {
       try {
-        acceptOpenedProject(await openProviderFreeCandidate(candidateId), lifecycleId);
+        acceptOpenedProject(
+          uploadedBinding === null
+            ? await openProviderFreeCandidate(candidateId)
+            : await openUploadedBannerCandidate(uploadedBinding),
+          lifecycleId,
+        );
       } catch (error) {
         if (lifecycleIdRef.current !== lifecycleId) return;
         dispatch({
@@ -201,7 +247,7 @@ export function BannerAiProjectEditor() {
         });
       }
     },
-    [acceptOpenedProject],
+    [acceptOpenedProject, uploadedBinding],
   );
 
   const reopenStored = useCallback(
@@ -241,13 +287,45 @@ export function BannerAiProjectEditor() {
   );
 
   useEffect(() => {
+    // The location is browser-only; defer parsing until after hydration.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setQuery(editorQueryFromLocation());
+  }, []);
+
+  useEffect(() => {
+    if (query === null) return;
+    if (query.kind === 'invalid') {
+      dispatch({
+        type: 'open_failed',
+        lifecycleId: 0,
+        corrupt: false,
+        error: {
+          code: 'INVALID_EDITOR_QUERY',
+          message:
+            'This uploaded editor link is invalid. Return to Banner AI and choose a candidate again.',
+        },
+      });
+      return;
+    }
+    if (uploadedBinding !== null) {
+      const lifecycleId = beginProjectLifecycle();
+      void openFreshProject(lifecycleId, uploadedBinding.candidateId);
+      return;
+    }
     const stored = readStoredProviderFreeProject(localStorage);
     if (stored.status !== 'available') return;
     const lifecycleId = beginProjectLifecycle();
     void reopenStored(stored.canonicalProjectJson, lifecycleId);
-  }, [beginProjectLifecycle, reopenStored]);
+  }, [beginProjectLifecycle, reopenStored, openFreshProject, uploadedBinding, query]);
 
   const openProject = async (): Promise<void> => {
+    if (query?.kind === 'invalid') return;
+    if (uploadedBinding !== null) {
+      if (state.opening === 'loading') return;
+      const lifecycleId = beginProjectLifecycle();
+      await openFreshProject(lifecycleId, uploadedBinding.candidateId);
+      return;
+    }
     const stored = readStoredProviderFreeProject(localStorage);
     if (stored.status === 'unavailable' || stored.status === 'missing') {
       if (candidateCatalog !== null && candidateChoice !== null) {
@@ -414,13 +492,22 @@ export function BannerAiProjectEditor() {
     saveActiveRef.current = lease;
     dispatch({ type: 'save_started', ...lease });
     try {
-      const data = await saveProviderFreeProject({
-        project: projectData.project,
-        scene: draftScene,
-        selectedPartId: state.selectedPartId,
-      });
+      const data = await (uploadedBinding === null
+        ? saveProviderFreeProject({
+            project: projectData.project,
+            scene: draftScene,
+            selectedPartId: state.selectedPartId,
+          })
+        : saveUploadedBannerProject(uploadedBinding, {
+            project: projectData.project,
+            scene: draftScene,
+            selectedPartId: state.selectedPartId,
+          }));
       if (!leaseIsCurrent(saveActiveRef.current, lease)) return;
-      const write = writeStoredProviderFreeProject(localStorage, data.canonicalProjectJson);
+      const write =
+        uploadedBinding === null
+          ? writeStoredProviderFreeProject(localStorage, data.canonicalProjectJson)
+          : { success: true as const };
       if (!leaseIsCurrent(saveActiveRef.current, lease)) return;
       if (!write.success) {
         dispatch({
@@ -465,7 +552,9 @@ export function BannerAiProjectEditor() {
       revokePreviewUrl();
       dispatch({ type: 'preview_started', ...lease, capture, nonce });
       try {
-        const result = await requestProviderFreePreview(capture, nonce);
+        const result = await (uploadedBinding === null
+          ? requestProviderFreePreview(capture, nonce)
+          : requestUploadedBannerPreview(uploadedBinding, capture, nonce));
         if (!leaseIsCurrent(previewActiveRef.current, lease)) return;
         if (
           result.nonce !== nonce ||
@@ -500,7 +589,7 @@ export function BannerAiProjectEditor() {
         if (sameLease(previewActiveRef.current, lease)) previewActiveRef.current = null;
       }
     },
-    [revokePreviewUrl],
+    [revokePreviewUrl, uploadedBinding],
   );
 
   const previewAccepted = (): void => {
@@ -569,7 +658,9 @@ export function BannerAiProjectEditor() {
     exportActiveRef.current = lease;
     dispatch({ type: 'export_started', ...lease, capture });
     try {
-      const result = await requestProviderFreeExport(capture);
+      const result = await (uploadedBinding === null
+        ? requestProviderFreeExport(capture)
+        : requestUploadedBannerExport(uploadedBinding, capture));
       if (!leaseIsCurrent(exportActiveRef.current, lease)) return;
       dispatch({ type: 'export_validating', ...lease });
       if (
@@ -622,12 +713,20 @@ export function BannerAiProjectEditor() {
           <span>Provider-free editor</span>
         </nav>
         <section className="editor-open-card" aria-labelledby="editor-open-title">
-          <p className="section-kicker">Verified replay · development-only · 300 × 200</p>
-          <h1 id="editor-open-title">Open the verified Meta SAM replay project.</h1>
+          <p className="section-kicker">
+            {uploadedBinding === null
+              ? 'Verified replay · development-only · 300 × 200'
+              : 'Uploaded operation · development-only · 300 × 200'}
+          </p>
+          <h1 id="editor-open-title">
+            {uploadedBinding === null
+              ? 'Open the verified Meta SAM replay project.'
+              : 'Open the selected uploaded candidate.'}
+          </h1>
           <p>
-            This fixed local project preserves eight validated real Meta SAM automatic candidates.
-            Choose one before opening. There is no live provider call, Qwen box output,
-            reconstruction, or product admission.
+            {uploadedBinding === null
+              ? 'This fixed local project preserves eight validated real Meta SAM automatic candidates. Choose one before opening. There is no live provider call, Qwen box output, reconstruction, or product admission.'
+              : 'This operation is bound to the uploaded source and selected candidate. Its deterministic test output is not SAM output; there is no live provider call or product admission.'}
           </p>
           {state.openingError === null ? null : (
             <div className="editor-operation-error" role="alert">
@@ -635,7 +734,7 @@ export function BannerAiProjectEditor() {
               <span>{state.openingError.message}</span>
             </div>
           )}
-          {candidateCatalog === null ? null : (
+          {uploadedBinding !== null || candidateCatalog === null ? null : (
             <fieldset className="editor-candidate-picker">
               <legend>Choose a preserved Meta SAM candidate</legend>
               {candidateCatalog.map((candidate) => (
@@ -657,24 +756,40 @@ export function BannerAiProjectEditor() {
               ))}
             </fieldset>
           )}
+          {query?.kind === 'invalid' ? (
+            <Link className="demo-project-link" href="/banner-ai">
+              Return to Banner AI
+            </Link>
+          ) : null}
           <div className="editor-operation-actions">
             <button
               ref={openButtonRef}
               type="button"
               onClick={() => void openProject()}
               disabled={
-                catalogLoading || state.opening === 'loading' || state.persistence === 'corrupt'
+                query === null ||
+                query.kind === 'invalid' ||
+                (uploadedBinding === null &&
+                  (catalogLoading ||
+                    state.opening === 'loading' ||
+                    state.persistence === 'corrupt'))
               }
             >
-              {catalogLoading
-                ? 'Loading preserved candidates…'
-                : state.opening === 'loading'
-                  ? 'Opening approved demo…'
-                  : candidateCatalog === null
-                    ? 'Open approved demo project'
-                    : 'Open selected candidate'}
+              {uploadedBinding !== null
+                ? state.opening === 'loading'
+                  ? 'Opening uploaded candidate…'
+                  : 'Retry opening candidate'
+                : catalogLoading
+                  ? 'Loading preserved candidates…'
+                  : state.opening === 'loading'
+                    ? 'Opening approved demo…'
+                    : candidateCatalog === null
+                      ? 'Open approved demo project'
+                      : 'Open selected candidate'}
             </button>
-            {state.persistence === 'corrupt' ? (
+            {query?.kind !== 'invalid' &&
+            uploadedBinding === null &&
+            state.persistence === 'corrupt' ? (
               <button
                 ref={resetButtonRef}
                 className="editor-secondary-button"
@@ -722,14 +837,34 @@ export function BannerAiProjectEditor() {
 
       <header className="editor-project-header" aria-labelledby="editor-project-title">
         <div>
-          <p className="section-kicker">Verified Meta SAM replay · development-only</p>
-          <h1 id="editor-project-title">{projectData.project.displayName}</h1>
+          <p className="section-kicker">
+            {uploadedBinding === null
+              ? 'Verified Meta SAM replay · development-only'
+              : 'Uploaded operation · development-only · deterministic test output'}
+          </p>
+          <h1 id="editor-project-title">
+            {uploadedBinding === null
+              ? projectData.project.displayName
+              : 'Uploaded banner candidate'}
+          </h1>
           <p>
-            Exact replay fixture <code>{projectData.project.fixtureId}</code> · 300 × 200 canvas
+            {uploadedBinding === null ? (
+              <>
+                Exact replay fixture <code>{projectData.project.fixtureId}</code> · 300 × 200 canvas
+              </>
+            ) : (
+              <>
+                Candidate <code>{uploadedBinding.candidateId}</code> · 300 × 200 canvas
+              </>
+            )}
           </p>
         </div>
         <div className="editor-project-actions">
-          <span className="local-badge">Replay · no live provider call</span>
+          <span className="local-badge">
+            {uploadedBinding === null
+              ? 'Replay · no live provider call'
+              : 'Test output · NOT SAM OUTPUT'}
+          </span>
           <button
             type="button"
             onClick={() => void save()}
@@ -741,14 +876,16 @@ export function BannerAiProjectEditor() {
           >
             {working ? 'Saving revision…' : 'Save changes'}
           </button>
-          <button
-            ref={resetButtonRef}
-            className="editor-secondary-button"
-            type="button"
-            onClick={() => setResetConfirmation(true)}
-          >
-            Reset demo project
-          </button>
+          {uploadedBinding === null ? (
+            <button
+              ref={resetButtonRef}
+              className="editor-secondary-button"
+              type="button"
+              onClick={() => setResetConfirmation(true)}
+            >
+              Reset demo project
+            </button>
+          ) : null}
         </div>
       </header>
 
@@ -759,13 +896,15 @@ export function BannerAiProjectEditor() {
         </div>
         <p role="status" aria-live="polite" aria-atomic="true">
           {state.draftStatus === 'clean'
-            ? 'Saved locally and accepted.'
+            ? uploadedBinding === null
+              ? 'Saved locally and accepted.'
+              : 'Accepted in this temporary operation.'
             : state.draftStatus === 'dirty'
               ? 'Unsaved scene changes.'
               : state.draftStatus === 'saving'
                 ? 'Validating and saving a new append-only revision.'
                 : 'Save failed; the accepted revision and draft are preserved.'}
-          {state.persistence === 'unavailable'
+          {uploadedBinding === null && state.persistence === 'unavailable'
             ? ' Browser persistence is unavailable; accepted in-memory state remains.'
             : ''}
         </p>
@@ -798,7 +937,9 @@ export function BannerAiProjectEditor() {
           <h2 id="editor-source-reference-title">Source banner</h2>
           <p>Reference only — this is the original input, not an editable layer.</p>
           <p className="editor-source-reference-meta">
-            876 × 221 · {projectData.presentation.source.asset.sha256}
+            {projectData.presentation.source.asset.pixelWidth} ×{' '}
+            {projectData.presentation.source.asset.pixelHeight} ·{' '}
+            {projectData.presentation.source.asset.sha256}
           </p>
         </div>
         {/* eslint-disable-next-line @next/next/no-img-element -- bounded in-memory validated data URL */}
