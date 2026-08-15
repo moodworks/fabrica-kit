@@ -22,6 +22,7 @@ import {
 } from '@fabrica/banner-ai';
 import {
   generateUploadedBannerSamCandidates,
+  composeUploadedBannerSamCandidates,
   type UploadedBannerSamGenerator,
   type UploadedBannerSamOperationResult,
 } from '@fabrica/banner-ai/server/uploaded-banner-sam-operation-v1';
@@ -61,6 +62,21 @@ export interface UploadedBannerOperation {
     string,
     Promise<Awaited<ReturnType<typeof materializeUploadedBannerOperationProjectV1>>>
   >;
+  readonly composed: Map<
+    string,
+    Promise<{
+      readonly subjectId: string;
+      readonly candidate: UploadedBannerSamOperationResult['candidates'][number];
+    }>
+  >;
+  readonly resolvedSubjects: Map<
+    string,
+    {
+      readonly subjectId: string;
+      readonly candidate: UploadedBannerSamOperationResult['candidates'][number];
+    }
+  >;
+  composedBytes: number;
   readonly saveLocks: Map<string, Promise<void>>;
 }
 
@@ -166,7 +182,7 @@ export const createUploadedBannerOperation = async (input: {
     );
   }
   const now = Date.now();
-  const operation: UploadedBannerOperation = Object.freeze({
+  const operation: UploadedBannerOperation = {
     operationId: randomBytes(32).toString('hex'),
     workspaceId: input.authority.workspaceId,
     createdAtMs: now,
@@ -175,8 +191,11 @@ export const createUploadedBannerOperation = async (input: {
     sourceBytes: Uint8Array.from(normalized.bytes),
     result,
     projects: new Map(),
+    composed: new Map(),
+    resolvedSubjects: new Map(),
+    composedBytes: 0,
     saveLocks: new Map(),
-  });
+  };
   setCurrent(operation);
   return { operationId: operation.operationId, catalog: uploadedCandidateCatalog(operation) };
 };
@@ -186,6 +205,10 @@ export const uploadedCandidateCatalog = (operation: UploadedBannerOperation) =>
     operation.result.candidates.map((candidate, index) =>
       Object.freeze({
         candidateId: candidate.candidateId,
+        source: {
+          width: operation.result.request.source.width,
+          height: operation.result.request.source.height,
+        },
         order: index + 1,
         bounds: {
           x: candidate.bounds.xBps,
@@ -193,6 +216,7 @@ export const uploadedCandidateCatalog = (operation: UploadedBannerOperation) =>
           width: candidate.bounds.widthBps,
           height: candidate.bounds.heightBps,
         },
+        crop: candidate.materialization.metadata.crop,
         pixelArea: candidate.pixelArea,
         areaRatioBps: candidate.areaRatioBps,
         thumbnail: Object.freeze({
@@ -231,25 +255,117 @@ export const resolveUploadedBannerCandidate = (
   return { operation, candidate };
 };
 
+export const composeUploadedBannerOperation = async (input: {
+  readonly operationId: unknown;
+  readonly candidateIds: unknown;
+  readonly authority: ActorWorkspaceContext;
+}) => {
+  const operation = resolve(input.operationId, input.authority);
+  if (
+    !Array.isArray(input.candidateIds) ||
+    input.candidateIds.length < 1 ||
+    input.candidateIds.length > 8 ||
+    input.candidateIds.some((id) => typeof id !== 'string') ||
+    new Set(input.candidateIds).size !== input.candidateIds.length
+  )
+    throw new UploadedBannerOperationError(
+      'CANDIDATE_INVALID',
+      'Select one to eight unique candidates.',
+    );
+  const requestedIds = input.candidateIds as string[];
+  const ids = operation.result.candidates
+    .filter((candidate) => requestedIds.includes(candidate.candidateId))
+    .map((candidate) => candidate.candidateId);
+  if (ids.length !== requestedIds.length)
+    throw new UploadedBannerOperationError(
+      'CANDIDATE_INVALID',
+      'The candidate is not owned by this operation.',
+    );
+  const key = operation.result.candidates
+    .map((candidate) => (ids.includes(candidate.candidateId) ? candidate.candidateId : ''))
+    .filter(Boolean)
+    .join(',');
+  let composed = operation.composed.get(key);
+  if (composed === undefined) {
+    if (operation.composed.size >= 8)
+      throw new UploadedBannerOperationError(
+        'OPERATION_INVALID',
+        'The operation has reached its combined-subject limit.',
+      );
+    composed = composeUploadedBannerSamCandidates({
+      operation: operation.result,
+      candidateIds: ids,
+    }).then((value) => ({ subjectId: value.subjectId, candidate: value.candidate }));
+    operation.composed.set(key, composed);
+    void composed.catch(() => {
+      if (operation.composed.get(key) === composed) operation.composed.delete(key);
+    });
+  }
+  const value = await composed;
+  if (value.candidate.materialization.cutoutPng.byteLength > 16 * 1024 * 1024) {
+    operation.composed.delete(key);
+    throw new UploadedBannerOperationError(
+      'OPERATION_INVALID',
+      'The combined subject exceeds its byte bound.',
+    );
+  }
+  if (!operation.resolvedSubjects.has(value.subjectId))
+    operation.resolvedSubjects.set(value.subjectId, value);
+  operation.composedBytes = [...operation.resolvedSubjects.values()].reduce(
+    (sum, entry) => sum + entry.candidate.materialization.cutoutPng.byteLength,
+    0,
+  );
+  if (operation.composedBytes > 16 * 1024 * 1024) {
+    operation.composed.delete(key);
+    operation.resolvedSubjects.delete(value.subjectId);
+    operation.composedBytes = [...operation.resolvedSubjects.values()].reduce(
+      (sum, entry) => sum + entry.candidate.materialization.cutoutPng.byteLength,
+      0,
+    );
+    throw new UploadedBannerOperationError(
+      'OPERATION_INVALID',
+      'The operation has reached its derived-byte limit.',
+    );
+  }
+  return { operation, ...value };
+};
+
 export const openUploadedBannerProject = async (input: {
   readonly operationId: unknown;
   readonly candidateId: unknown;
   readonly authority: ActorWorkspaceContext;
 }) => {
-  const { operation, candidate } = resolveUploadedBannerCandidate(
-    input.operationId,
-    input.candidateId,
-    input.authority,
+  const operation = resolve(input.operationId, input.authority);
+  let candidate = operation.result.candidates.find(
+    (entry) => entry.candidateId === input.candidateId,
   );
-  let project = operation.projects.get(candidate.candidateId);
+  if (
+    candidate === undefined &&
+    typeof input.candidateId === 'string' &&
+    /^sams_v1_[0-9a-f]{64}$/u.test(input.candidateId)
+  ) {
+    for (const composed of operation.resolvedSubjects.values()) {
+      if (composed.subjectId === input.candidateId) {
+        candidate = composed.candidate;
+        break;
+      }
+    }
+  }
+  if (candidate === undefined)
+    throw new UploadedBannerOperationError(
+      'CANDIDATE_INVALID',
+      'The candidate is not owned by this operation.',
+    );
+  const projectKey = input.candidateId as string;
+  let project = operation.projects.get(projectKey);
   if (project === undefined) {
     project = materializeUploadedBannerOperationProjectV1({
       source: operation.sourceBytes,
       subject: candidate.materialization.cutoutPng,
-      candidateId: candidate.candidateId,
+      candidateId: input.candidateId as string,
       bounds: candidate.bounds,
     });
-    operation.projects.set(candidate.candidateId, project);
+    operation.projects.set(projectKey, project);
   }
   return { operation, candidate, materialization: await project };
 };
@@ -292,18 +408,19 @@ export const saveUploadedBannerProject = async (input: {
   readonly selectedPartId: unknown;
   readonly authority: ActorWorkspaceContext;
 }) => {
-  const initial = await resolveUploadedBannerCandidate(
-    input.operationId,
-    input.candidateId,
-    input.authority,
-  );
-  const prior = initial.operation.saveLocks.get(initial.candidate.candidateId) ?? Promise.resolve();
+  const initial = await openUploadedBannerProject({
+    operationId: input.operationId,
+    candidateId: input.candidateId,
+    authority: input.authority,
+  });
+  const subjectKey = input.candidateId as string;
+  const prior = initial.operation.saveLocks.get(subjectKey) ?? Promise.resolve();
   let release!: () => void;
   const lock = new Promise<void>((resolve) => {
     release = resolve;
   });
   const queued = prior.then(() => lock);
-  initial.operation.saveLocks.set(initial.candidate.candidateId, queued);
+  initial.operation.saveLocks.set(subjectKey, queued);
   await prior;
   try {
     const opened = await assertProject(input);
@@ -320,7 +437,7 @@ export const saveUploadedBannerProject = async (input: {
       selectedPartId: input.selectedPartId as never,
     });
     opened.operation.projects.set(
-      opened.candidate.candidateId,
+      subjectKey,
       Promise.resolve({ ...opened.materialization, project }),
     );
     return {
@@ -330,8 +447,8 @@ export const saveUploadedBannerProject = async (input: {
     };
   } finally {
     release();
-    if (initial.operation.saveLocks.get(initial.candidate.candidateId) === queued)
-      initial.operation.saveLocks.delete(initial.candidate.candidateId);
+    if (initial.operation.saveLocks.get(subjectKey) === queued)
+      initial.operation.saveLocks.delete(subjectKey);
   }
 };
 

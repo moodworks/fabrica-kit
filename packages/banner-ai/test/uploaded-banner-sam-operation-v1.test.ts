@@ -12,6 +12,7 @@ import {
   createDeterministicUploadedBannerSamGenerator,
   generateUploadedBannerSamCandidates,
   UPLOADED_BANNER_SAM_FAKE_IDENTITY,
+  composeUploadedBannerSamCandidates,
 } from '../src/server/uploaded-banner-sam-operation-v1.js';
 
 const source = new Uint8Array(
@@ -71,5 +72,37 @@ describe('uploaded banner automatic SAM operation helper', () => {
     expect(result.candidates[0]?.materialization.metadata.sourceSha256).toBe(
       result.request.source.sha256,
     );
+  });
+
+  it('composes canonically and preserves a single candidate materialization', async () => {
+    const result = await generateUploadedBannerSamCandidates({
+      normalizedPng: source,
+      requestId: '11111111-1111-4111-8111-111111111111',
+      workspaceId: '22222222-2222-4222-8222-222222222222',
+      jobId: '33333333-3333-4333-8333-333333333333',
+      attemptId: '44444444-4444-4444-8444-444444444444',
+      generator: createDeterministicUploadedBannerSamGenerator(),
+    });
+    const first = result.candidates[0]!;
+    const single = await composeUploadedBannerSamCandidates({
+      operation: result,
+      candidateIds: [first.candidateId],
+    });
+    expect(single.candidate.materialization.cutoutPng).toEqual(first.materialization.cutoutPng);
+    if (result.candidates[1]) {
+      const ids = [first.candidateId, result.candidates[1].candidateId];
+      const forward = await composeUploadedBannerSamCandidates({
+        operation: result,
+        candidateIds: ids,
+      });
+      const reverse = await composeUploadedBannerSamCandidates({
+        operation: result,
+        candidateIds: ids.toReversed(),
+      });
+      expect(reverse.subjectId).toBe(forward.subjectId);
+      expect(reverse.candidate.materialization.cutoutPng).toEqual(
+        forward.candidate.materialization.cutoutPng,
+      );
+    }
   });
 });

@@ -27,6 +27,7 @@ import {
   openUploadedBannerProject,
   createUploadedBannerPreview,
   createUploadedBannerExport,
+  composeUploadedBannerOperation,
 } from './uploaded-banner-operation';
 
 const source = new Uint8Array(
@@ -141,6 +142,78 @@ describe('uploaded banner operation registry', () => {
     expect(preview.mediaType).toBe('text/html');
     expect(exported.artifact.mediaType).toBe('application/zip');
     expect(exported.artifact.filename).toContain('uploaded-deterministic-test');
+  });
+
+  it('canonicalizes composed subjects, coalesces concurrent opens, and supports preview/export', async () => {
+    const owner = authority();
+    const created = await createUploadedBannerOperation({
+      file: new File([source], 'banner.png', { type: 'image/png' }),
+      authority: owner,
+      generator: createDeterministicUploadedBannerSamGenerator(),
+    });
+    const ids = created.catalog.slice(0, 2).map((candidate) => candidate.candidateId);
+    const [forward, reverse] = await Promise.all([
+      composeUploadedBannerOperation({
+        operationId: created.operationId,
+        candidateIds: ids,
+        authority: owner,
+      }),
+      composeUploadedBannerOperation({
+        operationId: created.operationId,
+        candidateIds: ids.toReversed(),
+        authority: owner,
+      }),
+    ]);
+    expect(forward.subjectId).toBe(reverse.subjectId);
+    const opened = await openUploadedBannerProject({
+      operationId: created.operationId,
+      candidateId: forward.subjectId,
+      authority: owner,
+    });
+    const revision = opened.materialization.project.revisions.at(-1)!;
+    const identity = {
+      operationId: created.operationId,
+      candidateId: forward.subjectId,
+      project: opened.materialization.project,
+      revision: revision.revision,
+      sceneSha256: revision.sceneSha256,
+      sceneVersionId: revision.sceneVersionId,
+      authority: owner,
+    };
+    await expect(
+      createUploadedBannerPreview({ ...identity, nonce: 'c'.repeat(32) }),
+    ).resolves.toMatchObject({ mediaType: 'text/html' });
+    await expect(createUploadedBannerExport(identity)).resolves.toMatchObject({
+      artifact: { mediaType: 'application/zip' },
+    });
+    await expect(
+      composeUploadedBannerOperation({
+        operationId: created.operationId,
+        candidateIds: [],
+        authority: owner,
+      }),
+    ).rejects.toMatchObject({ code: 'CANDIDATE_INVALID' });
+    await expect(
+      composeUploadedBannerOperation({
+        operationId: created.operationId,
+        candidateIds: Array.from({ length: 9 }, (_, index) => ids[index % ids.length]!),
+        authority: owner,
+      }),
+    ).rejects.toMatchObject({ code: 'CANDIDATE_INVALID' });
+    await expect(
+      composeUploadedBannerOperation({
+        operationId: created.operationId,
+        candidateIds: [ids[0], ids[0]],
+        authority: owner,
+      }),
+    ).rejects.toMatchObject({ code: 'CANDIDATE_INVALID' });
+    await expect(
+      composeUploadedBannerOperation({
+        operationId: created.operationId,
+        candidateIds: ['samc_v1_' + 'f'.repeat(64)],
+        authority: owner,
+      }),
+    ).rejects.toMatchObject({ code: 'CANDIDATE_INVALID' });
   });
 
   it('replays verified candidates without network and preserves provenance through open/export', async () => {

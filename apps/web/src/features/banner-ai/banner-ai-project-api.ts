@@ -39,6 +39,13 @@ export interface UploadedBannerCandidate {
     readonly width: number;
     readonly height: number;
   };
+  readonly crop: {
+    readonly left: number;
+    readonly top: number;
+    readonly width: number;
+    readonly height: number;
+  };
+  readonly source: { readonly width: number; readonly height: number };
   readonly pixelArea: number;
   readonly areaRatioBps: number;
   readonly thumbnail: {
@@ -62,6 +69,34 @@ export interface UploadedBannerBinding {
   readonly operationId: string;
   readonly candidateId: string;
 }
+export const composeUploadedBannerCandidates = async (
+  operationId: string,
+  candidateIds: readonly string[],
+  fetchImplementation: BannerProjectFetch = fetch,
+): Promise<{ readonly subjectId: string }> => {
+  const response = await fetchImplementation('/api/banner-ai/uploaded-operation', {
+    method: 'PUT',
+    cache: 'no-store',
+    credentials: 'same-origin',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ action: 'compose', operationId, candidateIds }),
+  });
+  const payload = await parseJsonResponse(response);
+  if (
+    !isRecord(payload) ||
+    !hasExactKeys(payload, ['data', 'ok']) ||
+    payload.ok !== true ||
+    !isRecord(payload.data) ||
+    !hasExactKeys(payload.data, ['subjectId']) ||
+    typeof payload.data.subjectId !== 'string' ||
+    !/^sams_v1_[0-9a-f]{64}$/u.test(payload.data.subjectId)
+  )
+    throw new BannerProjectRequestError(
+      'UPLOADED_COMPOSE_FAILED',
+      'The combined subject could not be created.',
+    );
+  return { subjectId: payload.data.subjectId };
+};
 const uploadedBody = (binding: UploadedBannerBinding, body: Record<string, unknown>) => ({
   ...body,
   operationId: binding.operationId,
@@ -201,6 +236,8 @@ export const parseUploadedBannerOperationPayload = (
         'pixelArea',
         'provenance',
         'thumbnail',
+        'crop',
+        'source',
       ]) ||
       typeof candidate['candidateId'] !== 'string' ||
       !/^samc_v1_[0-9a-f]{64}$/u.test(candidate['candidateId']) ||
@@ -219,7 +256,23 @@ export const parseUploadedBannerOperationPayload = (
       Number(candidate['bounds']['width']) < 1 ||
       Number(candidate['bounds']['height']) < 1 ||
       Number(candidate['bounds']['x']) + Number(candidate['bounds']['width']) > 10_000 ||
-      Number(candidate['bounds']['y']) + Number(candidate['bounds']['height']) > 10_000
+      Number(candidate['bounds']['y']) + Number(candidate['bounds']['height']) > 10_000 ||
+      !isRecord(candidate['crop']) ||
+      !hasExactKeys(candidate['crop'], ['height', 'left', 'top', 'width']) ||
+      Object.values(candidate['crop']).some(
+        (value) => typeof value !== 'number' || !Number.isInteger(value) || value < 0,
+      ) ||
+      !isRecord(candidate['source']) ||
+      !hasExactKeys(candidate['source'], ['height', 'width']) ||
+      Object.values(candidate['source']).some(
+        (value) => typeof value !== 'number' || !Number.isInteger(value) || value < 1,
+      ) ||
+      Number(candidate['crop']['width']) < 1 ||
+      Number(candidate['crop']['height']) < 1 ||
+      Number(candidate['crop']['left']) + Number(candidate['crop']['width']) >
+        Number(candidate['source']['width']) ||
+      Number(candidate['crop']['top']) + Number(candidate['crop']['height']) >
+        Number(candidate['source']['height'])
     ) {
       throw new BannerProjectRequestError(
         'INVALID_UPLOADED_OPERATION',
@@ -235,6 +288,16 @@ export const parseUploadedBannerOperationPayload = (
       'The uploaded operation response contained duplicate candidates.',
     );
   }
+  const sourceKey = `${candidates[0]!.source.width}x${candidates[0]!.source.height}`;
+  if (
+    candidates.some(
+      (candidate) => `${candidate.source.width}x${candidate.source.height}` !== sourceKey,
+    )
+  )
+    throw new BannerProjectRequestError(
+      'INVALID_UPLOADED_OPERATION',
+      'Candidates reference different source dimensions.',
+    );
   return {
     operationId: data['operationId'],
     candidates,

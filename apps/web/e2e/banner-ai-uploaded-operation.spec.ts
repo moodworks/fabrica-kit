@@ -25,15 +25,33 @@ test('uploads, selects a candidate, edits, previews, and exports without externa
     page.locator('#banner-file-status').getByText('banner-no-text-v1.png'),
   ).toBeVisible();
   await page.getByRole('button', { name: 'Generate verified Samsung cutouts' }).click();
-  await expect(page.getByText('Choose a cutout to edit')).toBeVisible();
+  await expect(page.getByText('Choose layers to combine')).toBeVisible();
   await expect(page.getByText('Deterministic test output — NOT SAM OUTPUT')).toBeVisible();
-  const candidates = page.locator('section[aria-labelledby="uploaded-candidates-title"] a');
+  const candidates = page.locator(
+    'section[aria-labelledby="uploaded-candidates-title"] input[type="checkbox"]',
+  );
   await expect(candidates).toHaveCount(3);
-  await candidates.nth(1).click();
+  await expect(page.getByRole('button', { name: 'Continue with selected layers' })).toBeDisabled();
+  await page.getByRole('button', { name: 'Candidate 1' }).click();
+  await expect(candidates.nth(0)).toBeChecked();
+  await expect(page.getByRole('button', { name: 'Candidate 1' })).toHaveAttribute(
+    'aria-pressed',
+    'true',
+  );
+  await candidates.nth(0).uncheck();
+  await expect(page.getByRole('button', { name: 'Candidate 1' })).toHaveAttribute(
+    'aria-pressed',
+    'false',
+  );
+  await candidates.nth(0).check();
+  await candidates.nth(1).check();
+  await candidates.nth(1).uncheck();
+  await candidates.nth(1).check();
+  await page.getByRole('button', { name: 'Continue with selected layers' }).click();
 
-  await expect(page.getByRole('heading', { name: 'Uploaded banner candidate' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Uploaded combined subject' })).toBeVisible();
   await expect(page.locator('.editor-layer-name', { hasText: 'Uploaded cutout' })).toBeVisible();
-  await expect(page.getByText('738 × 255')).toBeVisible();
+  await expect(page.getByText(/Combined subject/)).toBeVisible();
   expect(await page.evaluate((key) => localStorage.getItem(key), storageKey)).toBeNull();
 
   await page.getByRole('radio', { name: /Uploaded cutout/u }).check();

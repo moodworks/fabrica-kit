@@ -5,6 +5,7 @@ import { useEffect, useReducer, useRef, useState, type ChangeEvent } from 'react
 
 import {
   requestUploadedBannerOperation,
+  composeUploadedBannerCandidates,
   type UploadedBannerOperationData,
 } from './banner-ai-project-api';
 import { BannerAiSourceImage } from './banner-ai-source-image';
@@ -37,6 +38,9 @@ export function BannerAiClient() {
   const [uploadProvenance, setUploadProvenance] = useState<
     UploadedBannerOperationData['provenance']
   >(VERIFIED_REPLAY_PROVENANCE);
+  const [selectedCandidates, setSelectedCandidates] = useState<readonly string[]>([]);
+  const [composeBusy, setComposeBusy] = useState(false);
+  const [composeError, setComposeError] = useState<string | null>(null);
 
   useEffect(
     () => () => {
@@ -59,6 +63,8 @@ export function BannerAiClient() {
   const selectFile = async (file: File | undefined): Promise<void> => {
     const requestRevision = nextRequestRevision();
     setUploadedOperation(null);
+    setSelectedCandidates([]);
+    setComposeError(null);
     setUploadProvenance(VERIFIED_REPLAY_PROVENANCE);
     clearPreview();
     if (file === undefined) {
@@ -103,6 +109,8 @@ export function BannerAiClient() {
       const operation = await requestUploadedBannerOperation(file);
       if (requestRevisionRef.current !== requestRevision) return;
       setUploadedOperation(operation);
+      setSelectedCandidates([]);
+      setComposeError(null);
       setUploadProvenance(operation.provenance);
       if (requestRevisionRef.current !== requestRevision) return;
       dispatch({ type: 'uploaded_succeeded', requestRevision });
@@ -259,21 +267,104 @@ export function BannerAiClient() {
               className="editor-candidate-picker"
             >
               <p className="section-kicker">02 · Layers</p>
-              <h2 id="uploaded-candidates-title">Choose a cutout to edit</h2>
+              <h2 id="uploaded-candidates-title">Choose layers to combine</h2>
+              <p>Select the parts that should move together before continuing.</p>
               <p>{uploadedOperation.provenance}</p>
-              <div className="editor-candidate-choice">
-                {uploadedOperation.candidates.map((candidate) => (
-                  <Link
-                    key={candidate.candidateId}
-                    className="demo-project-link"
-                    href={`/banner-ai/editor?operation=${encodeURIComponent(uploadedOperation.operationId)}&candidate=${encodeURIComponent(candidate.candidateId)}`}
-                  >
-                    {/* eslint-disable-next-line @next/next/no-img-element */}
-                    <img src={candidate.thumbnail.dataUrl} alt={`Candidate ${candidate.order}`} />
-                    Candidate {candidate.order}
-                  </Link>
-                ))}
+              <div
+                className="candidate-composer-stage"
+                style={{
+                  aspectRatio: `${state.selection?.width ?? 1} / ${state.selection?.height ?? 1}`,
+                }}
+              >
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img src={state.selection?.previewUrl} alt="Uploaded banner" />
+                {uploadedOperation.candidates.map((candidate) => {
+                  const checked = selectedCandidates.includes(candidate.candidateId);
+                  const { crop, source } = candidate;
+                  return (
+                    <button
+                      key={candidate.candidateId}
+                      type="button"
+                      className={checked ? 'candidate-hotspot selected' : 'candidate-hotspot'}
+                      style={{
+                        left: `${(crop.left / source.width) * 100}%`,
+                        top: `${(crop.top / source.height) * 100}%`,
+                        width: `${(crop.width / source.width) * 100}%`,
+                        height: `${(crop.height / source.height) * 100}%`,
+                        zIndex: candidate.order,
+                      }}
+                      aria-label={`Candidate ${candidate.order}`}
+                      aria-pressed={checked}
+                      onClick={() =>
+                        setSelectedCandidates((current) =>
+                          checked
+                            ? current.filter((id) => id !== candidate.candidateId)
+                            : [...current, candidate.candidateId],
+                        )
+                      }
+                    >
+                      <span>{candidate.order}</span>
+                    </button>
+                  );
+                })}
               </div>
+              <div className="editor-candidate-choice">
+                {uploadedOperation.candidates.map((candidate) => {
+                  const checked = selectedCandidates.includes(candidate.candidateId);
+                  return (
+                    <label key={candidate.candidateId} className={checked ? 'selected' : ''}>
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img src={candidate.thumbnail.dataUrl} alt={`Candidate ${candidate.order}`} />
+                      <input
+                        type="checkbox"
+                        checked={checked}
+                        onChange={() =>
+                          setSelectedCandidates((current) =>
+                            checked
+                              ? current.filter((id) => id !== candidate.candidateId)
+                              : [...current, candidate.candidateId],
+                          )
+                        }
+                      />{' '}
+                      Candidate {candidate.order}
+                    </label>
+                  );
+                })}
+              </div>
+              {composeError !== null ? <p role="alert">{composeError}</p> : null}
+              <button
+                type="button"
+                disabled={selectedCandidates.length === 0 || composeBusy}
+                onClick={async () => {
+                  const composeRevision = requestRevisionRef.current;
+                  const composeOperationId = uploadedOperation.operationId;
+                  setComposeBusy(true);
+                  setComposeError(null);
+                  try {
+                    const { subjectId } = await composeUploadedBannerCandidates(
+                      uploadedOperation.operationId,
+                      selectedCandidates,
+                    );
+                    if (
+                      requestRevisionRef.current !== composeRevision ||
+                      uploadedOperation.operationId !== composeOperationId
+                    )
+                      return;
+                    window.location.assign(
+                      `/banner-ai/editor?operation=${encodeURIComponent(uploadedOperation.operationId)}&subject=${encodeURIComponent(subjectId)}`,
+                    );
+                  } catch (error) {
+                    if (requestRevisionRef.current !== composeRevision) return;
+                    setComposeError(
+                      messageFrom(error, 'The combined subject could not be created.'),
+                    );
+                  } finally {
+                    setComposeBusy(false);
+                  }
+                }}
+              >
+                {composeBusy ? 'Combining…' : 'Continue with selected layers'}
+              </button>
             </section>
           ) : null}
         </section>

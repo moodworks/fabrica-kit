@@ -277,7 +277,7 @@ const parsePresentation = (
     input['canvas']['height'] !== 200 ||
     !isSafeText(input['fixtureLabel'], 120) ||
     typeof input['candidateId'] !== 'string' ||
-    !/^samc_v1_[0-9a-f]{64}$/u.test(input['candidateId']) ||
+    !/^(?:samc|sams)_v1_[0-9a-f]{64}$/u.test(input['candidateId']) ||
     !Array.isArray(input['parts']) ||
     input['parts'].length !== 2
   ) {

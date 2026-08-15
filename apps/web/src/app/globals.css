@@ -1005,6 +1005,64 @@ summary:focus-visible {
 .editor-candidate-choice input {
   accent-color: var(--teal);
 }
+.candidate-composer-stage {
+  position: relative;
+  width: 100%;
+  max-width: 60rem;
+  overflow: hidden;
+  margin: 1rem 0;
+  border: 1px solid var(--line);
+  border-radius: 0.7rem;
+  background: #222;
+}
+.candidate-composer-stage > img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+.candidate-hotspot {
+  position: absolute;
+  display: grid;
+  min-width: 2rem;
+  min-height: 2rem;
+  place-items: center;
+  padding: 0;
+  border: 2px solid transparent;
+  border-radius: 0.3rem;
+  background: color-mix(in srgb, var(--teal) 18%, transparent);
+  color: white;
+  cursor: pointer;
+}
+.candidate-hotspot span {
+  display: grid;
+  place-items: center;
+  width: 1.35rem;
+  height: 1.35rem;
+  border-radius: 50%;
+  background: var(--teal);
+  font-weight: 800;
+}
+.candidate-hotspot.selected {
+  border-color: white;
+  background: color-mix(in srgb, var(--teal) 42%, transparent);
+}
+.candidate-hotspot:focus-visible {
+  outline: 3px solid #fff;
+  outline-offset: 2px;
+}
+.editor-candidate-choice label {
+  display: grid;
+  gap: 0.35rem;
+  padding: 0.4rem;
+  border: 1px solid var(--line);
+  border-radius: 0.55rem;
+  cursor: pointer;
+}
+.editor-candidate-choice label.selected {
+  border-color: var(--teal);
+  background: color-mix(in srgb, var(--teal) 16%, transparent);
+}
 
 .editor-open-card h1,
 .editor-project-header h1 {

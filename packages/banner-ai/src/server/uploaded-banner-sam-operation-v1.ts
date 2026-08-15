@@ -15,8 +15,16 @@ import {
 } from '../sam/sam-cutout-materializer.js';
 import { assertCanonicalNormalizedPng } from '../security/raster-container.js';
 import { sha256Hex } from '../scene/canonical-scene-json.js';
+import { canonicalizeJson } from '../scene/canonical-scene-json.js';
 import { parseAndVerifySamMaskResponse } from '../sam/sam-mask-validation.js';
 import { createBoundedLayerPreview } from './sam-box-prompt-layer-extraction.js';
+import { createHash } from 'node:crypto';
+import {
+  decodeBinaryMaskRle,
+  decodeCanonicalBase64,
+  createCandidateFromMask,
+  maskContentSha256,
+} from '../sam/sam-mask-rle.js';
 
 /** The automatic upload path has a deliberately separate endpoint identity. */
 export const UPLOADED_BANNER_SAM_ENDPOINT_ID = 'fabrica-uploaded-banner-v1' as const;
@@ -57,6 +65,76 @@ export interface UploadedBannerSamReplayOperationResult extends UploadedBannerSa
 }
 export type UploadedBannerSamOperationResult =
   UploadedBannerSamFakeOperationResult | UploadedBannerSamReplayOperationResult;
+
+export const composeUploadedBannerSamCandidates = async (input: {
+  readonly operation: UploadedBannerSamOperationResult;
+  readonly candidateIds: readonly string[];
+}): Promise<{ readonly subjectId: string; readonly candidate: UploadedBannerSamCandidate }> => {
+  const ids = [...new Set(input.candidateIds)];
+  if (ids.length < 1 || ids.length > 8 || ids.length !== input.candidateIds.length)
+    throw new TypeError('Selected candidates must be one to eight unique IDs.');
+  const selected = input.operation.candidates.filter((candidate) =>
+    ids.includes(candidate.candidateId),
+  );
+  if (selected.length !== ids.length)
+    throw new TypeError('Selected candidate is not owned by the operation.');
+  const canonical = input.operation.candidates.filter((candidate) =>
+    ids.includes(candidate.candidateId),
+  );
+  const first = decodeBinaryMaskRle(
+    decodeCanonicalBase64(canonical[0]!.mask.dataBase64, 1_000_000),
+    input.operation.request.source.width,
+    input.operation.request.source.height,
+  );
+  const union = new Uint8Array(first.pixels);
+  for (const candidate of canonical.slice(1)) {
+    const decoded = decodeBinaryMaskRle(
+      decodeCanonicalBase64(candidate.mask.dataBase64, 1_000_000),
+      first.width,
+      first.height,
+    );
+    for (let index = 0; index < union.length; index += 1) union[index] ||= decoded.pixels[index]!;
+  }
+  const generated = createCandidateFromMask({
+    mask: union,
+    width: first.width,
+    height: first.height,
+    sourceSha256: input.operation.request.source.sha256,
+    predictedIou: 0,
+    stabilityScore: 0,
+  });
+  const materialization = await materializeSamMaskCutout({
+    trustedRequest: input.operation.request,
+    candidate: generated,
+  });
+  const cutoutDigest = createHash('sha256').update(materialization.cutoutPng).digest('hex');
+  const identityPayload = canonicalizeJson({
+    algorithm: 'uploaded-sam-mask-union-v1',
+    source: {
+      sha256: input.operation.request.source.sha256,
+      width: first.width,
+      height: first.height,
+    },
+    candidates: canonical.map((candidate) => ({
+      id: candidate.candidateId,
+      mask: candidate.mask.sha256,
+      cutout: candidate.materialization.metadata.cutoutPngSha256,
+      crop: candidate.materialization.metadata.crop,
+    })),
+    unionMask: maskContentSha256(union, first.width, first.height),
+    finalCutout: cutoutDigest,
+    finalCrop: materialization.metadata.crop,
+  });
+  const identity = createHash('sha256').update(identityPayload).digest('hex');
+  return {
+    subjectId: `sams_v1_${identity}`,
+    candidate: Object.freeze({
+      ...generated,
+      materialization,
+      preview: await createBoundedLayerPreview(materialization.cutoutPng),
+    }),
+  };
+};
 
 const deepFreeze = <T>(value: T): T => {
   if (value !== null && typeof value === 'object' && !Object.isFrozen(value)) {

@@ -6,6 +6,7 @@ import {
   UploadedBannerOperationError,
   openUploadedBannerProject,
   saveUploadedBannerProject,
+  composeUploadedBannerOperation,
 } from '../../../../server/banner-ai/uploaded-banner-operation';
 import {
   BannerUploadFormError,
@@ -172,6 +173,18 @@ export async function PUT(request: Request): Promise<Response> {
     if (bodyValue === null || typeof bodyValue !== 'object' || Array.isArray(bodyValue))
       return failure(400, 'INVALID_UPLOADED_ACTION', 'Submit one exact uploaded action.');
     const body = bodyValue as Record<string, unknown>;
+    if (body.action === 'compose') {
+      requireExactObjectKeys(body, ['action', 'candidateIds', 'operationId'] as const);
+      const composed = await composeUploadedBannerOperation({
+        operationId: body.operationId,
+        candidateIds: body.candidateIds,
+        authority: resolveDevelopmentActorWorkspaceContext(),
+      });
+      return Response.json(
+        { ok: true, data: { subjectId: composed.subjectId } },
+        { headers: { 'cache-control': 'no-store' } },
+      );
+    }
     if (body.action === 'save') {
       requireExactObjectKeys(body, [
         'action',

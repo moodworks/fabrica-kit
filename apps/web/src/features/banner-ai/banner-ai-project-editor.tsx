@@ -114,16 +114,28 @@ const editorQueryFromLocation = (): EditorQuery => {
   const params = new URLSearchParams(window.location.search);
   const operation = params.get('operation');
   const candidate = params.get('candidate');
+  const subject = params.get('subject');
   const queryKeys = [...params.keys()];
   if (queryKeys.length === 0) return { kind: 'fixed' };
+  if (
+    queryKeys.length === 2 &&
+    new Set(queryKeys).size === 2 &&
+    queryKeys.includes('operation') &&
+    queryKeys.includes('subject') &&
+    operation !== null &&
+    subject !== null &&
+    /^[0-9a-f]{64}$/u.test(operation) &&
+    /^sams_v1_[0-9a-f]{64}$/u.test(subject)
+  ) {
+    return { kind: 'uploaded', binding: { operationId: operation, candidateId: subject } };
+  }
   if (
     queryKeys.length !== 2 ||
     new Set(queryKeys).size !== 2 ||
     !queryKeys.includes('operation') ||
     !queryKeys.includes('candidate')
-  ) {
+  )
     return { kind: 'invalid' };
-  }
   if (
     operation !== null &&
     candidate !== null &&
@@ -845,7 +857,9 @@ export function BannerAiProjectEditor() {
           <h1 id="editor-project-title">
             {uploadedBinding === null
               ? projectData.project.displayName
-              : 'Uploaded banner candidate'}
+              : uploadedBinding?.candidateId.startsWith('sams_v1_')
+                ? 'Uploaded combined subject'
+                : 'Uploaded banner candidate'}
           </h1>
           <p>
             {uploadedBinding === null ? (
@@ -854,7 +868,10 @@ export function BannerAiProjectEditor() {
               </>
             ) : (
               <>
-                Candidate <code>{uploadedBinding.candidateId}</code> · 300 × 200 canvas
+                {uploadedBinding.candidateId.startsWith('sams_v1_')
+                  ? 'Combined subject'
+                  : 'Candidate'}{' '}
+                <code>{uploadedBinding.candidateId}</code> · 300 × 200 canvas
               </>
             )}
           </p>

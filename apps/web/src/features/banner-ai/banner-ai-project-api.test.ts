@@ -330,12 +330,17 @@ describe('provider-free browser export acceptance', () => {
   });
 });
 
-import { parseUploadedBannerOperationPayload } from './banner-ai-project-api';
+import {
+  composeUploadedBannerCandidates,
+  parseUploadedBannerOperationPayload,
+} from './banner-ai-project-api';
 
 const uploadedCandidate = {
   candidateId: `samc_v1_${'a'.repeat(64)}`,
   order: 1,
   bounds: { x: 10, y: 20, width: 100, height: 200 },
+  source: { width: 1000, height: 500 },
+  crop: { left: 100, top: 100, width: 100, height: 200 },
   pixelArea: 200,
   areaRatioBps: 100,
   provenance: 'Deterministic test output — NOT SAM OUTPUT',
@@ -360,6 +365,41 @@ describe('uploaded operation client parser', () => {
         },
       }).candidates,
     ).toHaveLength(1);
+  });
+  it('rejects crop drift and malformed compose responses', async () => {
+    expect(() =>
+      parseUploadedBannerOperationPayload({
+        ok: true,
+        data: {
+          operationId: 'c'.repeat(64),
+          candidates: [{ ...uploadedCandidate, crop: { ...uploadedCandidate.crop, left: 950 } }],
+          provenance: uploadedCandidate.provenance,
+        },
+      }),
+    ).toThrow();
+    expect(() =>
+      parseUploadedBannerOperationPayload({
+        ok: true,
+        data: {
+          operationId: 'c'.repeat(64),
+          candidates: [
+            uploadedCandidate,
+            {
+              ...uploadedCandidate,
+              candidateId: `samc_v1_${'d'.repeat(64)}`,
+              order: 2,
+              source: { width: 900, height: 500 },
+            },
+          ],
+          provenance: uploadedCandidate.provenance,
+        },
+      }),
+    ).toThrow();
+    await expect(
+      composeUploadedBannerCandidates('c'.repeat(64), [uploadedCandidate.candidateId], async () =>
+        Response.json({ ok: true, data: {} }),
+      ),
+    ).rejects.toMatchObject({ code: 'UPLOADED_COMPOSE_FAILED' });
   });
   it('accepts verified replay provenance and rejects provenance drift', () => {
     const value = {
