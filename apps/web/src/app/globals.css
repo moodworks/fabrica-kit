@@ -1076,6 +1076,28 @@ summary:focus-visible {
   border-color: white;
   background: color-mix(in srgb, var(--teal) 42%, transparent);
 }
+.candidate-hotspot.assigned {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+.created-layer-list {
+  display: grid;
+  gap: 0.5rem;
+  margin: 0.75rem 0;
+}
+.created-layer-card {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+  flex-wrap: wrap;
+  padding: 0.55rem;
+  border: 1px solid var(--teal);
+  border-radius: 0.55rem;
+  background: rgb(11 113 107 / 6%);
+}
+.created-layer-card span {
+  color: var(--muted);
+}
 .candidate-hotspot:focus-visible {
   outline: 3px solid #fff;
   outline-offset: 2px;

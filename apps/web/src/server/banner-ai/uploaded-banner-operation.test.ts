@@ -19,6 +19,7 @@ import {
   generateUploadedBannerSamCandidates,
 } from '../../../../../packages/banner-ai/src/server/uploaded-banner-sam-operation-v1';
 import { SamReplayError } from '../../../../../packages/banner-ai/src/server/uploaded-banner-sam-replay-v4';
+import { sha256Hex } from '../../../../../packages/banner-ai/src/scene/canonical-scene-json';
 
 import {
   createUploadedBannerOperation,
@@ -241,6 +242,135 @@ describe('uploaded banner operation registry', () => {
         authority: owner,
       }),
     ).rejects.toMatchObject({ code: 'CANDIDATE_INVALID' });
+  });
+
+  it('rejects cumulative grouped cache over-cap and cleans the new entry', async () => {
+    const owner = authority();
+    const created = await createUploadedBannerOperation({
+      file: new File([source], 'banner.png', { type: 'image/png' }),
+      authority: owner,
+      generator: createDeterministicUploadedBannerSamGenerator(),
+    });
+    const ids = created.catalog.slice(0, 3).map((candidate) => candidate.candidateId);
+    const first = await composeUploadedBannerOperation({
+      operationId: created.operationId,
+      candidateIds: [],
+      candidateGroups: [[ids[0]!, ids[1]!], [ids[2]!]],
+      authority: owner,
+    });
+    for (let index = 0; index < 2_000; index += 1)
+      first.operation.resolvedGrouped.set(
+        `dummy-${index}`,
+        first.operation.resolvedGrouped.get(first.subjectId)!,
+      );
+    first.operation.projectBytes.set('preloaded-project', 64 * 1024 * 1024);
+    const groupedSizeBefore = first.operation.grouped.size;
+    const resolvedSizeBefore = first.operation.resolvedGrouped.size;
+    await expect(
+      composeUploadedBannerOperation({
+        operationId: created.operationId,
+        candidateIds: [],
+        candidateGroups: [[ids[0]!], [ids[1]!, ids[2]!]],
+        authority: owner,
+      }),
+    ).rejects.toMatchObject({ code: 'OPERATION_INVALID' });
+    expect(first.operation.grouped.size).toBe(groupedSizeBefore);
+    expect(first.operation.resolvedGrouped.size).toBe(resolvedSizeBefore);
+  });
+
+  it('opens grouped layers in order and preserves composite assets through export', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch');
+    const owner = authority();
+    const created = await createUploadedBannerOperation({
+      file: new File([source], 'banner.png', { type: 'image/png' }),
+      authority: owner,
+      generator: createDeterministicUploadedBannerSamGenerator(),
+    });
+    const ids = created.catalog.slice(0, 3).map((candidate) => candidate.candidateId);
+    const first = await composeUploadedBannerOperation({
+      operationId: created.operationId,
+      candidateIds: [],
+      candidateGroups: [[ids[0]!, ids[1]!], [ids[2]!]],
+      authority: owner,
+    });
+    const inner = await composeUploadedBannerOperation({
+      operationId: created.operationId,
+      candidateIds: [],
+      candidateGroups: [[ids[1]!, ids[0]!], [ids[2]!]],
+      authority: owner,
+    });
+    const outer = await composeUploadedBannerOperation({
+      operationId: created.operationId,
+      candidateIds: [],
+      candidateGroups: [[ids[2]!], [ids[0]!, ids[1]!]],
+      authority: owner,
+    });
+    expect(inner.subjectId).toBe(first.subjectId);
+    expect(outer.subjectId).not.toBe(first.subjectId);
+    const opened = await openUploadedBannerProject({
+      operationId: created.operationId,
+      candidateId: first.subjectId,
+      authority: owner,
+    });
+    expect(opened.materialization.scene.layers).toHaveLength(2);
+    expect(opened.materialization.scene.layers.map((layer) => layer.name)).toEqual([
+      'Uploaded layer 1',
+      'Uploaded layer 2',
+    ]);
+    expect(opened.materialization.assets).toHaveLength(3);
+    expect(opened.materialization.assets.slice(1).map((asset) => asset.reference.sha256)).toEqual(
+      first.groups!.map((group) => group.candidate.materialization.metadata.cutoutPngSha256),
+    );
+    expect(
+      opened.materialization.assets.every(
+        (asset) => sha256Hex(asset.bytes) === asset.reference.sha256,
+      ),
+    ).toBe(true);
+    expect(first.operation.grouped.size).toBe(2);
+    const revision = opened.materialization.project.revisions.at(-1)!;
+    const identity = {
+      operationId: created.operationId,
+      candidateId: first.subjectId,
+      project: opened.materialization.project,
+      revision: revision.revision,
+      sceneSha256: revision.sceneSha256,
+      sceneVersionId: revision.sceneVersionId,
+      authority: owner,
+    };
+    await expect(
+      createUploadedBannerPreview({ ...identity, nonce: 'e'.repeat(32) }),
+    ).resolves.toMatchObject({ mediaType: 'text/html' });
+    await expect(createUploadedBannerExport(identity)).resolves.toMatchObject({
+      artifact: { mediaType: 'application/zip' },
+    });
+    expect(fetchSpy).not.toHaveBeenCalled();
+    fetchSpy.mockRestore();
+  });
+
+  it('rolls back grouped project cache when the combined open cap is exceeded', async () => {
+    const owner = authority();
+    const created = await createUploadedBannerOperation({
+      file: new File([source], 'banner.png', { type: 'image/png' }),
+      authority: owner,
+      generator: createDeterministicUploadedBannerSamGenerator(),
+    });
+    const ids = created.catalog.slice(0, 2).map((candidate) => candidate.candidateId);
+    const grouped = await composeUploadedBannerOperation({
+      operationId: created.operationId,
+      candidateIds: [],
+      candidateGroups: [[ids[0]!], [ids[1]!]],
+      authority: owner,
+    });
+    grouped.operation.projectBytes.set('preloaded', 64 * 1024 * 1024);
+    await expect(
+      openUploadedBannerProject({
+        operationId: created.operationId,
+        candidateId: grouped.subjectId,
+        authority: owner,
+      }),
+    ).rejects.toMatchObject({ code: 'OPERATION_INVALID' });
+    expect(grouped.operation.projects.has(grouped.subjectId)).toBe(false);
+    expect(grouped.operation.projectBytes.has(grouped.subjectId)).toBe(false);
   });
 
   it('replays verified candidates without network and preserves provenance through open/export', async () => {

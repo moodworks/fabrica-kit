@@ -13,6 +13,7 @@ import {
   generateUploadedBannerSamCandidates,
   UPLOADED_BANNER_SAM_FAKE_IDENTITY,
   composeUploadedBannerSamCandidates,
+  composeUploadedBannerSamCandidateGroups,
 } from '../src/server/uploaded-banner-sam-operation-v1.js';
 
 const source = new Uint8Array(
@@ -25,6 +26,65 @@ const source = new Uint8Array(
 );
 
 describe('uploaded banner automatic SAM operation helper', () => {
+  it('groups canonical members and preserves outer ordering', async () => {
+    const result = await generateUploadedBannerSamCandidates({
+      normalizedPng: source,
+      requestId: '11111111-1111-4111-8111-111111111111',
+      workspaceId: '22222222-2222-4222-8222-222222222222',
+      jobId: '33333333-3333-4333-8333-333333333333',
+      attemptId: '44444444-4444-4444-8444-444444444444',
+      generator: createDeterministicUploadedBannerSamGenerator(),
+    });
+    const ids = result.candidates.slice(0, 3).map((candidate) => candidate.candidateId);
+    const first = await composeUploadedBannerSamCandidateGroups({
+      operation: result,
+      candidateGroups: [[ids[0]!, ids[1]!], [ids[2]!]],
+    });
+    const singleton = await composeUploadedBannerSamCandidateGroups({
+      operation: result,
+      candidateGroups: [[ids[0]!]],
+    });
+    expect(singleton.groups[0]!.candidate.materialization.cutoutPng).toEqual(
+      result.candidates[0]!.materialization.cutoutPng,
+    );
+    const innerReverse = await composeUploadedBannerSamCandidateGroups({
+      operation: result,
+      candidateGroups: [[ids[1]!, ids[0]!], [ids[2]!]],
+    });
+    const outerReverse = await composeUploadedBannerSamCandidateGroups({
+      operation: result,
+      candidateGroups: [[ids[2]!], [ids[0]!, ids[1]!]],
+    });
+    expect(innerReverse.subjectId).toBe(first.subjectId);
+    expect(outerReverse.subjectId).not.toBe(first.subjectId);
+    expect(first.groups[0]!.candidate.materialization.cutoutPng).not.toEqual(
+      result.candidates[0]!.materialization.cutoutPng,
+    );
+    await expect(
+      composeUploadedBannerSamCandidateGroups({ operation: result, candidateGroups: [] }),
+    ).rejects.toThrow();
+    await expect(
+      composeUploadedBannerSamCandidateGroups({ operation: result, candidateGroups: [[]] }),
+    ).rejects.toThrow();
+    await expect(
+      composeUploadedBannerSamCandidateGroups({
+        operation: result,
+        candidateGroups: [[ids[0]!, ids[0]!]],
+      }),
+    ).rejects.toThrow();
+    await expect(
+      composeUploadedBannerSamCandidateGroups({
+        operation: result,
+        candidateGroups: [[ids[0]!], [ids[0]!]],
+      }),
+    ).rejects.toThrow();
+    await expect(
+      composeUploadedBannerSamCandidateGroups({
+        operation: result,
+        candidateGroups: [['samc_v1_' + 'f'.repeat(64)]],
+      }),
+    ).rejects.toThrow();
+  });
   it('has an isolated zero-network deterministic generator with one-call evidence', async () => {
     const generator = createDeterministicUploadedBannerSamGenerator();
     const result = await generateUploadedBannerSamCandidates({

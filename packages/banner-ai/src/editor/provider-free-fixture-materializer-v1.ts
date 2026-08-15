@@ -342,11 +342,21 @@ const materializeProviderFreeFixtureProjectCoreV1 = async (input: {
           layerId: `layer_uploaded_cutout_${digest}`,
           filename: `uploaded-${digest}.cutout.png`,
           bounds: proposal.bounds,
-          name: `Uploaded cutout ${index + 1}`,
+          name: proposal.candidateId.startsWith('saml_v1_')
+            ? `Uploaded layer ${index + 1}`
+            : `Uploaded cutout ${index + 1}`,
         }
       : (input.subjectIdentity ?? layerIdentity[proposal.partKey as ForegroundPartKey]);
     const encoded = proposal.encoded;
-    const normalized = await normalizeGeneratedPng(encoded, identity.filename);
+    const normalizedUpload = await normalizeGeneratedPng(encoded, identity.filename);
+    const normalized = input.subjects?.length
+      ? {
+          ...normalizedUpload,
+          bytes: encoded,
+          byteSize: encoded.byteLength,
+          sha256: sha256Hex(encoded),
+        }
+      : normalizedUpload;
     const bounds = candidateFrameToPixels({
       bounds: 'bounds' in identity ? identity.bounds : proposal.bounds,
       sourceWidth: normalizedSource.width,
@@ -550,7 +560,10 @@ export const materializeUploadedBannerOperationProjectV1 = async (input: {
     if (input.subjects.length < 1 || input.subjects.length > 8)
       throw new TypeError('Uploaded selections must contain one to eight subjects.');
     const ids = input.subjects.map((subject) => subject.candidateId);
-    if (new Set(ids).size !== ids.length || ids.some((id) => !/^samc_v1_[0-9a-f]{64}$/u.test(id)))
+    if (
+      new Set(ids).size !== ids.length ||
+      ids.some((id) => !/^(?:samc|saml)_v1_[0-9a-f]{64}$/u.test(id))
+    )
       throw new TypeError('Uploaded selection subjects are invalid or duplicated.');
   }
   if (input.subjects !== undefined && input.subjects.length > 0) {

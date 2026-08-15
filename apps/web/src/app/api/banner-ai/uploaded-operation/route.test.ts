@@ -64,6 +64,38 @@ describe('uploaded operation multipart boundary', () => {
       }),
     );
     expect(unknown.status).toBe(400);
+    const grouped = await PUT(
+      new Request('http://localhost/api/banner-ai/uploaded-operation', {
+        method: 'PUT',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          action: 'compose',
+          operationId: created.operationId,
+          candidateGroups: [[created.catalog[0]!.candidateId], [created.catalog[1]!.candidateId]],
+        }),
+      }),
+    );
+    expect(grouped.status).toBe(200);
+    expect((await grouped.json()).data.subjectId).toMatch(/^sams_v1_[0-9a-f]{64}$/u);
+    for (const candidateGroups of [
+      [],
+      [[created.catalog[0]!.candidateId, created.catalog[0]!.candidateId]],
+      [['samc_v1_' + 'f'.repeat(64)]],
+      Array.from({ length: 9 }, () => [created.catalog[0]!.candidateId]),
+    ]) {
+      const response = await PUT(
+        new Request('http://localhost/api/banner-ai/uploaded-operation', {
+          method: 'PUT',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({
+            action: 'compose',
+            operationId: created.operationId,
+            candidateGroups,
+          }),
+        }),
+      );
+      expect(response.status).toBe(400);
+    }
   });
   it('rejects an oversized chunked body before form parsing', async () => {
     const oversized = new Uint8Array(21_500_001);

@@ -97,6 +97,32 @@ export const composeUploadedBannerCandidates = async (
     );
   return { subjectId: payload.data.subjectId };
 };
+export const composeUploadedBannerCandidateGroups = async (
+  operationId: string,
+  candidateGroups: readonly (readonly string[])[],
+  fetchImplementation: BannerProjectFetch = fetch,
+): Promise<{ readonly subjectId: string }> => {
+  const response = await fetchImplementation('/api/banner-ai/uploaded-operation', {
+    method: 'PUT',
+    cache: 'no-store',
+    credentials: 'same-origin',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ action: 'compose', operationId, candidateGroups }),
+  });
+  const payload = await parseJsonResponse(response);
+  if (
+    !isRecord(payload) ||
+    payload.ok !== true ||
+    !isRecord(payload.data) ||
+    typeof payload.data.subjectId !== 'string' ||
+    !/^sams_v1_[0-9a-f]{64}$/u.test(payload.data.subjectId)
+  )
+    throw new BannerProjectRequestError(
+      'UPLOADED_COMPOSE_FAILED',
+      'The grouped layers could not be created.',
+    );
+  return { subjectId: payload.data.subjectId };
+};
 const uploadedBody = (binding: UploadedBannerBinding, body: Record<string, unknown>) => ({
   ...body,
   operationId: binding.operationId,

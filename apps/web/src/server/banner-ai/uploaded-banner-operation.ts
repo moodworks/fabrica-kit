@@ -23,6 +23,7 @@ import {
 import {
   generateUploadedBannerSamCandidates,
   composeUploadedBannerSamCandidates,
+  composeUploadedBannerSamCandidateGroups,
   type UploadedBannerSamGenerator,
   type UploadedBannerSamOperationResult,
 } from '@fabrica/banner-ai/server/uploaded-banner-sam-operation-v1';
@@ -70,6 +71,14 @@ export interface UploadedBannerOperation {
       readonly candidates: readonly UploadedBannerSamOperationResult['candidates'][number][];
     }>
   >;
+  readonly grouped: Map<
+    string,
+    Promise<Awaited<ReturnType<typeof composeUploadedBannerSamCandidateGroups>>>
+  >;
+  readonly resolvedGrouped: Map<
+    string,
+    Awaited<ReturnType<typeof composeUploadedBannerSamCandidateGroups>>
+  >;
   readonly resolvedSubjects: Map<
     string,
     {
@@ -90,6 +99,17 @@ const getCurrent = (): UploadedBannerOperation | null =>
 const setCurrent = (value: UploadedBannerOperation | null): void => {
   uploadedOperationRegistry[uploadedOperationRegistryKey] = value;
 };
+const groupedRetainedBytes = (operation: UploadedBannerOperation): number => {
+  let total = 0;
+  for (const selection of operation.resolvedGrouped.values())
+    for (const group of selection.groups)
+      total +=
+        group.candidate.materialization.cutoutPng.byteLength + group.candidate.preview.byteSize;
+  return total;
+};
+const combinedDerivedBytes = (operation: UploadedBannerOperation): number =>
+  groupedRetainedBytes(operation) +
+  [...operation.projectBytes.values()].reduce((sum, bytes) => sum + bytes, 0);
 
 const assertId = (operationId: unknown): string => {
   if (typeof operationId !== 'string' || !operationIdPattern.test(operationId)) {
@@ -194,6 +214,8 @@ export const createUploadedBannerOperation = async (input: {
     projects: new Map(),
     projectBytes: new Map(),
     composed: new Map(),
+    grouped: new Map(),
+    resolvedGrouped: new Map(),
     resolvedSubjects: new Map(),
     composedBytes: 0,
     saveLocks: new Map(),
@@ -260,21 +282,75 @@ export const resolveUploadedBannerCandidate = (
 export const composeUploadedBannerOperation = async (input: {
   readonly operationId: unknown;
   readonly candidateIds: unknown;
+  readonly candidateGroups?: unknown;
   readonly authority: ActorWorkspaceContext;
 }) => {
   const operation = resolve(input.operationId, input.authority);
+  if (input.candidateGroups !== undefined) {
+    if (!Array.isArray(input.candidateGroups))
+      throw new UploadedBannerOperationError('CANDIDATE_INVALID', 'Layer groups are invalid.');
+    const groups = input.candidateGroups as unknown[];
+    if (
+      !groups.every((group) => Array.isArray(group) && group.every((id) => typeof id === 'string'))
+    )
+      throw new UploadedBannerOperationError('CANDIDATE_INVALID', 'Layer groups are invalid.');
+    const canonicalGroups = groups.map((group) =>
+      operation.result.candidates
+        .filter((candidate) => (group as string[]).includes(candidate.candidateId))
+        .map((candidate) => candidate.candidateId),
+    );
+    if (canonicalGroups.some((group, index) => group.length !== (groups[index] as string[]).length))
+      throw new UploadedBannerOperationError(
+        'CANDIDATE_INVALID',
+        'The candidate is not owned by this operation.',
+      );
+    const key = JSON.stringify(canonicalGroups);
+    let grouped = operation.grouped.get(key);
+    if (grouped === undefined) {
+      if (operation.grouped.size >= 8)
+        throw new UploadedBannerOperationError(
+          'OPERATION_INVALID',
+          'The operation has reached its layer selection limit.',
+        );
+      grouped = composeUploadedBannerSamCandidateGroups({
+        operation: operation.result,
+        candidateGroups: canonicalGroups,
+      });
+      operation.grouped.set(key, grouped);
+      void grouped.catch(() => {
+        if (operation.grouped.get(key) === grouped) operation.grouped.delete(key);
+      });
+    }
+    const result = await grouped;
+    operation.resolvedGrouped.set(result.subjectId, result);
+    if (combinedDerivedBytes(operation) > 64 * 1024 * 1024) {
+      operation.resolvedGrouped.delete(result.subjectId);
+      operation.grouped.delete(key);
+      throw new UploadedBannerOperationError(
+        'OPERATION_INVALID',
+        'The grouped selection exceeds its cumulative byte bound.',
+      );
+    }
+    return {
+      operation,
+      subjectId: result.subjectId,
+      candidates: result.groups.map((group) => group.candidate),
+      groups: result.groups,
+    };
+  }
+  const candidateIds = input.candidateIds;
   if (
-    !Array.isArray(input.candidateIds) ||
-    input.candidateIds.length < 1 ||
-    input.candidateIds.length > 8 ||
-    input.candidateIds.some((id) => typeof id !== 'string') ||
-    new Set(input.candidateIds).size !== input.candidateIds.length
+    !Array.isArray(candidateIds) ||
+    candidateIds.length < 1 ||
+    candidateIds.length > 8 ||
+    candidateIds.some((id) => typeof id !== 'string') ||
+    new Set(candidateIds).size !== candidateIds.length
   )
     throw new UploadedBannerOperationError(
       'CANDIDATE_INVALID',
       'Select one to eight unique candidates.',
     );
-  const requestedIds = input.candidateIds as string[];
+  const requestedIds = candidateIds as string[];
   const ids = operation.result.candidates
     .filter((candidate) => requestedIds.includes(candidate.candidateId))
     .map((candidate) => candidate.candidateId);
@@ -357,6 +433,8 @@ export const openUploadedBannerProject = async (input: {
   );
   let selectedCandidates:
     readonly UploadedBannerSamOperationResult['candidates'][number][] | undefined;
+  let selectedGroups:
+    Awaited<ReturnType<typeof composeUploadedBannerSamCandidateGroups>>['groups'] | undefined;
   if (
     candidate === undefined &&
     typeof input.candidateId === 'string' &&
@@ -366,6 +444,13 @@ export const openUploadedBannerProject = async (input: {
       if (composed.subjectId === input.candidateId) {
         selectedCandidates = composed.candidates;
         candidate = composed.candidates[0];
+        break;
+      }
+    }
+    for (const grouped of operation.resolvedGrouped.values()) {
+      if (grouped.subjectId === input.candidateId) {
+        selectedGroups = grouped.groups;
+        candidate = grouped.groups[0]?.candidate;
         break;
       }
     }
@@ -388,15 +473,23 @@ export const openUploadedBannerProject = async (input: {
       subject: candidate.materialization.cutoutPng,
       candidateId: input.candidateId as string,
       bounds: candidate.bounds,
-      ...(selectedCandidates === undefined
-        ? {}
-        : {
-            subjects: selectedCandidates.map((entry) => ({
-              subject: entry.materialization.cutoutPng,
-              candidateId: entry.candidateId,
-              bounds: entry.bounds,
+      ...(selectedGroups !== undefined
+        ? {
+            subjects: selectedGroups.map((group) => ({
+              subject: group.candidate.materialization.cutoutPng,
+              candidateId: group.groupId,
+              bounds: group.candidate.bounds,
             })),
-          }),
+          }
+        : selectedCandidates === undefined
+          ? {}
+          : {
+              subjects: selectedCandidates.map((entry) => ({
+                subject: entry.materialization.cutoutPng,
+                candidateId: entry.candidateId,
+                bounds: entry.bounds,
+              })),
+            }),
     });
     operation.projects.set(projectKey, project);
     void project.catch(() => {
@@ -411,10 +504,7 @@ export const openUploadedBannerProject = async (input: {
     projectKey,
     materialization.assets.reduce((bytes, asset) => bytes + asset.bytes.byteLength, 0),
   );
-  const materializedBytes = [...operation.projectBytes.values()].reduce(
-    (sum, bytes) => sum + bytes,
-    0,
-  );
+  const materializedBytes = combinedDerivedBytes(operation);
   if (materializedBytes > 64 * 1024 * 1024) {
     operation.projects.delete(projectKey);
     operation.projectBytes.delete(projectKey);

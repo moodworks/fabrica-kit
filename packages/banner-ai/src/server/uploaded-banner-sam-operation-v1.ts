@@ -16,6 +16,12 @@ import {
 import { assertCanonicalNormalizedPng } from '../security/raster-container.js';
 import { sha256Hex } from '../scene/canonical-scene-json.js';
 import { canonicalizeJson } from '../scene/canonical-scene-json.js';
+import {
+  decodeBinaryMaskRle,
+  decodeCanonicalBase64,
+  createCandidateFromMask,
+  maskContentSha256,
+} from '../sam/sam-mask-rle.js';
 import { parseAndVerifySamMaskResponse } from '../sam/sam-mask-validation.js';
 import { createBoundedLayerPreview } from './sam-box-prompt-layer-extraction.js';
 
@@ -96,6 +102,97 @@ export const composeUploadedBannerSamCandidates = async (input: {
     subjectId: `sams_v1_${identity}`,
     candidates: Object.freeze(canonical),
   };
+};
+
+export const composeUploadedBannerSamCandidateGroups = async (input: {
+  readonly operation: UploadedBannerSamOperationResult;
+  readonly candidateGroups: readonly (readonly string[])[];
+}): Promise<{
+  readonly subjectId: string;
+  readonly groups: readonly {
+    readonly groupId: string;
+    readonly memberCandidateIds: readonly string[];
+    readonly candidate: UploadedBannerSamCandidate;
+  }[];
+}> => {
+  if (input.candidateGroups.length < 1 || input.candidateGroups.length > 8)
+    throw new TypeError('Create one to eight layers.');
+  const used = new Set<string>();
+  const groups = [] as {
+    groupId: string;
+    memberCandidateIds: readonly string[];
+    candidate: UploadedBannerSamCandidate;
+  }[];
+  for (const members of input.candidateGroups) {
+    if (
+      !Array.isArray(members) ||
+      members.length < 1 ||
+      members.length > 8 ||
+      members.some((id) => typeof id !== 'string' || used.has(id))
+    )
+      throw new TypeError('Layer members must be nonempty and disjoint.');
+    members.forEach((id) => used.add(id));
+    const canonical = input.operation.candidates.filter((candidate) =>
+      members.includes(candidate.candidateId),
+    );
+    if (canonical.length !== members.length)
+      throw new TypeError('Layer member is not owned by operation.');
+    const first = decodeBinaryMaskRle(
+      decodeCanonicalBase64(canonical[0]!.mask.dataBase64, 1_000_000),
+      input.operation.request.source.width,
+      input.operation.request.source.height,
+    );
+    const union = new Uint8Array(first.pixels);
+    for (const candidate of canonical.slice(1)) {
+      const mask = decodeBinaryMaskRle(
+        decodeCanonicalBase64(candidate.mask.dataBase64, 1_000_000),
+        first.width,
+        first.height,
+      );
+      for (let i = 0; i < union.length; i += 1) union[i] ||= mask.pixels[i]!;
+    }
+    const generated = createCandidateFromMask({
+      mask: union,
+      width: first.width,
+      height: first.height,
+      sourceSha256: input.operation.request.source.sha256,
+      predictedIou: 0,
+      stabilityScore: 0,
+    });
+    const materialization = await materializeSamMaskCutout({
+      trustedRequest: input.operation.request,
+      candidate: generated,
+    });
+    const payload = canonicalizeJson({
+      algorithm: 'uploaded-sam-layer-v1',
+      source: {
+        sha256: input.operation.request.source.sha256,
+        width: first.width,
+        height: first.height,
+      },
+      members: canonical.map((c) => ({
+        id: c.candidateId,
+        mask: c.mask.sha256,
+        cutout: c.materialization.metadata.cutoutPngSha256,
+        crop: c.materialization.metadata.crop,
+      })),
+      union: maskContentSha256(union, first.width, first.height),
+      cutout: materialization.metadata.cutoutPngSha256,
+      crop: materialization.metadata.crop,
+    });
+    const groupId = `saml_v1_${sha256Hex(Buffer.from(payload, 'utf8'))}`;
+    groups.push({
+      groupId,
+      memberCandidateIds: canonical.map((c) => c.candidateId),
+      candidate: Object.freeze({
+        ...generated,
+        materialization,
+        preview: await createBoundedLayerPreview(materialization.cutoutPng),
+      }),
+    });
+  }
+  const subjectId = `sams_v1_${sha256Hex(Buffer.from(canonicalizeJson({ algorithm: 'uploaded-sam-layer-groups-v1', groups: groups.map((group) => group.groupId) }), 'utf8'))}`;
+  return { subjectId, groups: Object.freeze(groups) };
 };
 
 const deepFreeze = <T>(value: T): T => {

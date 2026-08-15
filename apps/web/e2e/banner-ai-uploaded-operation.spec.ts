@@ -25,13 +25,13 @@ test('uploads, marquee-selects two layers, edits, previews, and exports without 
     page.locator('#banner-file-status').getByText('banner-no-text-v1.png'),
   ).toBeVisible();
   await page.getByRole('button', { name: 'Generate verified Samsung cutouts' }).click();
-  await expect(page.getByText('Select cutout layers')).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Build editable layers' })).toBeVisible();
   await expect(page.getByText('Deterministic test output — NOT SAM OUTPUT')).toBeVisible();
   const candidates = page.locator(
     'section[aria-labelledby="uploaded-candidates-title"] input[type="checkbox"]',
   );
   await expect(candidates).toHaveCount(3);
-  await expect(page.getByRole('button', { name: 'Continue with selected layers' })).toBeDisabled();
+  await expect(page.getByRole('button', { name: /Continue with 0 created layers/ })).toBeDisabled();
   const stage = page.locator('.candidate-composer-stage');
   await stage.scrollIntoViewIfNeeded();
   const box = await stage.boundingBox();
@@ -51,19 +51,30 @@ test('uploads, marquee-selects two layers, edits, previews, and exports without 
     'aria-pressed',
     'true',
   );
-  await candidates.nth(0).focus();
+  await page.getByRole('button', { name: /Create layer from 2 cutouts/ }).click();
+  await expect(candidates.nth(0)).toBeDisabled();
+  await expect(candidates.nth(1)).toBeDisabled();
+  await expect(page.getByText(/Assigned to Layer 1/)).toHaveCount(2);
+  await expect(page.getByText('0 cutouts selected for the next layer')).toBeVisible();
+  await candidates.nth(2).focus();
   await page.keyboard.press('Space');
-  await expect(candidates.nth(0)).not.toBeChecked();
+  await expect(candidates.nth(2)).toBeChecked();
   await page.keyboard.press('Space');
-  await expect(candidates.nth(0)).toBeChecked();
-  await page.getByRole('button', { name: 'Continue with selected layers' }).click();
+  await expect(candidates.nth(2)).not.toBeChecked();
+  await page.keyboard.press('Space');
+  await expect(candidates.nth(2)).toBeChecked();
+  await page.getByRole('button', { name: /Create layer from 1 cutouts/ }).click();
+  await page.getByRole('button', { name: 'Move Layer 2 up' }).click();
+  await expect(page.locator('.created-layer-card').nth(0)).toContainText('Candidate 3');
+  await expect(page.locator('.created-layer-card').nth(1)).toContainText('Candidate 1');
+  await page.getByRole('button', { name: 'Continue with 2 created layers' }).click();
 
   await expect(page.getByRole('heading', { name: 'Uploaded layer selection' })).toBeVisible();
-  await expect(page.locator('.editor-layer-name', { hasText: 'Uploaded cutout' })).toHaveCount(2);
-  await expect(page.getByText(/Separate uploaded cutout layers/)).toBeVisible();
+  await expect(page.locator('.editor-layer-name', { hasText: 'Uploaded layer' })).toHaveCount(2);
+  await expect(page.getByText(/Created composite layers/)).toBeVisible();
   expect(await page.evaluate((key) => localStorage.getItem(key), storageKey)).toBeNull();
 
-  const layerRows = page.getByRole('radio', { name: /Uploaded cutout/u });
+  const layerRows = page.getByRole('radio', { name: /Uploaded layer/u });
   await expect(layerRows).toHaveCount(2);
   await layerRows.nth(0).check();
   await page.getByRole('button', { name: 'Apply Gentle float' }).click();

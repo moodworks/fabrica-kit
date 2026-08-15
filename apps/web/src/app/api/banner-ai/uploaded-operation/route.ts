@@ -174,10 +174,14 @@ export async function PUT(request: Request): Promise<Response> {
       return failure(400, 'INVALID_UPLOADED_ACTION', 'Submit one exact uploaded action.');
     const body = bodyValue as Record<string, unknown>;
     if (body.action === 'compose') {
-      requireExactObjectKeys(body, ['action', 'candidateIds', 'operationId'] as const);
+      const grouped = Array.isArray(body.candidateGroups);
+      if (grouped)
+        requireExactObjectKeys(body, ['action', 'candidateGroups', 'operationId'] as const);
+      else requireExactObjectKeys(body, ['action', 'candidateIds', 'operationId'] as const);
       const composed = await composeUploadedBannerOperation({
         operationId: body.operationId,
-        candidateIds: body.candidateIds,
+        candidateIds: grouped ? body.candidateGroups : body.candidateIds,
+        candidateGroups: grouped ? body.candidateGroups : undefined,
         authority: resolveDevelopmentActorWorkspaceContext(),
       });
       return Response.json(

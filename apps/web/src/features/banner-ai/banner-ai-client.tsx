@@ -12,7 +12,7 @@ import {
 
 import {
   requestUploadedBannerOperation,
-  composeUploadedBannerCandidates,
+  composeUploadedBannerCandidateGroups,
   type UploadedBannerOperationData,
 } from './banner-ai-project-api';
 import { BannerAiSourceImage } from './banner-ai-source-image';
@@ -51,6 +51,7 @@ export function BannerAiClient() {
     UploadedBannerOperationData['provenance']
   >(VERIFIED_REPLAY_PROVENANCE);
   const [selectedCandidates, setSelectedCandidates] = useState<readonly string[]>([]);
+  const [createdLayers, setCreatedLayers] = useState<readonly (readonly string[])[]>([]);
   const [composeBusy, setComposeBusy] = useState(false);
   const [composeError, setComposeError] = useState<string | null>(null);
   const [marquee, setMarquee] = useState<{
@@ -80,6 +81,7 @@ export function BannerAiClient() {
     );
   };
   const onStagePointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (composeBusy) return;
     if ((event.pointerType !== 'mouse' && event.pointerType !== 'pen') || event.button !== 0)
       return;
     const point = stagePoint(event);
@@ -107,7 +109,9 @@ export function BannerAiClient() {
     setMarquee(next);
     const picked = selectMarqueeCandidates(
       next,
-      uploadedOperation?.candidates ?? [],
+      uploadedOperation?.candidates.filter(
+        (candidate) => !createdLayers.some((layer) => layer.includes(candidate.candidateId)),
+      ) ?? [],
       rect.width,
       rect.height,
       state.selection?.width,
@@ -136,7 +140,9 @@ export function BannerAiClient() {
         const finalMarquee = marqueeRectFromPoints(drag.start, point);
         const picked = selectMarqueeCandidates(
           finalMarquee,
-          uploadedOperation?.candidates ?? [],
+          uploadedOperation?.candidates.filter(
+            (candidate) => !createdLayers.some((layer) => layer.includes(candidate.candidateId)),
+          ) ?? [],
           rect.width,
           rect.height,
           state.selection?.width ?? rect.width,
@@ -183,6 +189,7 @@ export function BannerAiClient() {
     const requestRevision = nextRequestRevision();
     setUploadedOperation(null);
     setSelectedCandidates([]);
+    setCreatedLayers([]);
     setComposeError(null);
     setUploadProvenance(VERIFIED_REPLAY_PROVENANCE);
     clearPreview();
@@ -229,6 +236,7 @@ export function BannerAiClient() {
       if (requestRevisionRef.current !== requestRevision) return;
       setUploadedOperation(operation);
       setSelectedCandidates([]);
+      setCreatedLayers([]);
       setComposeError(null);
       setUploadProvenance(operation.provenance);
       if (requestRevisionRef.current !== requestRevision) return;
@@ -245,6 +253,22 @@ export function BannerAiClient() {
   };
 
   const busy = state.phase === 'validating' || state.phase === 'running';
+  const assignedLayerFor = (candidateId: string): number | null => {
+    const index = createdLayers.findIndex((layer) => layer.includes(candidateId));
+    return index < 0 ? null : index + 1;
+  };
+  const createLayer = (): void => {
+    if (selectedCandidates.length === 0) return;
+    const order = uploadedOperation?.candidates.map((candidate) => candidate.candidateId) ?? [];
+    const layer = [...selectedCandidates].sort((a, b) => order.indexOf(a) - order.indexOf(b));
+    if (
+      layer.length > 8 ||
+      layer.some((id) => createdLayers.some((existing) => existing.includes(id)))
+    )
+      return;
+    setCreatedLayers((current) => [...current, layer]);
+    setSelectedCandidates([]);
+  };
   const uploadControlCopy = getBannerAiUploadControlCopy(state);
 
   return (
@@ -386,8 +410,10 @@ export function BannerAiClient() {
               className="editor-candidate-picker"
             >
               <p className="section-kicker">02 · Layers</p>
-              <h2 id="uploaded-candidates-title">Select cutout layers</h2>
-              <p>Drag across the image to select layers. Shift-drag adds to the selection.</p>
+              <h2 id="uploaded-candidates-title">Build editable layers</h2>
+              <p>
+                Build editable layers. Drag across the image to select cutouts for the next layer.
+              </p>
               <p>{uploadedOperation.provenance}</p>
               <div
                 ref={stageRef}
@@ -413,12 +439,19 @@ export function BannerAiClient() {
                 <img src={state.selection?.previewUrl} alt="Uploaded banner" draggable={false} />
                 {uploadedOperation.candidates.map((candidate) => {
                   const checked = selectedCandidates.includes(candidate.candidateId);
+                  const assigned = assignedLayerFor(candidate.candidateId);
                   const { crop, source } = candidate;
                   return (
                     <button
                       key={candidate.candidateId}
                       type="button"
-                      className={checked ? 'candidate-hotspot selected' : 'candidate-hotspot'}
+                      className={
+                        assigned !== null
+                          ? 'candidate-hotspot assigned'
+                          : checked
+                            ? 'candidate-hotspot selected'
+                            : 'candidate-hotspot'
+                      }
                       style={{
                         left: `${(crop.left / source.width) * 100}%`,
                         top: `${(crop.top / source.height) * 100}%`,
@@ -426,8 +459,9 @@ export function BannerAiClient() {
                         height: `${(crop.height / source.height) * 100}%`,
                         zIndex: candidate.order,
                       }}
-                      aria-label={`Candidate ${candidate.order}`}
+                      aria-label={`Candidate ${candidate.order}${assigned !== null ? ` assigned to Layer ${assigned}` : ''}`}
                       aria-pressed={checked}
+                      disabled={assigned !== null || composeBusy}
                       onClick={() =>
                         setSelectedCandidates((current) =>
                           checked
@@ -454,13 +488,14 @@ export function BannerAiClient() {
                 ) : null}
               </div>
               <div className="candidate-selection-summary" aria-live="polite">
-                <strong>
-                  {selectedCandidates.length} of {uploadedOperation.candidates.length} layers
-                  selected
-                </strong>
+                <strong>{selectedCandidates.length} cutouts selected for the next layer</strong>
                 <span>Click a marker to toggle it, or use the checkboxes below.</span>
                 {selectedCandidates.length > 0 ? (
-                  <button type="button" onClick={() => setSelectedCandidates([])}>
+                  <button
+                    type="button"
+                    disabled={composeBusy}
+                    onClick={() => setSelectedCandidates([])}
+                  >
                     Clear selection
                   </button>
                 ) : null}
@@ -468,6 +503,7 @@ export function BannerAiClient() {
               <div className="editor-candidate-choice">
                 {uploadedOperation.candidates.map((candidate) => {
                   const checked = selectedCandidates.includes(candidate.candidateId);
+                  const assigned = assignedLayerFor(candidate.candidateId);
                   return (
                     <label key={candidate.candidateId} className={checked ? 'selected' : ''}>
                       {/* eslint-disable-next-line @next/next/no-img-element */}
@@ -475,6 +511,7 @@ export function BannerAiClient() {
                       <input
                         type="checkbox"
                         checked={checked}
+                        disabled={assigned !== null || composeBusy}
                         onChange={() =>
                           setSelectedCandidates((current) =>
                             checked
@@ -484,23 +521,88 @@ export function BannerAiClient() {
                         }
                       />{' '}
                       Candidate {candidate.order}
+                      {assigned !== null ? ` · Assigned to Layer ${assigned}` : ''}
                     </label>
                   );
                 })}
               </div>
-              {composeError !== null ? <p role="alert">{composeError}</p> : null}
               <button
                 type="button"
                 disabled={selectedCandidates.length === 0 || composeBusy}
+                onClick={createLayer}
+              >
+                Create layer from {selectedCandidates.length} cutouts
+              </button>
+              {createdLayers.length > 0 ? (
+                <div className="created-layer-list" aria-label="Created layers">
+                  {createdLayers.map((layer, index) => (
+                    <div className="created-layer-card" key={layer.join(',')}>
+                      <strong>Layer {index + 1}</strong>
+                      <span>
+                        {layer
+                          .map(
+                            (id) =>
+                              `Candidate ${uploadedOperation.candidates.find((candidate) => candidate.candidateId === id)?.order ?? '?'}`,
+                          )
+                          .join(', ')}
+                      </span>
+                      <button
+                        type="button"
+                        disabled={composeBusy}
+                        aria-label={`Remove Layer ${index + 1}`}
+                        onClick={() =>
+                          setCreatedLayers((current) => current.filter((_, i) => i !== index))
+                        }
+                      >
+                        Remove
+                      </button>
+                      <button
+                        type="button"
+                        disabled={composeBusy || index === 0}
+                        aria-label={`Move Layer ${index + 1} up`}
+                        onClick={() =>
+                          setCreatedLayers((current) => {
+                            const next = [...current];
+                            [next[index - 1], next[index]] = [next[index]!, next[index - 1]!];
+                            return next;
+                          })
+                        }
+                      >
+                        Move up
+                      </button>
+                      <button
+                        type="button"
+                        disabled={composeBusy || index === createdLayers.length - 1}
+                        aria-label={`Move Layer ${index + 1} down`}
+                        onClick={() =>
+                          setCreatedLayers((current) => {
+                            const next = [...current];
+                            [next[index], next[index + 1]] = [next[index + 1]!, next[index]!];
+                            return next;
+                          })
+                        }
+                      >
+                        Move down
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              ) : null}
+              {composeError !== null ? <p role="alert">{composeError}</p> : null}
+              <button
+                type="button"
+                disabled={
+                  createdLayers.length === 0 || selectedCandidates.length > 0 || composeBusy
+                }
                 onClick={async () => {
                   const composeRevision = requestRevisionRef.current;
                   const composeOperationId = uploadedOperation.operationId;
                   setComposeBusy(true);
                   setComposeError(null);
                   try {
-                    const { subjectId } = await composeUploadedBannerCandidates(
+                    const { subjectId } = await composeUploadedBannerCandidateGroups(
                       uploadedOperation.operationId,
-                      selectedCandidates,
+                      createdLayers,
                     );
                     if (
                       requestRevisionRef.current !== composeRevision ||
@@ -518,7 +620,9 @@ export function BannerAiClient() {
                   }
                 }}
               >
-                {composeBusy ? 'Opening layers…' : 'Continue with selected layers'}
+                {composeBusy
+                  ? 'Opening layers…'
+                  : `Continue with ${createdLayers.length} created layers`}
               </button>
             </section>
           ) : null}

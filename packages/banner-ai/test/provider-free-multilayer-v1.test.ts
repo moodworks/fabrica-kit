@@ -74,7 +74,7 @@ describe('uploaded multi-layer editor contracts', () => {
         const candidate = result.candidates[index % result.candidates.length]!;
         return {
           subject: candidate.materialization.cutoutPng,
-          candidateId: `samc_v1_${String(index + 1).padStart(2, '0')}${'a'.repeat(62)}`,
+          candidateId: `saml_v1_${String(index + 1).padStart(2, '0')}${'a'.repeat(62)}`,
           bounds: candidate.bounds,
         };
       });

@@ -19,6 +19,7 @@ import {
   parseProviderFreeProjectPresentation,
   parseProviderFreeProjectEnvelope,
 } from './banner-ai-project-contract';
+import { composeUploadedBannerCandidateGroups } from './banner-ai-project-api';
 
 describe('multi-layer presentation contract', () => {
   const thumbnail = {
@@ -130,6 +131,28 @@ describe('multi-layer presentation contract', () => {
         scene,
       ),
     ).toThrow();
+  });
+});
+
+describe('grouped compose request contract', () => {
+  it('sends exact nested candidateGroups and rejects malformed responses', async () => {
+    let body: unknown;
+    await expect(
+      composeUploadedBannerCandidateGroups(
+        'c'.repeat(64),
+        [['samc_v1_' + 'a'.repeat(64)], ['samc_v1_' + 'b'.repeat(64)]],
+        async (_input, init) => {
+          body = JSON.parse(String(init?.body));
+          return Response.json({ ok: true, data: { subjectId: 'sams_v1_' + 'd'.repeat(64) } });
+        },
+      ),
+    ).resolves.toEqual({ subjectId: 'sams_v1_' + 'd'.repeat(64) });
+    expect(body).toMatchObject({ action: 'compose', candidateGroups: expect.any(Array) });
+    await expect(
+      composeUploadedBannerCandidateGroups('c'.repeat(64), [], async () =>
+        Response.json({ ok: true, data: {} }),
+      ),
+    ).rejects.toMatchObject({ code: 'UPLOADED_COMPOSE_FAILED' });
   });
 });
 
