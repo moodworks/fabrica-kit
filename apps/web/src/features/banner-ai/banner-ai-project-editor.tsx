@@ -483,8 +483,18 @@ export function BannerAiProjectEditor() {
   };
 
   const clearPreset = (): void => {
-    if (draftScene === null) return;
-    updateDraft(mutateProviderFreeBannerSceneV1(draftScene, { type: 'clear_gentle_float' }));
+    if (
+      draftScene === null ||
+      state.selectedPartId === null ||
+      !isProviderFreeLayerIdV1(state.selectedPartId)
+    )
+      return;
+    updateDraft(
+      mutateProviderFreeBannerSceneV1(draftScene, {
+        type: 'clear_gentle_float',
+        layerId: state.selectedPartId,
+      }),
+    );
   };
 
   const save = async (): Promise<void> => {
@@ -834,7 +844,9 @@ export function BannerAiProjectEditor() {
   }
 
   const selectedLayer = draftScene.layers.find((layer) => layer.id === state.selectedPartId);
-  const presetTarget = draftScene.timeline[0]?.targetLayerId ?? null;
+  const presetTarget =
+    draftScene.timeline.find((track) => track.targetLayerId === state.selectedPartId)
+      ?.targetLayerId ?? null;
   const working = state.draftStatus === 'saving';
   const acceptedOperationsDisabled = state.draftStatus !== 'clean';
   const exportResultForDigest =
@@ -852,13 +864,13 @@ export function BannerAiProjectEditor() {
           <p className="section-kicker">
             {uploadedBinding === null
               ? 'Verified Meta SAM replay · development-only'
-              : 'Uploaded operation · development-only · deterministic test output'}
+              : 'Uploaded layer selection · development-only'}
           </p>
           <h1 id="editor-project-title">
             {uploadedBinding === null
               ? projectData.project.displayName
               : uploadedBinding?.candidateId.startsWith('sams_v1_')
-                ? 'Uploaded combined subject'
+                ? 'Uploaded layer selection'
                 : 'Uploaded banner candidate'}
           </h1>
           <p>
@@ -869,7 +881,7 @@ export function BannerAiProjectEditor() {
             ) : (
               <>
                 {uploadedBinding.candidateId.startsWith('sams_v1_')
-                  ? 'Combined subject'
+                  ? 'Separate uploaded cutout layers'
                   : 'Candidate'}{' '}
                 <code>{uploadedBinding.candidateId}</code> · 300 × 200 canvas
               </>
@@ -880,7 +892,7 @@ export function BannerAiProjectEditor() {
           <span className="local-badge">
             {uploadedBinding === null
               ? 'Replay · no live provider call'
-              : 'Test output · NOT SAM OUTPUT'}
+              : projectData.presentation.fixtureLabel}
           </span>
           <button
             type="button"

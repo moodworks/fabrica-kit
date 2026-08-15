@@ -29,6 +29,10 @@ import {
   createUploadedBannerExport,
   composeUploadedBannerOperation,
 } from './uploaded-banner-operation';
+import {
+  isProviderFreeLayerIdV1,
+  mutateProviderFreeBannerSceneV1,
+} from '../../../../../packages/banner-ai/src/editor/provider-free-banner-scene-v1';
 
 const source = new Uint8Array(
   readFileSync(
@@ -145,6 +149,7 @@ describe('uploaded banner operation registry', () => {
   });
 
   it('canonicalizes composed subjects, coalesces concurrent opens, and supports preview/export', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch');
     const owner = authority();
     const created = await createUploadedBannerOperation({
       file: new File([source], 'banner.png', { type: 'image/png' }),
@@ -170,6 +175,26 @@ describe('uploaded banner operation registry', () => {
       candidateId: forward.subjectId,
       authority: owner,
     });
+    expect(opened.materialization.scene.layers).toHaveLength(2);
+    expect(opened.materialization.assets).toHaveLength(3);
+    const firstLayer = opened.materialization.scene.layers[0]!;
+    const secondLayer = opened.materialization.scene.layers[1]!;
+    if (!isProviderFreeLayerIdV1(firstLayer.id) || !isProviderFreeLayerIdV1(secondLayer.id))
+      throw new Error('expected uploaded layers');
+    let animated = mutateProviderFreeBannerSceneV1(opened.materialization.scene, {
+      type: 'apply_gentle_float',
+      layerId: firstLayer.id,
+    });
+    animated = mutateProviderFreeBannerSceneV1(animated, {
+      type: 'apply_gentle_float',
+      layerId: secondLayer.id,
+    });
+    expect(animated.timeline).toHaveLength(2);
+    const cleared = mutateProviderFreeBannerSceneV1(animated, {
+      type: 'clear_gentle_float',
+      layerId: firstLayer.id,
+    });
+    expect(cleared.timeline).toHaveLength(1);
     const revision = opened.materialization.project.revisions.at(-1)!;
     const identity = {
       operationId: created.operationId,
@@ -186,6 +211,8 @@ describe('uploaded banner operation registry', () => {
     await expect(createUploadedBannerExport(identity)).resolves.toMatchObject({
       artifact: { mediaType: 'application/zip' },
     });
+    expect(fetchSpy).not.toHaveBeenCalled();
+    fetchSpy.mockRestore();
     await expect(
       composeUploadedBannerOperation({
         operationId: created.operationId,

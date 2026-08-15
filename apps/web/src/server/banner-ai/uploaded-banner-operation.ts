@@ -62,18 +62,19 @@ export interface UploadedBannerOperation {
     string,
     Promise<Awaited<ReturnType<typeof materializeUploadedBannerOperationProjectV1>>>
   >;
+  readonly projectBytes: Map<string, number>;
   readonly composed: Map<
     string,
     Promise<{
       readonly subjectId: string;
-      readonly candidate: UploadedBannerSamOperationResult['candidates'][number];
+      readonly candidates: readonly UploadedBannerSamOperationResult['candidates'][number][];
     }>
   >;
   readonly resolvedSubjects: Map<
     string,
     {
       readonly subjectId: string;
-      readonly candidate: UploadedBannerSamOperationResult['candidates'][number];
+      readonly candidates: readonly UploadedBannerSamOperationResult['candidates'][number][];
     }
   >;
   composedBytes: number;
@@ -191,6 +192,7 @@ export const createUploadedBannerOperation = async (input: {
     sourceBytes: Uint8Array.from(normalized.bytes),
     result,
     projects: new Map(),
+    projectBytes: new Map(),
     composed: new Map(),
     resolvedSubjects: new Map(),
     composedBytes: 0,
@@ -295,14 +297,18 @@ export const composeUploadedBannerOperation = async (input: {
     composed = composeUploadedBannerSamCandidates({
       operation: operation.result,
       candidateIds: ids,
-    }).then((value) => ({ subjectId: value.subjectId, candidate: value.candidate }));
+    }).then((value) => ({ subjectId: value.subjectId, candidates: value.candidates }));
     operation.composed.set(key, composed);
     void composed.catch(() => {
       if (operation.composed.get(key) === composed) operation.composed.delete(key);
     });
   }
   const value = await composed;
-  if (value.candidate.materialization.cutoutPng.byteLength > 16 * 1024 * 1024) {
+  const selectedBytes = value.candidates.reduce(
+    (sum, candidate) => sum + candidate.materialization.cutoutPng.byteLength,
+    0,
+  );
+  if (selectedBytes > 64 * 1024 * 1024) {
     operation.composed.delete(key);
     throw new UploadedBannerOperationError(
       'OPERATION_INVALID',
@@ -312,14 +318,24 @@ export const composeUploadedBannerOperation = async (input: {
   if (!operation.resolvedSubjects.has(value.subjectId))
     operation.resolvedSubjects.set(value.subjectId, value);
   operation.composedBytes = [...operation.resolvedSubjects.values()].reduce(
-    (sum, entry) => sum + entry.candidate.materialization.cutoutPng.byteLength,
+    (sum, entry) =>
+      sum +
+      entry.candidates.reduce(
+        (bytes, candidate) => bytes + candidate.materialization.cutoutPng.byteLength,
+        0,
+      ),
     0,
   );
-  if (operation.composedBytes > 16 * 1024 * 1024) {
+  if (operation.composedBytes > 64 * 1024 * 1024) {
     operation.composed.delete(key);
     operation.resolvedSubjects.delete(value.subjectId);
     operation.composedBytes = [...operation.resolvedSubjects.values()].reduce(
-      (sum, entry) => sum + entry.candidate.materialization.cutoutPng.byteLength,
+      (sum, entry) =>
+        sum +
+        entry.candidates.reduce(
+          (bytes, candidate) => bytes + candidate.materialization.cutoutPng.byteLength,
+          0,
+        ),
       0,
     );
     throw new UploadedBannerOperationError(
@@ -339,6 +355,8 @@ export const openUploadedBannerProject = async (input: {
   let candidate = operation.result.candidates.find(
     (entry) => entry.candidateId === input.candidateId,
   );
+  let selectedCandidates:
+    readonly UploadedBannerSamOperationResult['candidates'][number][] | undefined;
   if (
     candidate === undefined &&
     typeof input.candidateId === 'string' &&
@@ -346,7 +364,8 @@ export const openUploadedBannerProject = async (input: {
   ) {
     for (const composed of operation.resolvedSubjects.values()) {
       if (composed.subjectId === input.candidateId) {
-        candidate = composed.candidate;
+        selectedCandidates = composed.candidates;
+        candidate = composed.candidates[0];
         break;
       }
     }
@@ -359,15 +378,52 @@ export const openUploadedBannerProject = async (input: {
   const projectKey = input.candidateId as string;
   let project = operation.projects.get(projectKey);
   if (project === undefined) {
+    if (operation.projects.size >= 8)
+      throw new UploadedBannerOperationError(
+        'OPERATION_INVALID',
+        'The operation has reached its materialized project limit.',
+      );
     project = materializeUploadedBannerOperationProjectV1({
       source: operation.sourceBytes,
       subject: candidate.materialization.cutoutPng,
       candidateId: input.candidateId as string,
       bounds: candidate.bounds,
+      ...(selectedCandidates === undefined
+        ? {}
+        : {
+            subjects: selectedCandidates.map((entry) => ({
+              subject: entry.materialization.cutoutPng,
+              candidateId: entry.candidateId,
+              bounds: entry.bounds,
+            })),
+          }),
     });
     operation.projects.set(projectKey, project);
+    void project.catch(() => {
+      if (operation.projects.get(projectKey) === project) {
+        operation.projects.delete(projectKey);
+        operation.projectBytes.delete(projectKey);
+      }
+    });
   }
-  return { operation, candidate, materialization: await project };
+  const materialization = await project;
+  operation.projectBytes.set(
+    projectKey,
+    materialization.assets.reduce((bytes, asset) => bytes + asset.bytes.byteLength, 0),
+  );
+  const materializedBytes = [...operation.projectBytes.values()].reduce(
+    (sum, bytes) => sum + bytes,
+    0,
+  );
+  if (materializedBytes > 64 * 1024 * 1024) {
+    operation.projects.delete(projectKey);
+    operation.projectBytes.delete(projectKey);
+    throw new UploadedBannerOperationError(
+      'OPERATION_INVALID',
+      'The operation materialized asset bound was exceeded.',
+    );
+  }
+  return { operation, candidate, materialization };
 };
 
 export const resetUploadedBannerOperationRegistryForTests = (): void => {

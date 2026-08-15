@@ -264,7 +264,7 @@ const parseThumbnail = (input: unknown): ProviderFreeProjectPresentationPart['th
   return input as unknown as ProviderFreeProjectPresentationPart['thumbnail'];
 };
 
-const parsePresentation = (
+export const parseProviderFreeProjectPresentation = (
   input: unknown,
   scene: BannerSceneV1,
 ): ProviderFreeProjectPresentation => {
@@ -279,7 +279,9 @@ const parsePresentation = (
     typeof input['candidateId'] !== 'string' ||
     !/^(?:samc|sams)_v1_[0-9a-f]{64}$/u.test(input['candidateId']) ||
     !Array.isArray(input['parts']) ||
-    input['parts'].length !== 2
+    input['parts'].length !== scene.layers.length + 1 ||
+    scene.layers.length < 1 ||
+    scene.layers.length > 8
   ) {
     throw new TypeError('The demo API returned an invalid project presentation.');
   }
@@ -313,7 +315,8 @@ const parsePresentation = (
   )
     throw new TypeError('The demo API returned an invalid source reference.');
   parseThumbnail(source['thumbnail']);
-  for (const part of input['parts']) {
+  const targets = new Set<string>();
+  for (const [index, part] of input['parts'].entries()) {
     if (
       !isRecord(part) ||
       !hasExactKeys(part, ['bounds', 'name', 'partKey', 'role', 'targetId', 'thumbnail']) ||
@@ -335,6 +338,28 @@ const parsePresentation = (
       throw new TypeError('The demo API returned invalid presentation part metadata.');
     }
     parseThumbnail(part['thumbnail']);
+    if (targets.has(String(part['targetId'])))
+      throw new TypeError('The demo API returned duplicate presentation targets.');
+    targets.add(String(part['targetId']));
+    const expected = index === 0 ? null : scene.layers[index - 1];
+    if (index === 0) {
+      if (part['targetId'] !== 'background' || part['role'] !== 'background')
+        throw new TypeError('The background presentation part is invalid.');
+    } else if (
+      expected === null ||
+      expected === undefined ||
+      part['targetId'] !== expected.id ||
+      part['name'] !== expected.name ||
+      JSON.stringify(part['bounds']) !==
+        JSON.stringify({
+          x: expected.frame.x,
+          y: expected.frame.y,
+          width: expected.frame.width,
+          height: expected.frame.height,
+        })
+    ) {
+      throw new TypeError('Presentation parts do not match scene layers.');
+    }
   }
   return input as unknown as ProviderFreeProjectPresentation;
 };
@@ -369,7 +394,7 @@ export const parseProviderFreeProjectEnvelope = (
     ok: true,
     data: {
       canonicalProjectJson: data['canonicalProjectJson'],
-      presentation: parsePresentation(data['presentation'], scene),
+      presentation: parseProviderFreeProjectPresentation(data['presentation'], scene),
       project,
     },
   };

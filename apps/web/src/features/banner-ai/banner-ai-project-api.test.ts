@@ -1,4 +1,5 @@
 import type { ProviderFreeExportData } from './banner-ai-project-contract';
+import type { BannerSceneV1 } from '@fabrica/banner-ai/browser';
 
 import { beforeAll, describe, expect, it, vi } from 'vitest';
 
@@ -15,8 +16,122 @@ import {
 } from './banner-ai-project-api';
 import {
   parseProviderFreeExportEnvelope,
+  parseProviderFreeProjectPresentation,
   parseProviderFreeProjectEnvelope,
 } from './banner-ai-project-contract';
+
+describe('multi-layer presentation contract', () => {
+  const thumbnail = {
+    dataUrl: 'data:image/png;base64,AA==',
+    byteSize: 1,
+    pixelWidth: 1,
+    pixelHeight: 1,
+    sha256: 'a'.repeat(64),
+  };
+  const sourceAsset = {
+    assetId: 'source',
+    assetVersionId: 'source-version',
+    sha256: 'b'.repeat(64),
+    mediaType: 'image/png',
+    byteSize: 1,
+    pixelWidth: 1,
+    pixelHeight: 1,
+  };
+  const firstLayer = {
+    id: 'layer_uploaded_cutout_aaaaaaaaaaaaaaaaaaaaaaaa',
+    name: 'One',
+    frame: { x: 1, y: 2, width: 3, height: 4 },
+  };
+  const secondLayer = {
+    id: 'layer_uploaded_cutout_bbbbbbbbbbbbbbbbbbbbbbbb',
+    name: 'Two',
+    frame: { x: 5, y: 6, width: 7, height: 8 },
+  };
+  const scene = {
+    sourceAsset,
+    layers: [firstLayer, secondLayer],
+  } as unknown as BannerSceneV1;
+  const presentation = () => ({
+    canvas: { width: 300, height: 200 },
+    fixtureLabel: 'Uploaded layer selection',
+    candidateId: 'sams_v1_' + 'c'.repeat(64),
+    source: { name: 'Source', asset: sourceAsset, thumbnail },
+    parts: [
+      {
+        partKey: 'background',
+        targetId: 'background',
+        name: 'Background',
+        role: 'background',
+        bounds: { x: 0, y: 0, width: 300, height: 200 },
+        thumbnail,
+      },
+      {
+        partKey: 'one',
+        targetId: firstLayer.id,
+        name: 'One',
+        role: 'subject',
+        bounds: firstLayer.frame,
+        thumbnail,
+      },
+      {
+        partKey: 'two',
+        targetId: secondLayer.id,
+        name: 'Two',
+        role: 'subject',
+        bounds: secondLayer.frame,
+        thumbnail,
+      },
+    ],
+  });
+  it('accepts exact background plus two foreground parts and rejects drift', () => {
+    const valid = presentation();
+    expect(parseProviderFreeProjectPresentation(valid, scene)).toMatchObject({
+      parts: valid.parts,
+    });
+    expect(() =>
+      parseProviderFreeProjectPresentation({ ...valid, parts: valid.parts.slice(0, 2) }, scene),
+    ).toThrow();
+    expect(() =>
+      parseProviderFreeProjectPresentation(
+        { ...valid, parts: [...valid.parts, valid.parts[1]] },
+        scene,
+      ),
+    ).toThrow();
+    expect(() =>
+      parseProviderFreeProjectPresentation(
+        {
+          ...valid,
+          parts: valid.parts.map((part, index) =>
+            index === 1 ? { ...part, targetId: 'background' } : part,
+          ),
+        },
+        scene,
+      ),
+    ).toThrow();
+    expect(() =>
+      parseProviderFreeProjectPresentation(
+        {
+          ...valid,
+          parts: valid.parts.map((part, index) =>
+            index === 2 ? { ...part, name: 'Drifted' } : part,
+          ),
+        },
+        scene,
+      ),
+    ).toThrow();
+    expect(() =>
+      parseProviderFreeProjectPresentation(
+        {
+          ...valid,
+          parts: valid.parts.map((part, index) =>
+            index === 1 ? { ...part, bounds: { ...part.bounds, width: 999 } } : part,
+          ),
+        },
+        scene,
+      ),
+    ).toThrow();
+  });
+});
 
 let firstCapture: ProviderFreeOperationCapture;
 let firstData: ProviderFreeExportData;

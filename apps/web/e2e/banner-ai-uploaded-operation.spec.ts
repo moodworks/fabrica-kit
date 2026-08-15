@@ -7,7 +7,7 @@ const fixture = resolve(
   '../../../packages/banner-ai/test/fixtures/real-model-benchmark/normalized/banner-no-text-v1.png',
 );
 
-test('uploads, selects a candidate, edits, previews, and exports without external requests', async ({
+test('uploads, marquee-selects two layers, edits, previews, and exports without external requests', async ({
   page,
 }) => {
   const externalRequests: string[] = [];
@@ -25,36 +25,49 @@ test('uploads, selects a candidate, edits, previews, and exports without externa
     page.locator('#banner-file-status').getByText('banner-no-text-v1.png'),
   ).toBeVisible();
   await page.getByRole('button', { name: 'Generate verified Samsung cutouts' }).click();
-  await expect(page.getByText('Choose layers to combine')).toBeVisible();
+  await expect(page.getByText('Select cutout layers')).toBeVisible();
   await expect(page.getByText('Deterministic test output — NOT SAM OUTPUT')).toBeVisible();
   const candidates = page.locator(
     'section[aria-labelledby="uploaded-candidates-title"] input[type="checkbox"]',
   );
   await expect(candidates).toHaveCount(3);
   await expect(page.getByRole('button', { name: 'Continue with selected layers' })).toBeDisabled();
-  await page.getByRole('button', { name: 'Candidate 1' }).click();
+  const stage = page.locator('.candidate-composer-stage');
+  await stage.scrollIntoViewIfNeeded();
+  const box = await stage.boundingBox();
+  if (box === null) throw new Error('candidate stage is not visible');
+  await page.mouse.move(box.x + box.width * 0.01, box.y + box.height * 0.5);
+  await page.mouse.down();
+  await page.mouse.move(box.x + box.width * 0.65, box.y + box.height * 0.95);
+  await page.mouse.up();
   await expect(candidates.nth(0)).toBeChecked();
+  await expect(candidates.nth(1)).toBeChecked();
+  await expect(candidates.nth(2)).not.toBeChecked();
   await expect(page.getByRole('button', { name: 'Candidate 1' })).toHaveAttribute(
     'aria-pressed',
     'true',
   );
-  await candidates.nth(0).uncheck();
-  await expect(page.getByRole('button', { name: 'Candidate 1' })).toHaveAttribute(
+  await expect(page.getByRole('button', { name: 'Candidate 2' })).toHaveAttribute(
     'aria-pressed',
-    'false',
+    'true',
   );
-  await candidates.nth(0).check();
-  await candidates.nth(1).check();
-  await candidates.nth(1).uncheck();
-  await candidates.nth(1).check();
+  await candidates.nth(0).focus();
+  await page.keyboard.press('Space');
+  await expect(candidates.nth(0)).not.toBeChecked();
+  await page.keyboard.press('Space');
+  await expect(candidates.nth(0)).toBeChecked();
   await page.getByRole('button', { name: 'Continue with selected layers' }).click();
 
-  await expect(page.getByRole('heading', { name: 'Uploaded combined subject' })).toBeVisible();
-  await expect(page.locator('.editor-layer-name', { hasText: 'Uploaded cutout' })).toBeVisible();
-  await expect(page.getByText(/Combined subject/)).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Uploaded layer selection' })).toBeVisible();
+  await expect(page.locator('.editor-layer-name', { hasText: 'Uploaded cutout' })).toHaveCount(2);
+  await expect(page.getByText(/Separate uploaded cutout layers/)).toBeVisible();
   expect(await page.evaluate((key) => localStorage.getItem(key), storageKey)).toBeNull();
 
-  await page.getByRole('radio', { name: /Uploaded cutout/u }).check();
+  const layerRows = page.getByRole('radio', { name: /Uploaded cutout/u });
+  await expect(layerRows).toHaveCount(2);
+  await layerRows.nth(0).check();
+  await page.getByRole('button', { name: 'Apply Gentle float' }).click();
+  await layerRows.nth(1).check();
   await page.getByRole('button', { name: 'Apply Gentle float' }).click();
   await page.getByRole('button', { name: 'Save animation changes' }).click();
   await expect(page.getByText('Accepted in this temporary operation.')).toBeVisible();

@@ -256,6 +256,11 @@ const materializeProviderFreeFixtureProjectCoreV1 = async (input: {
   readonly candidateId?: string;
   readonly sourceFilename?: string;
   readonly sourceIdentity?: { readonly assetId: string; readonly assetVersionId: string };
+  readonly subjects?: readonly {
+    readonly subject: Uint8Array;
+    readonly candidateId: string;
+    readonly bounds: { xBps: number; yBps: number; widthBps: number; heightBps: number };
+  }[];
 }): Promise<ProviderFreeFixtureMaterializationV1> => {
   const normalizedSource = await normalizeRasterUpload({
     bytes: byteSourceFrom(input.source),
@@ -307,22 +312,43 @@ const materializeProviderFreeFixtureProjectCoreV1 = async (input: {
     },
   ];
 
-  for (const [index, proposal] of [
-    {
-      partKey: 'subject',
-      label: input.sourceIdentity ? 'Uploaded cutout' : 'banner-person-v1 subject',
-      role: 'subject',
-      bounds: { xBps: 6506, yBps: 271, widthBps: 1794, heightBps: 9729 },
-    },
-  ].entries()) {
-    if (!(proposal.partKey in layerIdentity)) {
+  const proposals = input.subjects?.length
+    ? input.subjects.map((entry) => ({
+        partKey: `subject_${entry.candidateId.slice(-24)}`,
+        label: 'Uploaded cutout',
+        role: 'subject' as const,
+        bounds: entry.bounds,
+        encoded: entry.subject,
+        candidateId: entry.candidateId,
+      }))
+    : [
+        {
+          partKey: 'subject',
+          label: input.sourceIdentity ? 'Uploaded cutout' : 'banner-person-v1 subject',
+          role: 'subject' as const,
+          bounds: { xBps: 6506, yBps: 271, widthBps: 1794, heightBps: 9729 },
+          encoded: input.subject,
+          candidateId: input.candidateId ?? 'legacy',
+        },
+      ];
+  for (const [index, proposal] of proposals.entries()) {
+    if (!input.subjects?.length && !(proposal.partKey in layerIdentity))
       throw new TypeError('The approved fixture foreground evidence drifted.');
-    }
-    const identity = input.subjectIdentity ?? layerIdentity[proposal.partKey as ForegroundPartKey];
-    const encoded = input.subject;
+    const digest = sha256Hex(Buffer.from(proposal.candidateId, 'utf8')).slice(0, 24);
+    const identity = input.subjects?.length
+      ? {
+          assetId: `asset_uploaded_cutout_${digest}`,
+          assetVersionId: `asset_version_uploaded_cutout_${digest}`,
+          layerId: `layer_uploaded_cutout_${digest}`,
+          filename: `uploaded-${digest}.cutout.png`,
+          bounds: proposal.bounds,
+          name: `Uploaded cutout ${index + 1}`,
+        }
+      : (input.subjectIdentity ?? layerIdentity[proposal.partKey as ForegroundPartKey]);
+    const encoded = proposal.encoded;
     const normalized = await normalizeGeneratedPng(encoded, identity.filename);
     const bounds = candidateFrameToPixels({
-      bounds: input.subjectIdentity?.bounds ?? proposal.bounds,
+      bounds: 'bounds' in identity ? identity.bounds : proposal.bounds,
       sourceWidth: normalizedSource.width,
       sourceHeight: normalizedSource.height,
       cutoutWidth: normalized.width,
@@ -336,7 +362,10 @@ const materializeProviderFreeFixtureProjectCoreV1 = async (input: {
     layerAssets.push({ reference, bytes: Uint8Array.from(normalized.bytes) });
     sceneLayers.push({
       id: identity.layerId as unknown as BannerSceneV1['layers'][number]['id'],
-      name: input.subjectIdentity?.name ?? proposal.label,
+      name:
+        input.subjectIdentity?.name ??
+        ('name' in identity ? identity.name : undefined) ??
+        proposal.label,
       order: index,
       included: true,
       visible: true,
@@ -357,7 +386,10 @@ const materializeProviderFreeFixtureProjectCoreV1 = async (input: {
     presentationParts.push({
       partKey: proposal.partKey,
       targetId: identity.layerId as unknown as ProviderFreeSelectedPartIdV1,
-      name: input.subjectIdentity?.name ?? proposal.label,
+      name:
+        input.subjectIdentity?.name ??
+        ('name' in identity ? identity.name : undefined) ??
+        proposal.label,
       role: 'subject',
       bounds,
       thumbnail: thumbnailFrom(thumbnail),
@@ -508,7 +540,33 @@ export const materializeUploadedBannerOperationProjectV1 = async (input: {
     readonly widthBps: number;
     readonly heightBps: number;
   };
+  readonly subjects?: readonly {
+    readonly subject: Uint8Array;
+    readonly candidateId: string;
+    readonly bounds: { xBps: number; yBps: number; widthBps: number; heightBps: number };
+  }[];
 }): Promise<ProviderFreeFixtureMaterializationV1> => {
+  if (input.subjects !== undefined) {
+    if (input.subjects.length < 1 || input.subjects.length > 8)
+      throw new TypeError('Uploaded selections must contain one to eight subjects.');
+    const ids = input.subjects.map((subject) => subject.candidateId);
+    if (new Set(ids).size !== ids.length || ids.some((id) => !/^samc_v1_[0-9a-f]{64}$/u.test(id)))
+      throw new TypeError('Uploaded selection subjects are invalid or duplicated.');
+  }
+  if (input.subjects !== undefined && input.subjects.length > 0) {
+    const first = input.subjects[0]!;
+    return materializeProviderFreeFixtureProjectCoreV1({
+      source: input.source,
+      subject: first.subject,
+      sourceFilename: 'uploaded-source.png',
+      sourceIdentity: {
+        assetId: `asset_uploaded_source_${sha256Hex(input.source).slice(0, 24)}`,
+        assetVersionId: `asset_version_uploaded_source_${sha256Hex(input.source).slice(0, 24)}`,
+      },
+      subjects: input.subjects,
+      candidateId: input.candidateId,
+    });
+  }
   const source = (await normalizeGeneratedPng(input.source, 'uploaded-source.png')).bytes;
   const subject = (await normalizeGeneratedPng(input.subject, 'uploaded-cutout.png')).bytes;
   const digest = sha256Hex(source).slice(0, 24);

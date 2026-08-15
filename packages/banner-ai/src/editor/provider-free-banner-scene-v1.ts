@@ -15,10 +15,12 @@ export const PROVIDER_FREE_LAYER_IDS_V1 = Object.freeze([
   PROVIDER_FREE_PERSON_SUBJECT_LAYER_ID_V1,
 ] as const);
 
+export type ProviderFreeUploadedLayerIdV1 = `layer_uploaded_cutout_${string}`;
 export type ProviderFreeLayerIdV1 =
   | (typeof PROVIDER_FREE_LAYER_IDS_V1)[number]
   | typeof PROVIDER_FREE_LEFT_WING_LAYER_ID_V1
-  | typeof PROVIDER_FREE_RIGHT_WING_LAYER_ID_V1;
+  | typeof PROVIDER_FREE_RIGHT_WING_LAYER_ID_V1
+  | ProviderFreeUploadedLayerIdV1;
 export type ProviderFreeSelectedPartIdV1 =
   typeof PROVIDER_FREE_BACKGROUND_PART_ID_V1 | ProviderFreeLayerIdV1;
 
@@ -50,7 +52,8 @@ const gentleFloatTrackIds = Object.freeze({
 } satisfies Record<(typeof PROVIDER_FREE_LAYER_IDS_V1)[number], string>);
 
 export const isProviderFreeLayerIdV1 = (value: string): value is ProviderFreeLayerIdV1 =>
-  PROVIDER_FREE_LAYER_IDS_V1.some((layerId) => layerId === value);
+  PROVIDER_FREE_LAYER_IDS_V1.some((layerId) => layerId === value) ||
+  /^layer_uploaded_cutout_[0-9a-f]{24}$/u.test(value);
 
 export const isProviderFreeSelectedPartIdV1 = (
   value: string,
@@ -59,9 +62,7 @@ export const isProviderFreeSelectedPartIdV1 = (
 
 export const gentleFloatTrackIdForLayerV1 = (layerId: ProviderFreeLayerIdV1): string => {
   const id = gentleFloatTrackIds[layerId as keyof typeof gentleFloatTrackIds];
-  if (id === undefined)
-    throw new TypeError('Legacy layer is not part of the verified replay project.');
-  return id;
+  return id ?? `track_float_${layerId.slice(-24)}`;
 };
 
 export const createGentleFloatTrackV1 = (layerId: ProviderFreeLayerIdV1): AnimationTrackV1 => ({
@@ -84,7 +85,7 @@ export type ProviderFreeBannerSceneMutationV1 =
       readonly visible: boolean;
     }
   | { readonly type: 'apply_gentle_float'; readonly layerId: ProviderFreeLayerIdV1 }
-  | { readonly type: 'clear_gentle_float' };
+  | { readonly type: 'clear_gentle_float'; readonly layerId?: ProviderFreeLayerIdV1 };
 
 const requireProviderFreeLayer = (scene: BannerSceneV1, layerId: ProviderFreeLayerIdV1): void => {
   if (!scene.layers.some((layer) => layer.id === layerId)) {
@@ -139,9 +140,18 @@ export const mutateProviderFreeBannerSceneV1 = (
       requireProviderFreeLayer(scene, event.layerId);
       return parseMutatedScene({
         ...scene,
-        timeline: [createGentleFloatTrackV1(event.layerId)],
+        timeline: [
+          ...scene.timeline.filter((track) => track.targetLayerId !== event.layerId),
+          createGentleFloatTrackV1(event.layerId),
+        ].toSorted((left, right) => left.targetLayerId.localeCompare(right.targetLayerId)),
       });
     case 'clear_gentle_float':
-      return parseMutatedScene({ ...scene, timeline: [] });
+      return parseMutatedScene({
+        ...scene,
+        timeline:
+          event.layerId === undefined
+            ? []
+            : scene.timeline.filter((track) => track.targetLayerId !== event.layerId),
+      });
   }
 };

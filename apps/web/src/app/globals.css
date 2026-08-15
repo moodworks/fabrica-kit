@@ -976,7 +976,7 @@ summary:focus-visible {
 
 .editor-candidate-picker {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: 1fr;
   gap: 0.6rem;
   margin: 1rem 0;
   padding: 0.75rem;
@@ -989,6 +989,7 @@ summary:focus-visible {
 }
 .editor-candidate-choice {
   display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(7rem, 1fr));
   gap: 0.3rem;
   padding: 0.4rem;
   border: 1px solid var(--line);
@@ -1014,6 +1015,8 @@ summary:focus-visible {
   border: 1px solid var(--line);
   border-radius: 0.7rem;
   background: #222;
+  touch-action: pan-y pinch-zoom;
+  user-select: none;
 }
 .candidate-composer-stage > img {
   display: block;
@@ -1032,6 +1035,32 @@ summary:focus-visible {
   border-radius: 0.3rem;
   background: color-mix(in srgb, var(--teal) 18%, transparent);
   color: white;
+  cursor: pointer;
+}
+.candidate-marquee {
+  position: absolute;
+  z-index: 100;
+  border: 1px dashed #fff;
+  background: rgb(11 113 107 / 24%);
+  pointer-events: none;
+}
+.candidate-selection-summary {
+  display: flex;
+  gap: 0.65rem;
+  align-items: center;
+  flex-wrap: wrap;
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+.candidate-selection-summary strong {
+  color: var(--ink);
+}
+.candidate-selection-summary button {
+  padding: 0.25rem 0.55rem;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: transparent;
+  color: inherit;
   cursor: pointer;
 }
 .candidate-hotspot span {

@@ -88,7 +88,9 @@ describe('uploaded banner automatic SAM operation helper', () => {
       operation: result,
       candidateIds: [first.candidateId],
     });
-    expect(single.candidate.materialization.cutoutPng).toEqual(first.materialization.cutoutPng);
+    expect(single.candidates[0]!.materialization.cutoutPng).toEqual(
+      first.materialization.cutoutPng,
+    );
     if (result.candidates[1]) {
       const ids = [first.candidateId, result.candidates[1].candidateId];
       const forward = await composeUploadedBannerSamCandidates({
@@ -100,8 +102,8 @@ describe('uploaded banner automatic SAM operation helper', () => {
         candidateIds: ids.toReversed(),
       });
       expect(reverse.subjectId).toBe(forward.subjectId);
-      expect(reverse.candidate.materialization.cutoutPng).toEqual(
-        forward.candidate.materialization.cutoutPng,
+      expect(reverse.candidates[0]!.materialization.cutoutPng).toEqual(
+        forward.candidates[0]!.materialization.cutoutPng,
       );
     }
   });

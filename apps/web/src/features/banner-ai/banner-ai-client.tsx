@@ -1,7 +1,14 @@
 'use client';
 
 import Link from 'next/link';
-import { useEffect, useReducer, useRef, useState, type ChangeEvent } from 'react';
+import {
+  useEffect,
+  useReducer,
+  useRef,
+  useState,
+  type ChangeEvent,
+  type PointerEvent as ReactPointerEvent,
+} from 'react';
 
 import {
   requestUploadedBannerOperation,
@@ -16,6 +23,11 @@ import {
   initialBannerAiState,
 } from './banner-ai-state';
 import { inspectBrowserRasterUpload } from './browser-upload';
+import {
+  clampMarqueePoint,
+  marqueeRectFromPoints,
+  selectMarqueeCandidates,
+} from './marquee-selection';
 
 const formatBytes = (bytes: number): string => {
   if (bytes < 1_024) return `${bytes} B`;
@@ -41,6 +53,113 @@ export function BannerAiClient() {
   const [selectedCandidates, setSelectedCandidates] = useState<readonly string[]>([]);
   const [composeBusy, setComposeBusy] = useState(false);
   const [composeError, setComposeError] = useState<string | null>(null);
+  const [marquee, setMarquee] = useState<{
+    left: number;
+    top: number;
+    width: number;
+    height: number;
+  } | null>(null);
+  const stageRef = useRef<HTMLDivElement | null>(null);
+  const dragRef = useRef<{
+    pointerId: number;
+    start: { x: number; y: number };
+    baseline: readonly string[];
+    additive: boolean;
+    dragging: boolean;
+  } | null>(null);
+  const suppressClickRef = useRef(false);
+
+  const stagePoint = (event: { clientX: number; clientY: number }) => {
+    const stage = stageRef.current;
+    if (stage === null) return null;
+    const rect = stage.getBoundingClientRect();
+    return clampMarqueePoint(
+      { x: event.clientX - rect.left, y: event.clientY - rect.top },
+      rect.width,
+      rect.height,
+    );
+  };
+  const onStagePointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if ((event.pointerType !== 'mouse' && event.pointerType !== 'pen') || event.button !== 0)
+      return;
+    const point = stagePoint(event);
+    const stage = stageRef.current;
+    if (point === null || stage === null) return;
+    dragRef.current = {
+      pointerId: event.pointerId,
+      start: point,
+      baseline: selectedCandidates,
+      additive: event.shiftKey,
+      dragging: false,
+    };
+    stage.setPointerCapture(event.pointerId);
+  };
+  const onStagePointerMove = (event: ReactPointerEvent<HTMLDivElement>) => {
+    const drag = dragRef.current;
+    if (drag === null || drag.pointerId !== event.pointerId) return;
+    const point = stagePoint(event);
+    const stage = stageRef.current;
+    if (point === null || stage === null) return;
+    const rect = stage.getBoundingClientRect();
+    const next = marqueeRectFromPoints(drag.start, point);
+    if (!drag.dragging && next.width < 5 && next.height < 5) return;
+    drag.dragging = true;
+    setMarquee(next);
+    const picked = selectMarqueeCandidates(
+      next,
+      uploadedOperation?.candidates ?? [],
+      rect.width,
+      rect.height,
+      state.selection?.width,
+      state.selection?.height,
+    );
+    const merged = drag.additive ? [...new Set([...drag.baseline, ...picked])] : picked;
+    setSelectedCandidates(
+      merged.toSorted(
+        (left, right) =>
+          (uploadedOperation?.candidates.find((candidate) => candidate.candidateId === left)
+            ?.order ?? 0) -
+          (uploadedOperation?.candidates.find((candidate) => candidate.candidateId === right)
+            ?.order ?? 0),
+      ),
+    );
+  };
+  const finishStagePointer = (event: ReactPointerEvent<HTMLDivElement>, cancelled = false) => {
+    const drag = dragRef.current;
+    if (drag === null || drag.pointerId !== event.pointerId) return;
+    if (cancelled || !drag.dragging) setSelectedCandidates(drag.baseline);
+    else {
+      const point = stagePoint(event);
+      const stage = stageRef.current;
+      if (point !== null && stage !== null) {
+        const rect = stage.getBoundingClientRect();
+        const finalMarquee = marqueeRectFromPoints(drag.start, point);
+        const picked = selectMarqueeCandidates(
+          finalMarquee,
+          uploadedOperation?.candidates ?? [],
+          rect.width,
+          rect.height,
+          state.selection?.width ?? rect.width,
+          state.selection?.height ?? rect.height,
+        );
+        const merged = drag.additive ? [...new Set([...drag.baseline, ...picked])] : picked;
+        setSelectedCandidates(
+          merged.toSorted(
+            (left, right) =>
+              (uploadedOperation?.candidates.find((candidate) => candidate.candidateId === left)
+                ?.order ?? 0) -
+              (uploadedOperation?.candidates.find((candidate) => candidate.candidateId === right)
+                ?.order ?? 0),
+          ),
+        );
+      }
+    }
+    suppressClickRef.current = cancelled ? false : drag.dragging;
+    dragRef.current = null;
+    setMarquee(null);
+    if (stageRef.current?.hasPointerCapture(event.pointerId))
+      stageRef.current.releasePointerCapture(event.pointerId);
+  };
 
   useEffect(
     () => () => {
@@ -267,17 +386,31 @@ export function BannerAiClient() {
               className="editor-candidate-picker"
             >
               <p className="section-kicker">02 · Layers</p>
-              <h2 id="uploaded-candidates-title">Choose layers to combine</h2>
-              <p>Select the parts that should move together before continuing.</p>
+              <h2 id="uploaded-candidates-title">Select cutout layers</h2>
+              <p>Drag across the image to select layers. Shift-drag adds to the selection.</p>
               <p>{uploadedOperation.provenance}</p>
               <div
+                ref={stageRef}
                 className="candidate-composer-stage"
+                onPointerDown={onStagePointerDown}
+                onPointerMove={onStagePointerMove}
+                onPointerUp={finishStagePointer}
+                onPointerCancel={(event) => finishStagePointer(event, true)}
+                onLostPointerCapture={(event) => finishStagePointer(event, true)}
+                onClick={(event) => {
+                  if (suppressClickRef.current) {
+                    suppressClickRef.current = false;
+                    return;
+                  }
+                  if (!(event.target as HTMLElement).closest('.candidate-hotspot'))
+                    setSelectedCandidates([]);
+                }}
                 style={{
                   aspectRatio: `${state.selection?.width ?? 1} / ${state.selection?.height ?? 1}`,
                 }}
               >
                 {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img src={state.selection?.previewUrl} alt="Uploaded banner" />
+                <img src={state.selection?.previewUrl} alt="Uploaded banner" draggable={false} />
                 {uploadedOperation.candidates.map((candidate) => {
                   const checked = selectedCandidates.includes(candidate.candidateId);
                   const { crop, source } = candidate;
@@ -307,6 +440,30 @@ export function BannerAiClient() {
                     </button>
                   );
                 })}
+                {marquee !== null ? (
+                  <div
+                    className="candidate-marquee"
+                    style={{
+                      left: marquee.left,
+                      top: marquee.top,
+                      width: marquee.width,
+                      height: marquee.height,
+                    }}
+                    aria-hidden="true"
+                  />
+                ) : null}
+              </div>
+              <div className="candidate-selection-summary" aria-live="polite">
+                <strong>
+                  {selectedCandidates.length} of {uploadedOperation.candidates.length} layers
+                  selected
+                </strong>
+                <span>Click a marker to toggle it, or use the checkboxes below.</span>
+                {selectedCandidates.length > 0 ? (
+                  <button type="button" onClick={() => setSelectedCandidates([])}>
+                    Clear selection
+                  </button>
+                ) : null}
               </div>
               <div className="editor-candidate-choice">
                 {uploadedOperation.candidates.map((candidate) => {
@@ -355,15 +512,13 @@ export function BannerAiClient() {
                     );
                   } catch (error) {
                     if (requestRevisionRef.current !== composeRevision) return;
-                    setComposeError(
-                      messageFrom(error, 'The combined subject could not be created.'),
-                    );
+                    setComposeError(messageFrom(error, 'The selected layers could not be opened.'));
                   } finally {
                     setComposeBusy(false);
                   }
                 }}
               >
-                {composeBusy ? 'Combining…' : 'Continue with selected layers'}
+                {composeBusy ? 'Opening layers…' : 'Continue with selected layers'}
               </button>
             </section>
           ) : null}
