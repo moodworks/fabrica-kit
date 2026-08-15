@@ -361,6 +361,36 @@ describe('uploaded operation client parser', () => {
       }).candidates,
     ).toHaveLength(1);
   });
+  it('accepts verified replay provenance and rejects provenance drift', () => {
+    const value = {
+      ok: true as const,
+      data: {
+        operationId: 'c'.repeat(64),
+        candidates: [
+          {
+            ...uploadedCandidate,
+            provenance: 'Verified Meta SAM 2.1 cutout replay — no live call',
+          },
+        ],
+        provenance: 'Verified Meta SAM 2.1 cutout replay — no live call',
+      },
+    };
+    expect(parseUploadedBannerOperationPayload(value).provenance).toBe(value.data.provenance);
+    expect(() =>
+      parseUploadedBannerOperationPayload({
+        ...value,
+        data: {
+          ...value.data,
+          candidates: [
+            {
+              ...value.data.candidates[0],
+              provenance: 'Deterministic test output — NOT SAM OUTPUT',
+            },
+          ],
+        },
+      }),
+    ).toThrow();
+  });
   type MutableParserPayload = {
     data: {
       candidates: Array<{ bounds: { x: number } }>;

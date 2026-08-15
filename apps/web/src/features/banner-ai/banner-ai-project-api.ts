@@ -48,13 +48,15 @@ export interface UploadedBannerCandidate {
     readonly pixelHeight: number;
     readonly sha256: string;
   };
-  readonly provenance: 'Deterministic test output — NOT SAM OUTPUT';
+  readonly provenance:
+    | 'Deterministic test output — NOT SAM OUTPUT'
+    | 'Verified Meta SAM 2.1 cutout replay — no live call';
 }
 
 export interface UploadedBannerOperationData {
   readonly operationId: string;
   readonly candidates: readonly UploadedBannerCandidate[];
-  readonly provenance: 'Deterministic test output — NOT SAM OUTPUT';
+  readonly provenance: UploadedBannerCandidate['provenance'];
 }
 export interface UploadedBannerBinding {
   readonly operationId: string;
@@ -180,7 +182,8 @@ export const parseUploadedBannerOperationPayload = (
     !Array.isArray(data['candidates']) ||
     data['candidates'].length < 1 ||
     data['candidates'].length > 8 ||
-    data['provenance'] !== 'Deterministic test output — NOT SAM OUTPUT'
+    (data['provenance'] !== 'Deterministic test output — NOT SAM OUTPUT' &&
+      data['provenance'] !== 'Verified Meta SAM 2.1 cutout replay — no live call')
   ) {
     throw new BannerProjectRequestError(
       'INVALID_UPLOADED_OPERATION',
@@ -202,7 +205,7 @@ export const parseUploadedBannerOperationPayload = (
       typeof candidate['candidateId'] !== 'string' ||
       !/^samc_v1_[0-9a-f]{64}$/u.test(candidate['candidateId']) ||
       candidate['order'] !== index + 1 ||
-      candidate['provenance'] !== 'Deterministic test output — NOT SAM OUTPUT' ||
+      candidate['provenance'] !== data['provenance'] ||
       !Number.isSafeInteger(candidate['pixelArea']) ||
       Number(candidate['pixelArea']) < 64 ||
       !Number.isSafeInteger(candidate['areaRatioBps']) ||
@@ -235,7 +238,7 @@ export const parseUploadedBannerOperationPayload = (
   return {
     operationId: data['operationId'],
     candidates,
-    provenance: 'Deterministic test output — NOT SAM OUTPUT',
+    provenance: data['provenance'],
   };
 };
 
@@ -576,9 +579,11 @@ export const requestUploadedBannerExport = async (
       sceneVersionId: capture.sceneVersionId,
     }),
   );
-  return acceptProviderFreeExportForCapture(
-    resolveEnvelope(parseProviderFreeExportEnvelope(await parseJsonResponse(response))),
-    capture,
-    'uploaded-deterministic-test',
+  const data = resolveEnvelope(parseProviderFreeExportEnvelope(await parseJsonResponse(response)));
+  const prefixes = ['uploaded-verified-meta-sam-replay', 'uploaded-deterministic-test'] as const;
+  const prefix = prefixes.find((candidate) =>
+    data.artifact.filename.startsWith(`${candidate}-r${String(capture.revision)}-`),
   );
+  if (prefix === undefined) return rejectExportIdentity();
+  return acceptProviderFreeExportForCapture(data, capture, prefix);
 };

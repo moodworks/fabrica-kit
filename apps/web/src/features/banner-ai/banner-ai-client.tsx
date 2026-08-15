@@ -24,6 +24,7 @@ const formatBytes = (bytes: number): string => {
 
 const messageFrom = (error: unknown, fallback: string): string =>
   error instanceof Error && error.message.length > 0 ? error.message : fallback;
+const VERIFIED_REPLAY_PROVENANCE = 'Verified Meta SAM 2.1 cutout replay — no live call' as const;
 
 export function BannerAiClient() {
   const [state, dispatch] = useReducer(bannerAiReducer, initialBannerAiState);
@@ -33,6 +34,9 @@ export function BannerAiClient() {
   const [uploadedOperation, setUploadedOperation] = useState<UploadedBannerOperationData | null>(
     null,
   );
+  const [uploadProvenance, setUploadProvenance] = useState<
+    UploadedBannerOperationData['provenance']
+  >(VERIFIED_REPLAY_PROVENANCE);
 
   useEffect(
     () => () => {
@@ -55,6 +59,7 @@ export function BannerAiClient() {
   const selectFile = async (file: File | undefined): Promise<void> => {
     const requestRevision = nextRequestRevision();
     setUploadedOperation(null);
+    setUploadProvenance(VERIFIED_REPLAY_PROVENANCE);
     clearPreview();
     if (file === undefined) {
       dispatch({ type: 'selection_cleared', requestRevision });
@@ -98,6 +103,7 @@ export function BannerAiClient() {
       const operation = await requestUploadedBannerOperation(file);
       if (requestRevisionRef.current !== requestRevision) return;
       setUploadedOperation(operation);
+      setUploadProvenance(operation.provenance);
       if (requestRevisionRef.current !== requestRevision) return;
       dispatch({ type: 'uploaded_succeeded', requestRevision });
     } catch (error) {
@@ -127,9 +133,8 @@ export function BannerAiClient() {
           <h1>See a banner as editable parts.</h1>
         </div>
         <p>
-          Upload one JPG or PNG. The trusted local boundary normalizes it, then bounded
-          deterministic automatic candidates are generated for manual selection. They are NOT SAM
-          OUTPUT and use no provider key, database, network, or cost.
+          Upload the authorized Samsung fixture PNG to open its stored verified Meta SAM 2.1 cutout
+          replay. No provider call is made; other uploads are not currently supported.
         </p>
       </header>
 
@@ -231,9 +236,10 @@ export function BannerAiClient() {
 
           <div className="analysis-action">
             <div>
-              <strong>Bounded deterministic automatic candidates</strong>
+              <strong>Verified Samsung cutout replay</strong>
               <span>
-                Development test output — NOT SAM OUTPUT. The server revalidates every byte.
+                Only the exact authorized Samsung fixture is supported locally: eight stored Meta
+                SAM 2.1 cutouts, with no live provider call. The server revalidates every byte.
               </span>
             </div>
             <button
@@ -243,7 +249,7 @@ export function BannerAiClient() {
             >
               {state.phase === 'running'
                 ? 'Generating candidates…'
-                : 'Generate automatic candidates'}
+                : 'Generate verified Samsung cutouts'}
             </button>
           </div>
 
@@ -254,7 +260,7 @@ export function BannerAiClient() {
             >
               <p className="section-kicker">02 · Layers</p>
               <h2 id="uploaded-candidates-title">Choose a cutout to edit</h2>
-              <p>These are deterministic development candidates, not live Meta SAM output.</p>
+              <p>{uploadedOperation.provenance}</p>
               <div className="editor-candidate-choice">
                 {uploadedOperation.candidates.map((candidate) => (
                   <Link
@@ -278,6 +284,7 @@ export function BannerAiClient() {
           error={state.error?.message ?? null}
           result={state.result}
           review={state.layerReview}
+          uploadProvenance={uploadProvenance}
           onSelectPart={(partKey) => dispatch({ type: 'layer_selected', partKey })}
           onSetPartIncluded={(partKey, included) =>
             dispatch({ type: 'layer_inclusion_set', partKey, included })

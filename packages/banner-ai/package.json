@@ -19,6 +19,10 @@
     "./server/uploaded-banner-sam-operation-v1": {
       "types": "./src/server/uploaded-banner-sam-operation-v1.ts",
       "default": "./src/server/uploaded-banner-sam-operation-v1.ts"
+    },
+    "./server/uploaded-banner-sam-replay-v4": {
+      "types": "./src/server/uploaded-banner-sam-replay-v4.ts",
+      "default": "./src/server/uploaded-banner-sam-replay-v4.ts"
     }
   },
   "scripts": {

@@ -11,6 +11,7 @@ import {
   BannerUploadFormError,
   requireSingleBannerUpload,
 } from '../../../../server/banner-ai/upload-form';
+import { loadSamsungSamV4Replay } from '@fabrica/banner-ai/server/uploaded-banner-sam-replay-v4';
 import { createDeterministicUploadedBannerSamGenerator } from '@fabrica/banner-ai/server/uploaded-banner-sam-operation-v1';
 import {
   readBoundedJson,
@@ -20,10 +21,15 @@ import {
 export const runtime = 'nodejs';
 
 // Deliberately unset in production. Tests may inject a deterministic fake adapter explicitly.
-let injectedGenerator: Parameters<typeof createUploadedBannerOperation>[0]['generator'] =
-  process.env.NODE_ENV === 'production'
+let injectedGenerator: Parameters<typeof createUploadedBannerOperation>[0]['generator'] = undefined;
+const e2eFakeGenerator =
+  process.env.NODE_ENV !== 'production' && process.env.BANNER_AI_E2E_TEST_FAKE === '1'
+    ? createDeterministicUploadedBannerSamGenerator()
+    : undefined;
+const injectedReplay: Parameters<typeof createUploadedBannerOperation>[0]['replay'] =
+  process.env.NODE_ENV === 'production' || e2eFakeGenerator !== undefined
     ? undefined
-    : createDeterministicUploadedBannerSamGenerator();
+    : loadSamsungSamV4Replay;
 export const setUploadedOperationTestGenerator = (generator: typeof injectedGenerator): void => {
   injectedGenerator = generator;
 };
@@ -88,7 +94,16 @@ export async function POST(request: Request): Promise<Response> {
     const created = await createUploadedBannerOperation({
       file,
       authority,
-      ...(injectedGenerator === undefined ? {} : { generator: injectedGenerator }),
+      ...(injectedGenerator !== undefined
+        ? { generator: injectedGenerator }
+        : e2eFakeGenerator !== undefined
+          ? { generator: e2eFakeGenerator }
+          : {}),
+      ...(injectedGenerator === undefined &&
+      e2eFakeGenerator === undefined &&
+      injectedReplay !== undefined
+        ? { replay: injectedReplay }
+        : {}),
     });
     return Response.json(
       {
@@ -96,7 +111,8 @@ export async function POST(request: Request): Promise<Response> {
         data: {
           operationId: created.operationId,
           candidates: created.catalog,
-          provenance: 'Deterministic test output — NOT SAM OUTPUT',
+          provenance:
+            created.catalog[0]?.provenance ?? 'Verified Meta SAM 2.1 cutout replay — no live call',
         },
       },
       { headers: { 'cache-control': 'no-store' } },
@@ -134,7 +150,7 @@ export async function GET(request: Request): Promise<Response> {
         data: {
           operationId: operation.operationId,
           candidates: uploadedCandidateCatalog(operation),
-          provenance: 'Deterministic test output — NOT SAM OUTPUT',
+          provenance: operation.result.provenance,
         },
       },
       { headers: { 'cache-control': 'no-store' } },
@@ -169,6 +185,10 @@ export async function PUT(request: Request): Promise<Response> {
         ...body,
         authority: resolveDevelopmentActorWorkspaceContext(),
       } as Parameters<typeof saveUploadedBannerProject>[0]);
+      const savedOperation = resolveUploadedBannerOperation(
+        body.operationId,
+        resolveDevelopmentActorWorkspaceContext(),
+      );
       return Response.json(
         {
           ok: true,
@@ -177,7 +197,7 @@ export async function PUT(request: Request): Promise<Response> {
             project: saved.project,
             presentation: {
               canvas: { width: 300, height: 200 },
-              fixtureLabel: 'Deterministic test output — NOT SAM OUTPUT',
+              fixtureLabel: savedOperation.result.provenance,
               candidateId: saved.presentation.candidateId,
               source: saved.presentation.sourceReference,
               parts: saved.presentation.presentationParts,
@@ -196,6 +216,10 @@ export async function PUT(request: Request): Promise<Response> {
       candidateId: body.candidateId,
       authority: resolveDevelopmentActorWorkspaceContext(),
     });
+    const openedOperation = resolveUploadedBannerOperation(
+      body.operationId,
+      resolveDevelopmentActorWorkspaceContext(),
+    );
     return Response.json(
       {
         ok: true,
@@ -203,7 +227,7 @@ export async function PUT(request: Request): Promise<Response> {
           canonicalProjectJson: JSON.stringify(opened.materialization.project),
           presentation: {
             canvas: { width: 300, height: 200 },
-            fixtureLabel: 'Deterministic test output — NOT SAM OUTPUT',
+            fixtureLabel: openedOperation.result.provenance,
             candidateId: opened.materialization.candidateId,
             source: opened.materialization.sourceReference,
             parts: opened.materialization.presentationParts,

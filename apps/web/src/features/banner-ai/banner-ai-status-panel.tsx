@@ -14,18 +14,31 @@ const statusLabel = Object.freeze({
   failed: 'Failed',
 } satisfies Record<BannerAiPhase, string>);
 
-export const bannerAiStatusCopy = (phase: BannerAiPhase, ready: boolean): string => {
+export const bannerAiStatusCopy = (
+  phase: BannerAiPhase,
+  ready: boolean,
+  provenance:
+    | 'Deterministic test output — NOT SAM OUTPUT'
+    | 'Verified Meta SAM 2.1 cutout replay — no live call' = 'Deterministic test output — NOT SAM OUTPUT',
+): string => {
+  const replay = provenance === 'Verified Meta SAM 2.1 cutout replay — no live call';
   switch (phase) {
     case 'idle':
       return ready
-        ? 'The image is ready for bounded deterministic automatic candidates.'
+        ? replay
+          ? 'The exact Samsung fixture is ready for stored verified Meta SAM 2.1 cutouts.'
+          : 'The image is ready for bounded deterministic automatic candidates.'
         : 'Select one JPG or PNG to begin.';
     case 'validating':
       return 'Validating the selected image and decoding its dimensions in this browser.';
     case 'running':
-      return 'Generating bounded deterministic automatic candidates — NOT SAM OUTPUT.';
+      return replay
+        ? 'Generating stored verified Meta SAM 2.1 cutouts — no live provider call.'
+        : 'Generating bounded deterministic automatic candidates — NOT SAM OUTPUT.';
     case 'succeeded':
-      return 'Deterministic automatic candidates are ready — NOT SAM OUTPUT.';
+      return replay
+        ? 'Stored verified Meta SAM 2.1 cutouts are ready — no live provider call.'
+        : 'Deterministic automatic candidates are ready — NOT SAM OUTPUT.';
     case 'failed':
       return 'The current operation could not be completed.';
   }
@@ -56,6 +69,9 @@ export interface BannerAiStatusPanelProps {
   readonly error: string | null;
   readonly result: BannerAnalysisData | null;
   readonly review: BannerLayerReviewState | null;
+  readonly uploadProvenance?:
+    | 'Deterministic test output — NOT SAM OUTPUT'
+    | 'Verified Meta SAM 2.1 cutout replay — no live call';
   readonly onSelectPart: (partKey: string) => void;
   readonly onSetPartIncluded: (partKey: string, included: boolean) => void;
   readonly onSetPartVisible: (partKey: string, visible: boolean) => void;
@@ -67,6 +83,7 @@ export function BannerAiStatusPanel({
   error,
   result,
   review,
+  uploadProvenance,
   onSelectPart,
   onSetPartIncluded,
   onSetPartVisible,
@@ -83,7 +100,7 @@ export function BannerAiStatusPanel({
         <span className={`status-dot status-dot-${phase}`} aria-hidden="true" />
       </div>
       <p className="status-copy" role="status" aria-live="polite" aria-atomic="true">
-        {bannerAiStatusCopy(phase, ready)}
+        {bannerAiStatusCopy(phase, ready, uploadProvenance)}
       </p>
 
       {phase === 'validating' || phase === 'running' ? (

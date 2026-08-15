@@ -24,11 +24,9 @@ test('uploads, selects a candidate, edits, previews, and exports without externa
   await expect(
     page.locator('#banner-file-status').getByText('banner-no-text-v1.png'),
   ).toBeVisible();
-  await page.getByRole('button', { name: 'Generate automatic candidates' }).click();
+  await page.getByRole('button', { name: 'Generate verified Samsung cutouts' }).click();
   await expect(page.getByText('Choose a cutout to edit')).toBeVisible();
-  await expect(
-    page.getByText('These are deterministic development candidates, not live Meta SAM output.'),
-  ).toBeVisible();
+  await expect(page.getByText('Deterministic test output — NOT SAM OUTPUT')).toBeVisible();
   const candidates = page.locator('section[aria-labelledby="uploaded-candidates-title"] a');
   await expect(candidates).toHaveCount(3);
   await candidates.nth(1).click();

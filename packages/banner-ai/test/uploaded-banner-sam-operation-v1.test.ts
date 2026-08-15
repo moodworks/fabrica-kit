@@ -36,6 +36,9 @@ describe('uploaded banner automatic SAM operation helper', () => {
     });
     expect(generator.getCallCount()).toBe(1);
     expect(generator.networkCalls).toBe(0);
+    expect(result.provenance).toBe('Deterministic test output — NOT SAM OUTPUT');
+    if (result.provenance !== 'Deterministic test output — NOT SAM OUTPUT')
+      throw new Error('expected fake result');
     expect(result.response.executionIdentity).toEqual(UPLOADED_BANNER_SAM_FAKE_IDENTITY);
   });
 
@@ -56,12 +59,14 @@ describe('uploaded banner automatic SAM operation helper', () => {
     });
     expect(transport.getCallCount()).toBe(1);
     expect(transport.networkCalls).toBe(0);
-    expect(result.provenance).toBe('deterministic fake / NOT_SAM_OUTPUT');
+    expect(result.provenance).toBe('Deterministic test output — NOT SAM OUTPUT');
     expect(result.candidates.length).toBeGreaterThanOrEqual(1);
     expect(result.candidates.length).toBeLessThanOrEqual(8);
     expect(result.candidates.every((candidate) => candidate.preview.byteSize <= 524_288)).toBe(
       true,
     );
+    if (result.provenance !== 'Deterministic test output — NOT SAM OUTPUT')
+      throw new Error('expected fake result');
     expect(result.request.source.sha256).toBe(result.response.sourceSha256);
     expect(result.candidates[0]?.materialization.metadata.sourceSha256).toBe(
       result.request.source.sha256,

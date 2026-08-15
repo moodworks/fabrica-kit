@@ -9,7 +9,7 @@ import {
   createBannerLayerReviewState,
   type BannerLayerReviewState,
 } from './banner-ai-layer-state';
-import { BannerAiStatusPanel } from './banner-ai-status-panel';
+import { BannerAiStatusPanel, bannerAiStatusCopy } from './banner-ai-status-panel';
 
 const noOp = () => {};
 
@@ -33,6 +33,14 @@ const renderStatus = (
   );
 
 describe('Banner AI status rendering', () => {
+  it('describes the verified replay while running and after success', () => {
+    expect(
+      bannerAiStatusCopy('running', true, 'Verified Meta SAM 2.1 cutout replay — no live call'),
+    ).toContain('no live provider call');
+    expect(
+      bannerAiStatusCopy('succeeded', true, 'Verified Meta SAM 2.1 cutout replay — no live call'),
+    ).toContain('Stored verified Meta SAM 2.1 cutouts');
+  });
   it.each([
     ['idle', 'Idle'],
     ['validating', 'Validating'],

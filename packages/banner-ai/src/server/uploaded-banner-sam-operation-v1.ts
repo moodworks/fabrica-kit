@@ -42,12 +42,21 @@ export interface UploadedBannerSamCandidate extends SamMaskCandidate {
   readonly materialization: SamCutoutMaterialization;
 }
 
-export interface UploadedBannerSamOperationResult {
+interface UploadedBannerSamOperationBase {
   readonly request: SamMaskRequest;
-  readonly response: SamMaskResponse;
   readonly candidates: readonly UploadedBannerSamCandidate[];
-  readonly provenance: 'deterministic fake / NOT_SAM_OUTPUT';
 }
+
+export interface UploadedBannerSamFakeOperationResult extends UploadedBannerSamOperationBase {
+  readonly provenance: 'Deterministic test output — NOT SAM OUTPUT';
+  readonly response: SamMaskResponse;
+}
+
+export interface UploadedBannerSamReplayOperationResult extends UploadedBannerSamOperationBase {
+  readonly provenance: 'Verified Meta SAM 2.1 cutout replay — no live call';
+}
+export type UploadedBannerSamOperationResult =
+  UploadedBannerSamFakeOperationResult | UploadedBannerSamReplayOperationResult;
 
 const deepFreeze = <T>(value: T): T => {
   if (value !== null && typeof value === 'object' && !Object.isFrozen(value)) {
@@ -206,6 +215,6 @@ export const generateUploadedBannerSamCandidates = async (input: {
     request,
     response,
     candidates: Object.freeze(candidates),
-    provenance: 'deterministic fake / NOT_SAM_OUTPUT' as const,
+    provenance: 'Deterministic test output — NOT SAM OUTPUT' as const,
   });
 };

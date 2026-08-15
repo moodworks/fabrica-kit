@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
-import { describe, expect, it, beforeEach } from 'vitest';
+import { describe, expect, it, beforeEach, vi } from 'vitest';
 
 import {
   createActorId,
@@ -14,6 +14,11 @@ import {
   createDeterministicSamRunPodDirectV3Transport,
 } from '../../../../../packages/banner-ai/src/server/sam-runpod-direct-v3-deterministic-fake-transport';
 import { createSamRunPodDirectV3Adapter } from '../../../../../packages/banner-ai/src/server/sam-runpod-direct-v3-adapter';
+import {
+  createDeterministicUploadedBannerSamGenerator,
+  generateUploadedBannerSamCandidates,
+} from '../../../../../packages/banner-ai/src/server/uploaded-banner-sam-operation-v1';
+import { SamReplayError } from '../../../../../packages/banner-ai/src/server/uploaded-banner-sam-replay-v4';
 
 import {
   createUploadedBannerOperation,
@@ -136,5 +141,80 @@ describe('uploaded banner operation registry', () => {
     expect(preview.mediaType).toBe('text/html');
     expect(exported.artifact.mediaType).toBe('application/zip');
     expect(exported.artifact.filename).toContain('uploaded-deterministic-test');
+  });
+
+  it('replays verified candidates without network and preserves provenance through open/export', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch');
+    const fake = createDeterministicUploadedBannerSamGenerator();
+    const replay = async (normalizedPng: Uint8Array) => {
+      const generated = await generateUploadedBannerSamCandidates({
+        normalizedPng,
+        requestId: '11111111-1111-4111-8111-111111111111',
+        workspaceId: '22222222-2222-4222-8222-222222222222',
+        jobId: '33333333-3333-4333-8333-333333333333',
+        attemptId: '44444444-4444-4444-8444-444444444444',
+        generator: fake,
+      });
+      return {
+        request: generated.request,
+        candidates: generated.candidates,
+        provenance: 'Verified Meta SAM 2.1 cutout replay — no live call' as const,
+      };
+    };
+    const owner = authority();
+    const created = await createUploadedBannerOperation({
+      file: new File([source], 'banner.png', { type: 'image/png' }),
+      authority: owner,
+      replay,
+    });
+    expect(created.catalog[0]?.provenance).toBe(
+      'Verified Meta SAM 2.1 cutout replay — no live call',
+    );
+    const opened = await openUploadedBannerProject({
+      operationId: created.operationId,
+      candidateId: created.catalog[0]!.candidateId,
+      authority: owner,
+    });
+    expect(opened.materialization.candidateId).toBe(created.catalog[0]!.candidateId);
+    const resolved = resolveUploadedBannerCandidate(
+      created.operationId,
+      created.catalog[0]!.candidateId,
+      owner,
+    );
+    expect(resolved.candidate.bounds).toEqual({
+      xBps: created.catalog[0]!.bounds.x,
+      yBps: created.catalog[0]!.bounds.y,
+      widthBps: created.catalog[0]!.bounds.width,
+      heightBps: created.catalog[0]!.bounds.height,
+    });
+    expect(resolved.candidate.materialization.cutoutPng.byteLength).toBeGreaterThan(0);
+    expect(opened.materialization.assets.some((asset) => asset.bytes.byteLength > 0)).toBe(true);
+    const revision = opened.materialization.project.revisions.at(-1)!;
+    const identity = {
+      operationId: created.operationId,
+      candidateId: created.catalog[0]!.candidateId,
+      project: opened.materialization.project,
+      revision: revision.revision,
+      sceneSha256: revision.sceneSha256,
+      sceneVersionId: revision.sceneVersionId,
+      authority: owner,
+    };
+    await createUploadedBannerPreview({ ...identity, nonce: 'b'.repeat(32) });
+    const exported = await createUploadedBannerExport(identity);
+    expect(exported.artifact.filename).toContain('uploaded-verified-meta-sam-replay');
+    expect(fetchSpy).not.toHaveBeenCalled();
+    fetchSpy.mockRestore();
+  });
+
+  it('maps replay source mismatch to unsupported source', async () => {
+    await expect(
+      createUploadedBannerOperation({
+        file: new File([source], 'banner.png', { type: 'image/png' }),
+        authority: authority(),
+        replay: async () => {
+          throw new SamReplayError('SOURCE_MISMATCH', 'source mismatch');
+        },
+      }),
+    ).rejects.toMatchObject({ code: 'UNSUPPORTED_SOURCE' });
   });
 });

@@ -26,6 +26,7 @@ import {
   type UploadedBannerSamOperationResult,
 } from '@fabrica/banner-ai/server/uploaded-banner-sam-operation-v1';
 import { materializeUploadedBannerOperationProjectV1 } from '@fabrica/banner-ai';
+import { SamReplayError } from '@fabrica/banner-ai/server/uploaded-banner-sam-replay-v4';
 
 const OPERATION_TTL_MS = 5 * 60_000;
 const MAX_OPERATION_BYTES = 48 * 1024 * 1024;
@@ -36,7 +37,11 @@ const operationIdPattern = /^[0-9a-f]{64}$/u;
 export class UploadedBannerOperationError extends Error {
   constructor(
     readonly code:
-      'AUTHORIZATION_REQUIRED' | 'OPERATION_INVALID' | 'OPERATION_EXPIRED' | 'CANDIDATE_INVALID',
+      | 'AUTHORIZATION_REQUIRED'
+      | 'OPERATION_INVALID'
+      | 'OPERATION_EXPIRED'
+      | 'CANDIDATE_INVALID'
+      | 'UNSUPPORTED_SOURCE',
     message: string,
   ) {
     super(message);
@@ -109,11 +114,12 @@ export const createUploadedBannerOperation = async (input: {
   readonly file: File;
   readonly authority: ActorWorkspaceContext;
   readonly generator?: UploadedBannerSamGenerator;
+  readonly replay?: (source: Uint8Array) => Promise<UploadedBannerSamOperationResult>;
 }): Promise<{
   readonly operationId: string;
   readonly catalog: ReturnType<typeof uploadedCandidateCatalog>;
 }> => {
-  if (input.generator === undefined) {
+  if (input.generator === undefined && input.replay === undefined) {
     throw new UploadedBannerOperationError(
       'AUTHORIZATION_REQUIRED',
       'Real SAM generation requires authorization before transport construction.',
@@ -125,14 +131,27 @@ export const createUploadedBannerOperation = async (input: {
     declaredMediaType: input.file.type,
     filename: input.file.name,
   });
-  const result = await generateUploadedBannerSamCandidates({
-    normalizedPng: normalized.bytes,
-    requestId: randomUUID(),
-    workspaceId: randomUUID(),
-    jobId: randomUUID(),
-    attemptId: randomUUID(),
-    generator: input.generator,
-  });
+  const result =
+    input.replay !== undefined
+      ? await input.replay(Uint8Array.from(normalized.bytes)).catch((error: unknown) => {
+          if (error instanceof SamReplayError && error.kind === 'SOURCE_MISMATCH')
+            throw new UploadedBannerOperationError(
+              'UNSUPPORTED_SOURCE',
+              'Only the authorized Samsung fixture has a verified local replay; this upload is not supported.',
+            );
+          throw new UploadedBannerOperationError(
+            'OPERATION_INVALID',
+            'The verified local replay evidence is unavailable or invalid.',
+          );
+        })
+      : await generateUploadedBannerSamCandidates({
+          normalizedPng: normalized.bytes,
+          requestId: randomUUID(),
+          workspaceId: randomUUID(),
+          jobId: randomUUID(),
+          attemptId: randomUUID(),
+          generator: input.generator!,
+        });
   const aggregateBytes =
     normalized.byteSize +
     result.candidates.reduce(
@@ -183,7 +202,7 @@ export const uploadedCandidateCatalog = (operation: UploadedBannerOperation) =>
           sha256: candidate.preview.sha256,
           dataUrl: candidate.preview.dataUrl,
         }),
-        provenance: 'Deterministic test output — NOT SAM OUTPUT' as const,
+        provenance: operation.result.provenance,
       }),
     ),
   );
@@ -425,7 +444,7 @@ export const createUploadedBannerExport = async (input: {
     artifact: {
       bytesBase64,
       byteSize: validated.artifact.byteSize,
-      filename: `uploaded-deterministic-test-r${revision.revision}-${validated.artifact.sha256.slice(0, 12)}.zip`,
+      filename: `${checked.operation.result.provenance === 'Verified Meta SAM 2.1 cutout replay — no live call' ? 'uploaded-verified-meta-sam-replay' : 'uploaded-deterministic-test'}-r${revision.revision}-${validated.artifact.sha256.slice(0, 12)}.zip`,
       mediaType: validated.artifact.mediaType,
       sha256: validated.artifact.sha256,
       validationLabel: validated.artifact.validationLabel,
