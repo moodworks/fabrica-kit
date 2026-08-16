@@ -1037,6 +1037,9 @@ summary:focus-visible {
   color: white;
   cursor: pointer;
 }
+.source-region-mode .candidate-hotspot {
+  pointer-events: none;
+}
 .candidate-marquee {
   position: absolute;
   z-index: 100;

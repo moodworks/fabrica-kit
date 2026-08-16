@@ -56,25 +56,30 @@ test('uploads, marquee-selects two layers, edits, previews, and exports without 
   await expect(candidates.nth(1)).toBeDisabled();
   await expect(page.getByText(/Assigned to Layer 1/)).toHaveCount(2);
   await expect(page.getByText('0 cutouts selected for the next layer')).toBeVisible();
-  await candidates.nth(2).focus();
-  await page.keyboard.press('Space');
-  await expect(candidates.nth(2)).toBeChecked();
-  await page.keyboard.press('Space');
-  await expect(candidates.nth(2)).not.toBeChecked();
-  await page.keyboard.press('Space');
-  await expect(candidates.nth(2)).toBeChecked();
-  await page.getByRole('button', { name: /Create layer from 1 cutouts/ }).click();
+  await page.getByRole('button', { name: 'Draw source region' }).click();
+  await stage.scrollIntoViewIfNeeded();
+  const regionBox = await stage.boundingBox();
+  if (regionBox === null) throw new Error('candidate stage is not visible');
+  await page.mouse.move(regionBox.x + regionBox.width * 0.2, regionBox.y + regionBox.height * 0.2);
+  await page.mouse.down();
+  await page.mouse.move(regionBox.x + regionBox.width * 0.55, regionBox.y + regionBox.height * 0.7);
+  await page.mouse.up();
+  await expect(page.getByLabel('Pending source region')).toBeVisible();
+  await page.getByRole('button', { name: 'Create source region layer' }).click();
   await page.getByRole('button', { name: 'Move Layer 2 up' }).click();
-  await expect(page.locator('.created-layer-card').nth(0)).toContainText('Candidate 3');
+  await expect(page.locator('.created-layer-card').nth(0)).toContainText('Source region');
   await expect(page.locator('.created-layer-card').nth(1)).toContainText('Candidate 1');
   await page.getByRole('button', { name: 'Continue with 2 created layers' }).click();
 
   await expect(page.getByRole('heading', { name: 'Uploaded layer selection' })).toBeVisible();
-  await expect(page.locator('.editor-layer-name', { hasText: 'Uploaded layer' })).toHaveCount(2);
-  await expect(page.getByText(/Created composite layers/)).toBeVisible();
+  await expect(page.locator('.editor-layer-name')).toHaveCount(3);
+  await expect(
+    page.locator('.editor-layer-name').filter({ hasText: /Uploaded layer|Source region/u }),
+  ).toHaveCount(2);
+  await expect(page.getByText(/Created uploaded layers/)).toBeVisible();
   expect(await page.evaluate((key) => localStorage.getItem(key), storageKey)).toBeNull();
 
-  const layerRows = page.getByRole('radio', { name: /Uploaded layer/u });
+  const layerRows = page.getByRole('radio', { name: /Uploaded layer|Source region/u });
   await expect(layerRows).toHaveCount(2);
   await layerRows.nth(0).check();
   await page.getByRole('button', { name: 'Apply Gentle float' }).click();

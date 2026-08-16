@@ -1,5 +1,4 @@
-import { randomBytes, randomUUID } from 'node:crypto';
-
+import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import {
   byteSourceFrom,
   normalizeRasterUpload,
@@ -29,12 +28,26 @@ import {
 } from '@fabrica/banner-ai/server/uploaded-banner-sam-operation-v1';
 import { materializeUploadedBannerOperationProjectV1 } from '@fabrica/banner-ai';
 import { SamReplayError } from '@fabrica/banner-ai/server/uploaded-banner-sam-replay-v4';
+import { materializeUploadedSourceRegionV1 } from '@fabrica/banner-ai/server/uploaded-banner-source-region-v1';
 
 const OPERATION_TTL_MS = 5 * 60_000;
 const MAX_OPERATION_BYTES = 48 * 1024 * 1024;
 const MAX_PREVIEW_DOCUMENT_BYTES = 1_048_576;
 const MAX_EXPORT_RESPONSE_BYTES = 2_097_152;
 const operationIdPattern = /^[0-9a-f]{64}$/u;
+type MixedLayerResult = {
+  readonly subjectId: string;
+  readonly layers: readonly {
+    readonly subjectId: string;
+    readonly bytes: Uint8Array;
+    readonly bounds: {
+      readonly xBps: number;
+      readonly yBps: number;
+      readonly widthBps: number;
+      readonly heightBps: number;
+    };
+  }[];
+};
 
 export class UploadedBannerOperationError extends Error {
   constructor(
@@ -79,6 +92,8 @@ export interface UploadedBannerOperation {
     string,
     Awaited<ReturnType<typeof composeUploadedBannerSamCandidateGroups>>
   >;
+  readonly mixed: Map<string, Promise<MixedLayerResult>>;
+  readonly resolvedMixed: Map<string, MixedLayerResult>;
   readonly resolvedSubjects: Map<
     string,
     {
@@ -109,7 +124,16 @@ const groupedRetainedBytes = (operation: UploadedBannerOperation): number => {
 };
 const combinedDerivedBytes = (operation: UploadedBannerOperation): number =>
   groupedRetainedBytes(operation) +
+  [...operation.resolvedMixed.values()].reduce(
+    (sum, result) =>
+      sum + result.layers.reduce((bytes, layer) => bytes + layer.bytes.byteLength, 0),
+    0,
+  ) +
   [...operation.projectBytes.values()].reduce((sum, bytes) => sum + bytes, 0);
+
+const digest = (value: string): string => createHash('sha256').update(value).digest('hex');
+
+export const materializeUploadedSourceRegion = materializeUploadedSourceRegionV1;
 
 const assertId = (operationId: unknown): string => {
   if (typeof operationId !== 'string' || !operationIdPattern.test(operationId)) {
@@ -216,6 +240,8 @@ export const createUploadedBannerOperation = async (input: {
     composed: new Map(),
     grouped: new Map(),
     resolvedGrouped: new Map(),
+    mixed: new Map(),
+    resolvedMixed: new Map(),
     resolvedSubjects: new Map(),
     composedBytes: 0,
     saveLocks: new Map(),
@@ -283,9 +309,172 @@ export const composeUploadedBannerOperation = async (input: {
   readonly operationId: unknown;
   readonly candidateIds: unknown;
   readonly candidateGroups?: unknown;
+  readonly layers?: unknown;
   readonly authority: ActorWorkspaceContext;
 }) => {
   const operation = resolve(input.operationId, input.authority);
+  if (input.layers !== undefined) {
+    if (!Array.isArray(input.layers) || input.layers.length < 1 || input.layers.length > 8)
+      throw new UploadedBannerOperationError('CANDIDATE_INVALID', 'Layers are invalid.');
+    const usedCandidates = new Set<string>();
+    const usedCrops = new Set<string>();
+    const layers = input.layers.map((entry) => {
+      if (entry === null || typeof entry !== 'object' || Array.isArray(entry))
+        throw new UploadedBannerOperationError('CANDIDATE_INVALID', 'Layers are invalid.');
+      const record = entry as Record<string, unknown>;
+      const keys = Object.keys(record).sort();
+      if (record.kind === 'sam-candidate-group-v1' && keys.join(',') === 'candidateIds,kind') {
+        if (!Array.isArray(record.candidateIds) || record.candidateIds.length < 1)
+          throw new UploadedBannerOperationError(
+            'CANDIDATE_INVALID',
+            'Layer candidates are invalid.',
+          );
+        const ids = record.candidateIds;
+        if (ids.some((id) => typeof id !== 'string' || usedCandidates.has(id)))
+          throw new UploadedBannerOperationError(
+            'CANDIDATE_INVALID',
+            'Layer candidates are invalid.',
+          );
+        ids.forEach((id) => usedCandidates.add(id));
+        const canonical = operation.result.candidates.filter((candidate) =>
+          ids.includes(candidate.candidateId),
+        );
+        if (canonical.length !== ids.length)
+          throw new UploadedBannerOperationError(
+            'CANDIDATE_INVALID',
+            'The candidate is not owned by this operation.',
+          );
+        return {
+          kind: record.kind,
+          ids: canonical.map((candidate) => candidate.candidateId),
+        } as const;
+      }
+      if (record.kind === 'source-region-v1' && keys.join(',') === 'crop,kind') {
+        const crop = record.crop;
+        if (crop === null || typeof crop !== 'object' || Array.isArray(crop))
+          throw new UploadedBannerOperationError(
+            'CANDIDATE_INVALID',
+            'The source crop is invalid.',
+          );
+        const c = crop as Record<string, unknown>;
+        if (Object.keys(c).sort().join(',') !== 'height,left,top,width')
+          throw new UploadedBannerOperationError(
+            'CANDIDATE_INVALID',
+            'The source crop is invalid.',
+          );
+        const values = [c.left, c.top, c.width, c.height];
+        if (
+          !values.every(Number.isSafeInteger) ||
+          Number(c.left) < 0 ||
+          Number(c.top) < 0 ||
+          Number(c.width) < 1 ||
+          Number(c.height) < 1 ||
+          Number(c.left) + Number(c.width) > operation.source.width ||
+          Number(c.top) + Number(c.height) > operation.source.height
+        )
+          throw new UploadedBannerOperationError(
+            'CANDIDATE_INVALID',
+            'The source crop is invalid.',
+          );
+        const cropValue = {
+          left: Number(c.left),
+          top: Number(c.top),
+          width: Number(c.width),
+          height: Number(c.height),
+        };
+        const cropKey = JSON.stringify(cropValue);
+        if (usedCrops.has(cropKey))
+          throw new UploadedBannerOperationError(
+            'CANDIDATE_INVALID',
+            'The source crop is duplicated.',
+          );
+        usedCrops.add(cropKey);
+        return { kind: record.kind, crop: cropValue } as const;
+      }
+      throw new UploadedBannerOperationError('CANDIDATE_INVALID', 'Layers are invalid.');
+    });
+    const key = JSON.stringify(layers);
+    let mixed = operation.mixed.get(key);
+    if (mixed === undefined) {
+      if (operation.mixed.size >= 8)
+        throw new UploadedBannerOperationError(
+          'OPERATION_INVALID',
+          'The operation has reached its layer limit.',
+        );
+      mixed = (async () => {
+        const samLayers = layers.filter((layer) => layer.kind === 'sam-candidate-group-v1');
+        const samResult =
+          samLayers.length === 0
+            ? undefined
+            : await composeUploadedBannerSamCandidateGroups({
+                operation: operation.result,
+                candidateGroups: samLayers.map((layer) => layer.ids),
+              });
+        const materialized: MixedLayerResult['layers'][number][] = [];
+        let samIndex = 0;
+        for (const layer of layers) {
+          if (layer.kind === 'source-region-v1') {
+            const bytes = await materializeUploadedSourceRegionV1({
+              source: operation.sourceBytes,
+              crop: layer.crop,
+              sourceWidth: operation.source.width,
+              sourceHeight: operation.source.height,
+            });
+            const subjectId = `srcl_v1_${digest(canonicalizeJson({ source: { sha256: operation.source.sha256, width: operation.source.width, height: operation.source.height }, layer }))}`;
+            materialized.push({
+              subjectId,
+              bytes,
+              bounds: {
+                xBps: Math.round((layer.crop.left * 10000) / operation.source.width),
+                yBps: Math.round((layer.crop.top * 10000) / operation.source.height),
+                widthBps: Math.round((layer.crop.width * 10000) / operation.source.width),
+                heightBps: Math.round((layer.crop.height * 10000) / operation.source.height),
+              },
+            });
+          } else {
+            const group = samResult!.groups[samIndex++]!;
+            materialized.push({
+              subjectId: group.groupId,
+              bytes: group.candidate.materialization.cutoutPng,
+              bounds: group.candidate.bounds,
+            });
+          }
+        }
+        return {
+          subjectId: `sams_v1_${digest(
+            canonicalizeJson({
+              algorithm: 'uploaded-mixed-layer-selection-v1',
+              source: {
+                sha256: operation.source.sha256,
+                width: operation.source.width,
+                height: operation.source.height,
+              },
+              layers: materialized.map((entry, index) => ({
+                kind: layers[index]!.kind,
+                subjectId: entry.subjectId,
+              })),
+            }),
+          )}`,
+          layers: materialized,
+        };
+      })();
+      operation.mixed.set(key, mixed);
+      void mixed.catch(() => {
+        if (operation.mixed.get(key) === mixed) operation.mixed.delete(key);
+      });
+    }
+    const value = await mixed;
+    operation.resolvedMixed.set(value.subjectId, value);
+    if (combinedDerivedBytes(operation) > 64 * 1024 * 1024) {
+      operation.resolvedMixed.delete(value.subjectId);
+      operation.mixed.delete(key);
+      throw new UploadedBannerOperationError(
+        'OPERATION_INVALID',
+        'The mixed layers exceed their cumulative byte bound.',
+      );
+    }
+    return { operation, subjectId: value.subjectId, mixedLayers: value.layers };
+  }
   if (input.candidateGroups !== undefined) {
     if (!Array.isArray(input.candidateGroups))
       throw new UploadedBannerOperationError('CANDIDATE_INVALID', 'Layer groups are invalid.');
@@ -435,6 +624,18 @@ export const openUploadedBannerProject = async (input: {
     readonly UploadedBannerSamOperationResult['candidates'][number][] | undefined;
   let selectedGroups:
     Awaited<ReturnType<typeof composeUploadedBannerSamCandidateGroups>>['groups'] | undefined;
+  let selectedMixed:
+    | readonly {
+        readonly subjectId: string;
+        readonly bytes: Uint8Array;
+        readonly bounds: {
+          readonly xBps: number;
+          readonly yBps: number;
+          readonly widthBps: number;
+          readonly heightBps: number;
+        };
+      }[]
+    | undefined;
   if (
     candidate === undefined &&
     typeof input.candidateId === 'string' &&
@@ -451,6 +652,13 @@ export const openUploadedBannerProject = async (input: {
       if (grouped.subjectId === input.candidateId) {
         selectedGroups = grouped.groups;
         candidate = grouped.groups[0]?.candidate;
+        break;
+      }
+    }
+    for (const resolved of operation.resolvedMixed.values()) {
+      if (resolved.subjectId === input.candidateId) {
+        selectedMixed = resolved.layers;
+        candidate = operation.result.candidates[0];
         break;
       }
     }
@@ -481,15 +689,23 @@ export const openUploadedBannerProject = async (input: {
               bounds: group.candidate.bounds,
             })),
           }
-        : selectedCandidates === undefined
-          ? {}
-          : {
-              subjects: selectedCandidates.map((entry) => ({
-                subject: entry.materialization.cutoutPng,
-                candidateId: entry.candidateId,
+        : selectedMixed !== undefined
+          ? {
+              subjects: selectedMixed.map((entry) => ({
+                subject: entry.bytes,
+                candidateId: entry.subjectId,
                 bounds: entry.bounds,
               })),
-            }),
+            }
+          : selectedCandidates === undefined
+            ? {}
+            : {
+                subjects: selectedCandidates.map((entry) => ({
+                  subject: entry.materialization.cutoutPng,
+                  candidateId: entry.candidateId,
+                  bounds: entry.bounds,
+                })),
+              }),
     });
     operation.projects.set(projectKey, project);
     void project.catch(() => {

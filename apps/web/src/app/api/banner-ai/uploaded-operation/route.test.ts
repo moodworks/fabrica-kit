@@ -39,6 +39,34 @@ describe('uploaded operation multipart boundary', () => {
       }),
     );
     expect(good.status).toBe(200);
+    const mixed = await PUT(
+      new Request('http://localhost/api/banner-ai/uploaded-operation', {
+        method: 'PUT',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          action: 'compose',
+          operationId: created.operationId,
+          layers: [
+            { kind: 'sam-candidate-group-v1', candidateIds: [created.catalog[0]!.candidateId] },
+            { kind: 'source-region-v1', crop: { left: 0, top: 0, width: 10, height: 10 } },
+          ],
+        }),
+      }),
+    );
+    expect(mixed.status).toBe(200);
+    await expect(
+      PUT(
+        new Request('http://localhost/api/banner-ai/uploaded-operation', {
+          method: 'PUT',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({
+            action: 'compose',
+            operationId: created.operationId,
+            layers: [{ kind: 'source-region-v1', crop: { left: -1, top: 0, width: 1, height: 1 } }],
+          }),
+        }),
+      ),
+    ).resolves.toMatchObject({ status: 400 });
     const extra = await PUT(
       new Request('http://localhost/api/banner-ai/uploaded-operation', {
         method: 'PUT',

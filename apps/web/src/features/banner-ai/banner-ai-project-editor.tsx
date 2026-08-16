@@ -881,7 +881,7 @@ export function BannerAiProjectEditor() {
             ) : (
               <>
                 {uploadedBinding.candidateId.startsWith('sams_v1_')
-                  ? 'Created composite layers'
+                  ? 'Created uploaded layers'
                   : 'Candidate'}{' '}
                 <code>{uploadedBinding.candidateId}</code> · 300 × 200 canvas
               </>

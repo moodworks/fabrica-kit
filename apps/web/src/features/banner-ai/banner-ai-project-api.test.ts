@@ -19,7 +19,21 @@ import {
   parseProviderFreeProjectPresentation,
   parseProviderFreeProjectEnvelope,
 } from './banner-ai-project-contract';
-import { composeUploadedBannerCandidateGroups } from './banner-ai-project-api';
+import {
+  composeUploadedBannerCandidateGroups,
+  composeUploadedBannerMixedLayers,
+  parseUploadedMixedLayers,
+} from './banner-ai-project-api';
+
+describe('uploaded mixed layer payloads', () => {
+  it('accepts a source crop touching the top-left edge', () => {
+    expect(
+      parseUploadedMixedLayers([
+        { kind: 'source-region-v1', crop: { left: 0, top: 0, width: 12, height: 8 } },
+      ]),
+    ).toEqual([{ kind: 'source-region-v1', crop: { left: 0, top: 0, width: 12, height: 8 } }]);
+  });
+});
 
 describe('multi-layer presentation contract', () => {
   const thumbnail = {
@@ -153,6 +167,38 @@ describe('grouped compose request contract', () => {
         Response.json({ ok: true, data: {} }),
       ),
     ).rejects.toMatchObject({ code: 'UPLOADED_COMPOSE_FAILED' });
+  });
+});
+
+describe('mixed compose request contract', () => {
+  it('sends exact ordered mixed layers and rejects malformed responses', async () => {
+    let body: unknown;
+    await expect(
+      composeUploadedBannerMixedLayers(
+        'c'.repeat(64),
+        [
+          { kind: 'sam-candidate-group-v1', candidateIds: ['samc_v1_' + 'a'.repeat(64)] },
+          { kind: 'source-region-v1', crop: { left: 0, top: 0, width: 10, height: 20 } },
+        ],
+        async (_input, init) => {
+          body = JSON.parse(String(init?.body));
+          return Response.json({ ok: true, data: { subjectId: 'sams_v1_' + 'd'.repeat(64) } });
+        },
+      ),
+    ).resolves.toEqual({ subjectId: 'sams_v1_' + 'd'.repeat(64) });
+    expect(body).toEqual({
+      action: 'compose',
+      operationId: 'c'.repeat(64),
+      layers: [
+        { kind: 'sam-candidate-group-v1', candidateIds: ['samc_v1_' + 'a'.repeat(64)] },
+        { kind: 'source-region-v1', crop: { left: 0, top: 0, width: 10, height: 20 } },
+      ],
+    });
+    await expect(
+      composeUploadedBannerMixedLayers('c'.repeat(64), [
+        { kind: 'source-region-v1', crop: { left: -1, top: 0, width: 1, height: 1 } },
+      ]),
+    ).rejects.toThrow();
   });
 });
 

@@ -123,6 +123,79 @@ export const composeUploadedBannerCandidateGroups = async (
     );
   return { subjectId: payload.data.subjectId };
 };
+export type UploadedMixedLayer =
+  | { readonly kind: 'sam-candidate-group-v1'; readonly candidateIds: readonly string[] }
+  | {
+      readonly kind: 'source-region-v1';
+      readonly crop: {
+        readonly left: number;
+        readonly top: number;
+        readonly width: number;
+        readonly height: number;
+      };
+    };
+export const parseUploadedMixedLayers = (input: unknown): readonly UploadedMixedLayer[] => {
+  if (!Array.isArray(input) || input.length < 1 || input.length > 8)
+    throw new TypeError('Mixed layers must contain one to eight entries.');
+  const ids = new Set<string>();
+  return input.map((entry) => {
+    if (!isRecord(entry) || typeof entry.kind !== 'string')
+      throw new TypeError('Invalid mixed layer.');
+    if (
+      entry.kind === 'sam-candidate-group-v1' &&
+      hasExactKeys(entry, ['kind', 'candidateIds']) &&
+      Array.isArray(entry.candidateIds) &&
+      entry.candidateIds.length > 0 &&
+      entry.candidateIds.every((id) => typeof id === 'string' && !ids.has(id))
+    ) {
+      entry.candidateIds.forEach((id) => ids.add(id as string));
+      return entry as UploadedMixedLayer;
+    }
+    if (
+      entry.kind === 'source-region-v1' &&
+      hasExactKeys(entry, ['kind', 'crop']) &&
+      isRecord(entry.crop) &&
+      hasExactKeys(entry.crop, ['height', 'left', 'top', 'width']) &&
+      Number.isSafeInteger(entry.crop.left) &&
+      Number.isSafeInteger(entry.crop.top) &&
+      Number.isSafeInteger(entry.crop.width) &&
+      Number.isSafeInteger(entry.crop.height) &&
+      (entry.crop.left as number) >= 0 &&
+      (entry.crop.top as number) >= 0 &&
+      (entry.crop.width as number) > 0 &&
+      (entry.crop.height as number) > 0
+    )
+      return entry as UploadedMixedLayer;
+    throw new TypeError('Invalid mixed layer.');
+  });
+};
+export const composeUploadedBannerMixedLayers = async (
+  operationId: string,
+  layers: readonly UploadedMixedLayer[],
+  fetchImplementation: BannerProjectFetch = fetch,
+): Promise<{ readonly subjectId: string }> => {
+  parseUploadedMixedLayers(layers);
+  const response = await fetchImplementation('/api/banner-ai/uploaded-operation', {
+    method: 'PUT',
+    cache: 'no-store',
+    credentials: 'same-origin',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ action: 'compose', operationId, layers }),
+  });
+  const payload = await parseJsonResponse(response);
+  if (
+    !isRecord(payload) ||
+    payload.ok !== true ||
+    !isRecord(payload.data) ||
+    typeof payload.data.subjectId !== 'string' ||
+    !/^sams_v1_[0-9a-f]{64}$/u.test(payload.data.subjectId)
+  )
+    throw new BannerProjectRequestError(
+      'UPLOADED_COMPOSE_FAILED',
+      'The mixed layers could not be created.',
+    );
+  return { subjectId: payload.data.subjectId };
+};
 const uploadedBody = (binding: UploadedBannerBinding, body: Record<string, unknown>) => ({
   ...body,
   operationId: binding.operationId,

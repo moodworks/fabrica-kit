@@ -29,6 +29,7 @@ import {
   createUploadedBannerPreview,
   createUploadedBannerExport,
   composeUploadedBannerOperation,
+  materializeUploadedSourceRegion,
 } from './uploaded-banner-operation';
 import {
   isProviderFreeLayerIdV1,
@@ -51,6 +52,23 @@ const authority = (workspaceId = createWorkspaceId('uploaded_test_workspace')) =
   });
 
 describe('uploaded banner operation registry', () => {
+  it('crops a trusted source region with exact requested dimensions and rejects bounds drift', async () => {
+    const cropped = await materializeUploadedSourceRegion({
+      source,
+      crop: { left: 3, top: 4, width: 20, height: 15 },
+      sourceWidth: 876,
+      sourceHeight: 221,
+    });
+    expect(cropped.byteLength).toBeGreaterThan(0);
+    await expect(
+      materializeUploadedSourceRegion({
+        source,
+        crop: { left: 870, top: 0, width: 20, height: 10 },
+        sourceWidth: 876,
+        sourceHeight: 221,
+      }),
+    ).rejects.toThrow();
+  });
   beforeEach(() => resetUploadedBannerOperationRegistryForTests());
 
   it('requires authorization before reading or dispatching an uploaded operation', async () => {
@@ -345,6 +363,66 @@ describe('uploaded banner operation registry', () => {
     });
     expect(fetchSpy).not.toHaveBeenCalled();
     fetchSpy.mockRestore();
+  });
+
+  it('composes an ordered SAM group and source region as separate layers', async () => {
+    const owner = authority();
+    const created = await createUploadedBannerOperation({
+      file: new File([source], 'banner.png', { type: 'image/png' }),
+      authority: owner,
+      generator: createDeterministicUploadedBannerSamGenerator(),
+    });
+    const ids = created.catalog.slice(0, 2).map((candidate) => candidate.candidateId);
+    const mixed = await composeUploadedBannerOperation({
+      operationId: created.operationId,
+      candidateIds: [],
+      layers: [
+        { kind: 'sam-candidate-group-v1', candidateIds: ids },
+        { kind: 'source-region-v1', crop: { left: 0, top: 0, width: 20, height: 15 } },
+      ],
+      authority: owner,
+    });
+    const opened = await openUploadedBannerProject({
+      operationId: created.operationId,
+      candidateId: mixed.subjectId,
+      authority: owner,
+    });
+    expect(opened.materialization.scene.layers).toHaveLength(2);
+    expect(opened.materialization.scene.layers.map((layer) => layer.name)).toEqual([
+      'Uploaded layer 1',
+      'Source region 2 · opaque crop',
+    ]);
+    expect(opened.materialization.assets).toHaveLength(3);
+    expect(
+      opened.materialization.assets.every(
+        (asset) => sha256Hex(asset.bytes) === asset.reference.sha256,
+      ),
+    ).toBe(true);
+  });
+
+  it('rejects malformed mixed layers', async () => {
+    const owner = authority();
+    const created = await createUploadedBannerOperation({
+      file: new File([source], 'banner.png', { type: 'image/png' }),
+      authority: owner,
+      generator: createDeterministicUploadedBannerSamGenerator(),
+    });
+    await expect(
+      composeUploadedBannerOperation({
+        operationId: created.operationId,
+        candidateIds: [],
+        layers: [],
+        authority: owner,
+      }),
+    ).rejects.toMatchObject({ code: 'CANDIDATE_INVALID' });
+    await expect(
+      composeUploadedBannerOperation({
+        operationId: created.operationId,
+        candidateIds: [],
+        layers: [{ kind: 'source-region-v1', crop: { left: 0, top: 0, width: 99999, height: 1 } }],
+        authority: owner,
+      }),
+    ).rejects.toMatchObject({ code: 'CANDIDATE_INVALID' });
   });
 
   it('rolls back grouped project cache when the combined open cap is exceeded', async () => {
