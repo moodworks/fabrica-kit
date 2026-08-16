@@ -30,6 +30,7 @@ import {
   selectMarqueeCandidates,
 } from './marquee-selection';
 import { sourceCropFromDisplayDrag } from './source-region-geometry';
+import { partitionUploadedCandidates } from './candidate-quality';
 
 const formatBytes = (bytes: number): string => {
   if (bytes < 1_024) return `${bytes} B`;
@@ -72,6 +73,7 @@ export function BannerAiClient() {
     readonly height: number;
   } | null>(null);
   const [builderMode, setBuilderMode] = useState<'candidates' | 'region'>('candidates');
+  const [showSmallFragments, setShowSmallFragments] = useState(false);
   const [composeBusy, setComposeBusy] = useState(false);
   const [composeError, setComposeError] = useState<string | null>(null);
   const [marquee, setMarquee] = useState<{
@@ -89,6 +91,10 @@ export function BannerAiClient() {
     dragging: boolean;
   } | null>(null);
   const suppressClickRef = useRef(false);
+  const quality = partitionUploadedCandidates(uploadedOperation?.candidates ?? []);
+  const visibleCandidates = showSmallFragments
+    ? (uploadedOperation?.candidates ?? [])
+    : quality.suggested;
 
   const stagePoint = (event: { clientX: number; clientY: number }) => {
     const stage = stageRef.current;
@@ -130,7 +136,7 @@ export function BannerAiClient() {
     if (builderMode === 'region') return;
     const picked = selectMarqueeCandidates(
       next,
-      uploadedOperation?.candidates.filter(
+      visibleCandidates.filter(
         (candidate) =>
           !draftLayers.some(
             (layer) =>
@@ -178,7 +184,7 @@ export function BannerAiClient() {
         } else {
           const picked = selectMarqueeCandidates(
             finalMarquee,
-            uploadedOperation?.candidates.filter(
+            visibleCandidates.filter(
               (candidate) =>
                 !draftLayers.some(
                   (layer) =>
@@ -235,6 +241,7 @@ export function BannerAiClient() {
     setSelectedCandidates([]);
     setDraftLayers([]);
     setRegionDraft(null);
+    setShowSmallFragments(false);
     setBuilderMode('candidates');
     setComposeError(null);
     setUploadProvenance(VERIFIED_REPLAY_PROVENANCE);
@@ -284,6 +291,7 @@ export function BannerAiClient() {
       setSelectedCandidates([]);
       setDraftLayers([]);
       setRegionDraft(null);
+      setShowSmallFragments(false);
       setBuilderMode('candidates');
       setComposeError(null);
       setUploadProvenance(operation.provenance);
@@ -472,8 +480,35 @@ export function BannerAiClient() {
               <p className="section-kicker">02 · Layers</p>
               <h2 id="uploaded-candidates-title">Build editable layers</h2>
               <p>
-                Build editable layers. Drag across the image to select cutouts for the next layer.
+                Suggested cutouts first. Drag across the image to select cutouts for the next layer.
               </p>
+              <p>{quality.suggested.length} suggested cutouts shown first.</p>
+              {quality.suggested.length === 0 ? (
+                <p>
+                  No suggested cutouts were found. Draw a source region or reveal small fragments.
+                </p>
+              ) : null}
+              {quality.smallFragments.length > 0 ? (
+                <button
+                  type="button"
+                  disabled={composeBusy}
+                  onClick={() => {
+                    if (showSmallFragments) {
+                      const visibleIds = new Set(
+                        quality.suggested.map((candidate) => candidate.candidateId),
+                      );
+                      setSelectedCandidates((selected) =>
+                        selected.filter((id) => visibleIds.has(id)),
+                      );
+                    }
+                    setShowSmallFragments(!showSmallFragments);
+                  }}
+                >
+                  {showSmallFragments
+                    ? `Hide ${quality.smallFragments.length} small fragments`
+                    : `Show ${quality.smallFragments.length} small fragments`}
+                </button>
+              ) : null}
               <div role="group" aria-label="Layer creation mode">
                 <button
                   type="button"
@@ -515,7 +550,7 @@ export function BannerAiClient() {
               >
                 {/* eslint-disable-next-line @next/next/no-img-element */}
                 <img src={state.selection?.previewUrl} alt="Uploaded banner" draggable={false} />
-                {uploadedOperation.candidates.map((candidate) => {
+                {visibleCandidates.map((candidate) => {
                   const checked = selectedCandidates.includes(candidate.candidateId);
                   const assigned = assignedLayerFor(candidate.candidateId);
                   const { crop, source } = candidate;
@@ -600,7 +635,7 @@ export function BannerAiClient() {
                 ) : null}
               </div>
               <div className="editor-candidate-choice">
-                {uploadedOperation.candidates.map((candidate) => {
+                {visibleCandidates.map((candidate) => {
                   const checked = selectedCandidates.includes(candidate.candidateId);
                   const assigned = assignedLayerFor(candidate.candidateId);
                   return (
