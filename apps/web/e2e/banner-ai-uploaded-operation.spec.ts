@@ -75,7 +75,10 @@ test('uploads, marquee-selects two layers, edits, previews, and exports without 
   await page.mouse.move(box.x + box.width * 0.01, box.y + box.height * 0.5);
   await page.mouse.down();
   await page.mouse.move(box.x + box.width * 0.99, box.y + box.height * 0.99);
+  await expect(stage.locator('.candidate-silhouette')).toHaveCount(2);
+  await expect(stage.locator('.candidate-marquee')).toHaveCount(0);
   await page.mouse.up();
+  await expect(stage.locator('.candidate-silhouette')).toHaveCount(2);
   await expect(candidates.nth(0)).toBeChecked();
   await expect(candidates.nth(1)).toBeChecked();
   await page.getByRole('button', { name: 'Show 1 small fragments' }).click();
@@ -105,6 +108,7 @@ test('uploads, marquee-selects two layers, edits, previews, and exports without 
   await page.mouse.move(regionBox.x + regionBox.width * 0.2, regionBox.y + regionBox.height * 0.2);
   await page.mouse.down();
   await page.mouse.move(regionBox.x + regionBox.width * 0.55, regionBox.y + regionBox.height * 0.7);
+  await expect(stage.locator('.candidate-marquee')).toBeVisible();
   await page.mouse.up();
   await expect(page.getByLabel('Pending source region')).toBeVisible();
   await page.getByRole('button', { name: 'Create source region layer' }).click();

@@ -550,6 +550,25 @@ export function BannerAiClient() {
               >
                 {/* eslint-disable-next-line @next/next/no-img-element */}
                 <img src={state.selection?.previewUrl} alt="Uploaded banner" draggable={false} />
+                {builderMode === 'candidates'
+                  ? visibleCandidates
+                      .filter((candidate) => selectedCandidates.includes(candidate.candidateId))
+                      .map((candidate) => (
+                        <div
+                          key={`silhouette-${candidate.candidateId}`}
+                          className="candidate-silhouette"
+                          aria-hidden="true"
+                          style={{
+                            left: `${(candidate.crop.left / candidate.source.width) * 100}%`,
+                            top: `${(candidate.crop.top / candidate.source.height) * 100}%`,
+                            width: `${(candidate.crop.width / candidate.source.width) * 100}%`,
+                            height: `${(candidate.crop.height / candidate.source.height) * 100}%`,
+                            maskImage: `url(${candidate.thumbnail.dataUrl})`,
+                            WebkitMaskImage: `url(${candidate.thumbnail.dataUrl})`,
+                          }}
+                        />
+                      ))
+                  : null}
                 {visibleCandidates.map((candidate) => {
                   const checked = selectedCandidates.includes(candidate.candidateId);
                   const assigned = assignedLayerFor(candidate.candidateId);
@@ -588,7 +607,7 @@ export function BannerAiClient() {
                     </button>
                   );
                 })}
-                {marquee !== null ? (
+                {builderMode === 'region' && marquee !== null ? (
                   <div
                     className="candidate-marquee"
                     style={{

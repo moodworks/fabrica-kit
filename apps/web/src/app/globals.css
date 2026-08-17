@@ -1076,8 +1076,20 @@ summary:focus-visible {
   font-weight: 800;
 }
 .candidate-hotspot.selected {
-  border-color: white;
-  background: color-mix(in srgb, var(--teal) 42%, transparent);
+  border-color: transparent;
+  background: transparent;
+}
+.candidate-silhouette {
+  position: absolute;
+  z-index: 1;
+  pointer-events: none;
+  background: rgb(34 211 197 / 48%);
+  mask-position: center;
+  -webkit-mask-position: center;
+  mask-size: 100% 100%;
+  -webkit-mask-size: 100% 100%;
+  mask-repeat: no-repeat;
+  -webkit-mask-repeat: no-repeat;
 }
 .candidate-hotspot.assigned {
   opacity: 0.35;
