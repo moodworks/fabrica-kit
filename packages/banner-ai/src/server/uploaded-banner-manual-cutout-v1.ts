@@ -37,15 +37,17 @@ export const extractUploadedManualCutoutV1 = async (input: {
     crop.top + crop.height > dimensions.height
   )
     throw new TypeError('The manual cutout crop is invalid.');
-  const xBps = Math.floor((crop.left * 10_000) / dimensions.width);
-  const yBps = Math.floor((crop.top * 10_000) / dimensions.height);
+  // The worker's integer round-trip convention is ceil for the leading edge and
+  // floor for the trailing edge. This keeps the half-open pixel crop stable.
+  const xBps = Math.ceil((crop.left * 10_000) / dimensions.width);
+  const yBps = Math.ceil((crop.top * 10_000) / dimensions.height);
   const rightBps = Math.min(
     10_000,
-    Math.ceil(((crop.left + crop.width) * 10_000) / dimensions.width),
+    Math.floor(((crop.left + crop.width) * 10_000) / dimensions.width),
   );
   const bottomBps = Math.min(
     10_000,
-    Math.ceil(((crop.top + crop.height) * 10_000) / dimensions.height),
+    Math.floor(((crop.top + crop.height) * 10_000) / dimensions.height),
   );
   const extracted = await extractLayerWithSamBoxPrompt({
     normalizedPng: input.normalizedPng,

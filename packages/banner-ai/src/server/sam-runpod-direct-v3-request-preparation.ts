@@ -54,6 +54,35 @@ export const SAM_FIRST_INFERENCE_BOX_REQUEST_LIMITS = Object.freeze({
   maxCandidates: 1 as const,
 });
 
+export const SAM_SAMSUNG_MANUAL_BOX_SOURCE = Object.freeze({
+  sha256: 'd806659c8572dd32c6db89f9af71eda38c1e644c47210498fff6dedaf0896b04' as const,
+  byteSize: 30_726 as const,
+  width: 255 as const,
+  height: 512 as const,
+});
+export const SAM_SAMSUNG_MANUAL_BOX_CROP = Object.freeze({
+  left: 14 as const,
+  top: 77 as const,
+  width: 141 as const,
+  height: 134 as const,
+});
+export const SAM_SAMSUNG_MANUAL_BOX_BPS = Object.freeze({
+  xBps: 550 as const,
+  yBps: 1504 as const,
+  widthBps: 5528 as const,
+  heightBps: 2617 as const,
+});
+export const SAM_SAMSUNG_MANUAL_BOX_REQUEST_IDENTIFIERS = Object.freeze({
+  requestId: 'f6b7c7e1-0a2a-4f01-9f2c-6c4ed1c1a001' as const,
+  workspaceId: 'f6b7c7e1-0a2a-4f01-9f2c-6c4ed1c1a002' as const,
+  jobId: 'f6b7c7e1-0a2a-4f01-9f2c-6c4ed1c1a003' as const,
+  attemptId: 'f6b7c7e1-0a2a-4f01-9f2c-6c4ed1c1a004' as const,
+});
+export const SAM_SAMSUNG_MANUAL_BOX_MILESTONE_ID = 'sam-samsung-manual-box-v1' as const;
+export const SAM_SAMSUNG_MANUAL_BOX_CANONICAL_REQUEST_SHA256 =
+  '55a79b2664abf73f4654d37f376b448fae89512d49b11dbb0055f0bac4cc91ae' as const;
+export const SAM_SAMSUNG_MANUAL_BOX_CANONICAL_REQUEST_BYTE_LENGTH = 41_722 as const;
+
 /** Fixed one-milestone identifiers; they are not accepted from callers. */
 export const SAM_FIRST_INFERENCE_REQUEST_IDENTIFIERS = Object.freeze({
   requestId: '817e7fd7-0c34-4449-ae81-38c90505a39b' as const,
@@ -133,7 +162,8 @@ interface PreparedRequestPrivateState {
   readonly canonicalBodyText: string;
   readonly canonicalBodyByteLength: number;
   readonly canonicalBodySha256: string;
-  readonly milestone: typeof SAM_FIRST_INFERENCE_FIXTURE_ID | null;
+  readonly milestone:
+    typeof SAM_FIRST_INFERENCE_FIXTURE_ID | typeof SAM_SAMSUNG_MANUAL_BOX_MILESTONE_ID | null;
   readonly expectedExecutionIdentity: SamExecutionIdentity | null;
 }
 
@@ -153,7 +183,8 @@ const prepareRequest = (input: {
   readonly endpointId: string;
   readonly requestInput: unknown;
   readonly workerImageDigest?: string;
-  readonly milestone?: typeof SAM_FIRST_INFERENCE_FIXTURE_ID;
+  readonly milestone?:
+    typeof SAM_FIRST_INFERENCE_FIXTURE_ID | typeof SAM_SAMSUNG_MANUAL_BOX_MILESTONE_ID;
   readonly expectedExecutionIdentity?: SamExecutionIdentity;
 }): SamRunPodDirectV3PreparedRequest => {
   const endpointId = SamRunPodDirectEndpointIdSchema.parse(input.endpointId);
@@ -282,6 +313,41 @@ export const prepareSamFirstInferenceV3BoxPromptRequest = (requestInput: unknown
     requestInput: request,
     workerImageDigest: SAM_FIRST_INFERENCE_WORKER_IMAGE_DIGEST,
     milestone: SAM_FIRST_INFERENCE_FIXTURE_ID,
+    expectedExecutionIdentity: SAM_FIRST_INFERENCE_EXECUTION_IDENTITY,
+  });
+};
+
+/** Exact Samsung manual-box preparation; callers provide only the trusted normalized bytes. */
+export const prepareSamSamsungManualBoxRequest = (normalizedPng: Uint8Array) => {
+  if (
+    normalizedPng.byteLength !== SAM_SAMSUNG_MANUAL_BOX_SOURCE.byteSize ||
+    sha256Hex(normalizedPng) !== SAM_SAMSUNG_MANUAL_BOX_SOURCE.sha256
+  ) {
+    throw new TypeError('Samsung manual-box source bytes drifted.');
+  }
+  const request = SamMaskRequestSchema.parse({
+    contractVersion: SAM_MASK_CONTRACT_VERSION,
+    ...SAM_SAMSUNG_MANUAL_BOX_REQUEST_IDENTIFIERS,
+    source: {
+      mediaType: 'image/png',
+      byteSize: SAM_SAMSUNG_MANUAL_BOX_SOURCE.byteSize,
+      width: SAM_SAMSUNG_MANUAL_BOX_SOURCE.width,
+      height: SAM_SAMSUNG_MANUAL_BOX_SOURCE.height,
+      sha256: SAM_SAMSUNG_MANUAL_BOX_SOURCE.sha256,
+      pngBase64: Buffer.from(normalizedPng).toString('base64'),
+    },
+    segmentation: {
+      mode: 'box-prompt',
+      prompt: { kind: 'box', authority: 'user-interaction', box: SAM_SAMSUNG_MANUAL_BOX_BPS },
+    },
+    limits: { minMaskAreaPixels: 1, maxCandidates: 1 },
+    output: { maskEncoding: SAM_MASK_ENCODING },
+  });
+  return prepareRequest({
+    endpointId: SAM_FIRST_INFERENCE_ENDPOINT_ID,
+    requestInput: request,
+    workerImageDigest: SAM_FIRST_INFERENCE_WORKER_IMAGE_DIGEST,
+    milestone: SAM_SAMSUNG_MANUAL_BOX_MILESTONE_ID,
     expectedExecutionIdentity: SAM_FIRST_INFERENCE_EXECUTION_IDENTITY,
   });
 };

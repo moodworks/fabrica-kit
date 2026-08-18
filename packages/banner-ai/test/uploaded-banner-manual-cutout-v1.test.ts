@@ -40,12 +40,12 @@ describe('uploaded manual prompted cutout', () => {
     expect(
       request?.segmentation.mode === 'box-prompt' ? request.segmentation.prompt.box : null,
     ).toEqual({
-      xBps: Math.floor((3 * 10_000) / dimensions.width),
-      yBps: Math.floor((4 * 10_000) / dimensions.height),
+      xBps: Math.ceil((3 * 10_000) / dimensions.width),
+      yBps: Math.ceil((4 * 10_000) / dimensions.height),
       widthBps:
-        Math.ceil((23 * 10_000) / dimensions.width) - Math.floor((3 * 10_000) / dimensions.width),
+        Math.floor((23 * 10_000) / dimensions.width) - Math.ceil((3 * 10_000) / dimensions.width),
       heightBps:
-        Math.ceil((19 * 10_000) / dimensions.height) - Math.floor((4 * 10_000) / dimensions.height),
+        Math.floor((19 * 10_000) / dimensions.height) - Math.ceil((4 * 10_000) / dimensions.height),
     });
     expect(request?.limits).toMatchObject({ maxCandidates: 1 });
     expect(result.layer.bytes.byteLength).toBeGreaterThan(0);

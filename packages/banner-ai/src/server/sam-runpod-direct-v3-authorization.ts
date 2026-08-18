@@ -24,6 +24,12 @@ import {
   SAM_FIRST_INFERENCE_ENDPOINT_ID,
   SAM_FIRST_INFERENCE_REQUEST_LIMITS,
   SAM_FIRST_INFERENCE_BOX_REQUEST_LIMITS,
+  SAM_SAMSUNG_MANUAL_BOX_BPS,
+  SAM_SAMSUNG_MANUAL_BOX_CANONICAL_REQUEST_BYTE_LENGTH,
+  SAM_SAMSUNG_MANUAL_BOX_CANONICAL_REQUEST_SHA256,
+  SAM_SAMSUNG_MANUAL_BOX_MILESTONE_ID,
+  SAM_SAMSUNG_MANUAL_BOX_REQUEST_IDENTIFIERS,
+  SAM_SAMSUNG_MANUAL_BOX_SOURCE,
   SAM_FIRST_INFERENCE_WORKER_IMAGE_DIGEST,
   assertSamFirstInferenceV3PreparedRequest,
   inspectSamRunPodDirectV3PreparedRequest,
@@ -266,6 +272,100 @@ export const mintTestOnlySamRunPodDirectV3BoxAuthorization = (
         workspaceId: preparedState.request.workspaceId,
         jobId: preparedState.request.jobId,
         attemptId: preparedState.request.attemptId,
+      }),
+    }),
+  );
+  return authorization;
+};
+
+/** Production Samsung manual-box mint. No caller-controlled fixture or policy fields are accepted. */
+export const mintSamSamsungManualBoxAuthorization = (
+  prepared: SamRunPodDirectV3PreparedRequest,
+): SamRunPodDirectV3BoxAuthorization => {
+  const preparedState = inspectSamRunPodDirectV3PreparedRequest(prepared);
+  const request = preparedState.request;
+  if (
+    preparedState.endpointId !== SAM_FIRST_INFERENCE_ENDPOINT_ID ||
+    preparedState.milestone !== SAM_SAMSUNG_MANUAL_BOX_MILESTONE_ID ||
+    preparedState.workerImageDigest !== SAM_FIRST_INFERENCE_WORKER_IMAGE_DIGEST ||
+    preparedState.canonicalBodySha256 !== SAM_SAMSUNG_MANUAL_BOX_CANONICAL_REQUEST_SHA256 ||
+    preparedState.canonicalBodyByteLength !==
+      SAM_SAMSUNG_MANUAL_BOX_CANONICAL_REQUEST_BYTE_LENGTH ||
+    preparedState.expectedExecutionIdentity === null ||
+    canonicalizeJson(preparedState.expectedExecutionIdentity) !==
+      canonicalizeJson(SAM_FIRST_INFERENCE_EXECUTION_IDENTITY) ||
+    request.requestId !== SAM_SAMSUNG_MANUAL_BOX_REQUEST_IDENTIFIERS.requestId ||
+    request.workspaceId !== SAM_SAMSUNG_MANUAL_BOX_REQUEST_IDENTIFIERS.workspaceId ||
+    request.jobId !== SAM_SAMSUNG_MANUAL_BOX_REQUEST_IDENTIFIERS.jobId ||
+    request.attemptId !== SAM_SAMSUNG_MANUAL_BOX_REQUEST_IDENTIFIERS.attemptId ||
+    request.source.sha256 !== SAM_SAMSUNG_MANUAL_BOX_SOURCE.sha256 ||
+    request.source.byteSize !== SAM_SAMSUNG_MANUAL_BOX_SOURCE.byteSize ||
+    request.source.width !== SAM_SAMSUNG_MANUAL_BOX_SOURCE.width ||
+    request.source.height !== SAM_SAMSUNG_MANUAL_BOX_SOURCE.height ||
+    request.segmentation.mode !== 'box-prompt' ||
+    request.segmentation.prompt.authority !== 'user-interaction' ||
+    canonicalizeJson(request.segmentation.prompt.box) !==
+      canonicalizeJson(SAM_SAMSUNG_MANUAL_BOX_BPS) ||
+    canonicalizeJson(request.limits) !== canonicalizeJson(SAM_FIRST_INFERENCE_BOX_REQUEST_LIMITS) ||
+    request.output.maskEncoding !== 'fabrica-binary-rle-v1'
+  ) {
+    throw new TypeError('Samsung manual-box request is outside the exact authorization identity.');
+  }
+  const issuedAtMs = assertClockValue(Date.now());
+  const expiresAtMs = issuedAtMs + SAM_FIRST_INFERENCE_AUTHORIZATION_LIFETIME_MS;
+  if (!Number.isSafeInteger(expiresAtMs) || expiresAtMs > RUNPOD_DIRECT_DOCUMENTATION_EXPIRES_AT_MS)
+    throw new TypeError('Samsung manual-box authorization cannot fit inside the evidence window.');
+  const authorization = SamRunPodDirectV3BoxAuthorizationSchema.parse({
+    kind: 'single-box-prompt-sam-runpod-direct-v3',
+    authorizationId: assertAuthorizationId(randomUUID()),
+    endpointId: preparedState.endpointId,
+    imageDigest: SAM_FIRST_INFERENCE_WORKER_IMAGE_DIGEST,
+    secretReferenceName: RUNPOD_API_KEY_REFERENCE,
+    executionIdentity: SAM_FIRST_INFERENCE_EXECUTION_IDENTITY,
+    hostingProfileSha256: SAM_RUNPOD_DIRECT_HOSTING_PROFILE_SHA256,
+    adapterProfileSha256: SAM_RUNPOD_DIRECT_ADAPTER_PROFILE_V3_SHA256,
+    authorizationProfileSha256: SAM_RUNPOD_DIRECT_BOX_AUTHORIZATION_PROFILE_V3_SHA256,
+    documentationEvidence: {
+      retrievedAt: RUNPOD_DIRECT_DOCUMENTATION_RETRIEVED_AT,
+      expiresAt: RUNPOD_DIRECT_DOCUMENTATION_EXPIRES_AT,
+      hostingProfileSha256: SAM_RUNPOD_DIRECT_HOSTING_PROFILE_SHA256,
+    },
+    fixture: {
+      sha256: request.source.sha256,
+      byteSize: request.source.byteSize,
+      width: request.source.width,
+      height: request.source.height,
+    },
+    requestLimits: request.limits,
+    output: request.output,
+    automaticCandidatesOnly: false,
+    clientDispatchMaximum: 1,
+    applicationInferenceMaximum: 1,
+    providerBillingGuarantee: false,
+    clientRetryCount: 0,
+    pollCount: 0,
+    clientWallTimeoutMs: SAM_FIRST_INFERENCE_CLIENT_TIMEOUT_MS,
+    costMaximumMicroUsd: SAM_FIRST_INFERENCE_COST_MAXIMUM_MICRO_USD,
+    issuedAtMs,
+    expiresAtMs,
+    executionAuthorized: true,
+    productionAdmissionAuthority: false,
+    webRouteActivated: false,
+  });
+  boxAuthorizationState.set(
+    authorization,
+    Object.freeze({
+      prepared,
+      canonicalBodySha256: preparedState.canonicalBodySha256,
+      canonicalBodyByteLength: preparedState.canonicalBodyByteLength,
+      issuedAtMs,
+      expiresAtMs,
+      segmentationCanonical: canonicalizeJson(request.segmentation),
+      requestIdentityCanonical: canonicalizeJson({
+        requestId: request.requestId,
+        workspaceId: request.workspaceId,
+        jobId: request.jobId,
+        attemptId: request.attemptId,
       }),
     }),
   );
