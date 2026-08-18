@@ -60,7 +60,9 @@ export interface UploadedBannerSamFakeOperationResult extends UploadedBannerSamO
 }
 
 export interface UploadedBannerSamReplayOperationResult extends UploadedBannerSamOperationBase {
-  readonly provenance: 'Verified Meta SAM 2.1 cutout replay — no live call';
+  readonly provenance:
+    | 'Verified Meta SAM 2.1 cutout replay — no live call'
+    | 'Verified Meta SAM 2.1 user box-prompt replay — no live call';
 }
 export type UploadedBannerSamOperationResult =
   UploadedBannerSamFakeOperationResult | UploadedBannerSamReplayOperationResult;

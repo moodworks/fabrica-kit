@@ -157,7 +157,9 @@ export interface UploadedPromptedCutout {
     readonly pixelHeight: number;
     readonly sha256: string;
   };
-  readonly provenance: 'Deterministic test output — NOT SAM OUTPUT';
+  readonly provenance:
+    | 'Deterministic test output — NOT SAM OUTPUT'
+    | 'Verified Meta SAM 2.1 user box-prompt replay — no live call';
 }
 export const parseUploadedPromptedCutout = (input: unknown): UploadedPromptedCutout => {
   if (
@@ -174,7 +176,8 @@ export const parseUploadedPromptedCutout = (input: unknown): UploadedPromptedCut
     !/^samp_v1_[0-9a-f]{64}$/u.test(input.promptedId) ||
     typeof input.candidateId !== 'string' ||
     !/^samc_v1_[0-9a-f]{64}$/u.test(input.candidateId) ||
-    input.provenance !== 'Deterministic test output — NOT SAM OUTPUT'
+    (input.provenance !== 'Deterministic test output — NOT SAM OUTPUT' &&
+      input.provenance !== 'Verified Meta SAM 2.1 user box-prompt replay — no live call')
   )
     throw new TypeError('Invalid prompted cutout.');
   const crop = input.crop;

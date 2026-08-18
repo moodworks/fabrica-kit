@@ -65,7 +65,8 @@ export interface UploadedPromptedExecutionConfig {
   readonly expectedExecutionKind: 'deterministic-fake' | 'meta-sam2.1';
   readonly provenance:
     | 'Deterministic test output — NOT SAM OUTPUT'
-    | 'Verified Meta SAM 2.1 cutout replay — no live call';
+    | 'Verified Meta SAM 2.1 cutout replay — no live call'
+    | 'Verified Meta SAM 2.1 user box-prompt replay — no live call';
 }
 
 export class UploadedBannerOperationError extends Error {
@@ -1046,7 +1047,7 @@ export const createUploadedBannerExport = async (input: {
     artifact: {
       bytesBase64,
       byteSize: validated.artifact.byteSize,
-      filename: `${checked.operation.result.provenance === 'Verified Meta SAM 2.1 cutout replay — no live call' ? 'uploaded-verified-meta-sam-replay' : 'uploaded-deterministic-test'}-r${revision.revision}-${validated.artifact.sha256.slice(0, 12)}.zip`,
+      filename: `${checked.operation.result.provenance === 'Verified Meta SAM 2.1 cutout replay — no live call' || checked.operation.result.provenance === 'Verified Meta SAM 2.1 user box-prompt replay — no live call' ? 'uploaded-verified-meta-sam-replay' : 'uploaded-deterministic-test'}-r${revision.revision}-${validated.artifact.sha256.slice(0, 12)}.zip`,
       mediaType: validated.artifact.mediaType,
       sha256: validated.artifact.sha256,
       validationLabel: validated.artifact.validationLabel,

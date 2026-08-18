@@ -220,6 +220,15 @@ describe('prompted cutout response contract', () => {
   };
   it('accepts strict prompted metadata and rejects extra/invalid records', () => {
     expect(parseUploadedPromptedCutout(valid)).toEqual(valid);
+    expect(
+      parseUploadedPromptedCutout({
+        ...valid,
+        provenance: 'Verified Meta SAM 2.1 user box-prompt replay — no live call',
+      }),
+    ).toMatchObject({ provenance: 'Verified Meta SAM 2.1 user box-prompt replay — no live call' });
+    expect(() =>
+      parseUploadedPromptedCutout({ ...valid, provenance: 'foreign replay provenance' }),
+    ).toThrow();
     expect(() => parseUploadedPromptedCutout({ ...valid, extra: true })).toThrow();
     expect(() => parseUploadedPromptedCutout({ ...valid, candidateId: 'samc_v1_bad' })).toThrow();
     expect(() =>

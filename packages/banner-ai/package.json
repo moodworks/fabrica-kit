@@ -32,6 +32,10 @@
       "types": "./src/server/uploaded-banner-sam-replay-v4.ts",
       "default": "./src/server/uploaded-banner-sam-replay-v4.ts"
     },
+    "./server/uploaded-banner-sam-samsung-replay-v1": {
+      "types": "./src/server/uploaded-banner-sam-samsung-replay-v1.ts",
+      "default": "./src/server/uploaded-banner-sam-samsung-replay-v1.ts"
+    },
     "./server/sam-samsung-manual-box-control-v1": {
       "types": "./src/server/sam-samsung-manual-box-control-v1.ts",
       "default": "./src/server/sam-samsung-manual-box-control-v1.ts"

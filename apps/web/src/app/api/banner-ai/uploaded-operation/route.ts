@@ -15,6 +15,7 @@ import {
   requireSingleBannerUpload,
 } from '../../../../server/banner-ai/upload-form';
 import { loadSamsungSamV4Replay } from '@fabrica/banner-ai/server/uploaded-banner-sam-replay-v4';
+import { createSamsungManualBoxReplayGenerator } from '@fabrica/banner-ai/server/uploaded-banner-sam-samsung-replay-v1';
 import { createDeterministicUploadedBannerSamGenerator } from '@fabrica/banner-ai/server/uploaded-banner-sam-operation-v1';
 import { createDeterministicNonRectangularSamBoxPromptAdapter } from '@fabrica/banner-ai/server/sam-box-prompt-layer-extraction';
 import {
@@ -39,6 +40,11 @@ const injectedReplay: Parameters<typeof createUploadedBannerOperation>[0]['repla
   process.env.NODE_ENV === 'production' || e2eFakeGenerator !== undefined
     ? undefined
     : loadSamsungSamV4Replay;
+const samsungReplayPromptedExecution: UploadedPromptedExecutionConfig = {
+  generator: createSamsungManualBoxReplayGenerator(),
+  expectedExecutionKind: 'meta-sam2.1',
+  provenance: 'Verified Meta SAM 2.1 user box-prompt replay — no live call',
+};
 export const setUploadedOperationTestGenerator = (generator: typeof injectedGenerator): void => {
   injectedGenerator = generator;
 };
@@ -123,7 +129,7 @@ export async function POST(request: Request): Promise<Response> {
                 provenance: 'Deterministic test output — NOT SAM OUTPUT',
               },
             }
-          : {}),
+          : { promptedExecution: samsungReplayPromptedExecution }),
       ...(injectedGenerator === undefined &&
       e2eFakeGenerator === undefined &&
       injectedReplay !== undefined
