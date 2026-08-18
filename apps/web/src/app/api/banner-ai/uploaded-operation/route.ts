@@ -7,6 +7,8 @@ import {
   openUploadedBannerProject,
   saveUploadedBannerProject,
   composeUploadedBannerOperation,
+  promptUploadedBannerOperation,
+  type UploadedPromptedExecutionConfig,
 } from '../../../../server/banner-ai/uploaded-banner-operation';
 import {
   BannerUploadFormError,
@@ -14,6 +16,7 @@ import {
 } from '../../../../server/banner-ai/upload-form';
 import { loadSamsungSamV4Replay } from '@fabrica/banner-ai/server/uploaded-banner-sam-replay-v4';
 import { createDeterministicUploadedBannerSamGenerator } from '@fabrica/banner-ai/server/uploaded-banner-sam-operation-v1';
+import { createDeterministicNonRectangularSamBoxPromptAdapter } from '@fabrica/banner-ai/server/sam-box-prompt-layer-extraction';
 import {
   readBoundedJson,
   requireExactObjectKeys,
@@ -23,9 +26,14 @@ export const runtime = 'nodejs';
 
 // Deliberately unset in production. Tests may inject a deterministic fake adapter explicitly.
 let injectedGenerator: Parameters<typeof createUploadedBannerOperation>[0]['generator'] = undefined;
+let injectedPromptedExecution: UploadedPromptedExecutionConfig | undefined;
 const e2eFakeGenerator =
   process.env.NODE_ENV !== 'production' && process.env.BANNER_AI_E2E_TEST_FAKE === '1'
     ? createDeterministicUploadedBannerSamGenerator()
+    : undefined;
+const e2ePromptedGenerator =
+  e2eFakeGenerator !== undefined
+    ? createDeterministicNonRectangularSamBoxPromptAdapter()
     : undefined;
 const injectedReplay: Parameters<typeof createUploadedBannerOperation>[0]['replay'] =
   process.env.NODE_ENV === 'production' || e2eFakeGenerator !== undefined
@@ -33,6 +41,11 @@ const injectedReplay: Parameters<typeof createUploadedBannerOperation>[0]['repla
     : loadSamsungSamV4Replay;
 export const setUploadedOperationTestGenerator = (generator: typeof injectedGenerator): void => {
   injectedGenerator = generator;
+};
+export const setUploadedOperationTestPromptedGenerator = (
+  execution: UploadedPromptedExecutionConfig | undefined,
+): void => {
+  injectedPromptedExecution = execution;
 };
 
 const failure = (status: number, code: string, message: string): Response =>
@@ -99,6 +112,17 @@ export async function POST(request: Request): Promise<Response> {
         ? { generator: injectedGenerator }
         : e2eFakeGenerator !== undefined
           ? { generator: e2eFakeGenerator }
+          : {}),
+      ...(injectedPromptedExecution !== undefined
+        ? { promptedExecution: injectedPromptedExecution }
+        : e2ePromptedGenerator !== undefined
+          ? {
+              promptedExecution: {
+                generator: e2ePromptedGenerator.adapter,
+                expectedExecutionKind: 'deterministic-fake',
+                provenance: 'Deterministic test output — NOT SAM OUTPUT',
+              },
+            }
           : {}),
       ...(injectedGenerator === undefined &&
       e2eFakeGenerator === undefined &&
@@ -173,6 +197,48 @@ export async function PUT(request: Request): Promise<Response> {
     if (bodyValue === null || typeof bodyValue !== 'object' || Array.isArray(bodyValue))
       return failure(400, 'INVALID_UPLOADED_ACTION', 'Submit one exact uploaded action.');
     const body = bodyValue as Record<string, unknown>;
+    if (body.action === 'prompt-cutout') {
+      requireExactObjectKeys(body, ['action', 'crop', 'operationId'] as const);
+      const crop = body.crop;
+      if (crop === null || typeof crop !== 'object' || Array.isArray(crop))
+        return failure(400, 'CANDIDATE_INVALID', 'The prompted crop is invalid.');
+      const cropRecord = crop as Record<string, unknown>;
+      if (Object.keys(cropRecord).sort().join(',') !== 'height,left,top,width')
+        return failure(400, 'CANDIDATE_INVALID', 'The prompted crop is invalid.');
+      const values = [cropRecord.left, cropRecord.top, cropRecord.width, cropRecord.height];
+      if (!values.every(Number.isSafeInteger))
+        return failure(400, 'CANDIDATE_INVALID', 'The prompted crop is invalid.');
+      const prompted = await promptUploadedBannerOperation({
+        operationId: body.operationId,
+        crop: {
+          left: Number(cropRecord.left),
+          top: Number(cropRecord.top),
+          width: Number(cropRecord.width),
+          height: Number(cropRecord.height),
+        },
+        authority: resolveDevelopmentActorWorkspaceContext(),
+      });
+      return Response.json(
+        {
+          ok: true,
+          data: {
+            promptedId: prompted.promptedId,
+            candidateId: prompted.candidate.candidateId,
+            crop: prompted.crop,
+            bounds: prompted.bounds,
+            thumbnail: {
+              dataUrl: prompted.preview.dataUrl,
+              byteSize: prompted.preview.byteSize,
+              pixelWidth: prompted.preview.pixelWidth,
+              pixelHeight: prompted.preview.pixelHeight,
+              sha256: prompted.preview.sha256,
+            },
+            provenance: prompted.operation.promptedExecution?.provenance,
+          },
+        },
+        { headers: { 'cache-control': 'no-store' } },
+      );
+    }
     if (body.action === 'compose') {
       const mixed = Array.isArray(body.layers);
       const grouped = Array.isArray(body.candidateGroups);

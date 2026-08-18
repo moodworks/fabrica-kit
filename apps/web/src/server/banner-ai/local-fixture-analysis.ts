@@ -150,6 +150,7 @@ export const analyzeBannerWithLocalFixture = async (
       jobId: randomUUID(),
       attemptId: randomUUID(),
       sam: fake.adapter,
+      expectedExecutionKind: 'deterministic-fake',
     });
     const preview = await createBoundedLayerPreview(extracted.layer.bytes);
     const { bytes: _previewBytes, ...boundedPreview } = preview;

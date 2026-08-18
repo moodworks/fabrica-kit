@@ -23,6 +23,7 @@ import {
   composeUploadedBannerCandidateGroups,
   composeUploadedBannerMixedLayers,
   parseUploadedMixedLayers,
+  parseUploadedPromptedCutout,
 } from './banner-ai-project-api';
 
 describe('uploaded mixed layer payloads', () => {
@@ -199,6 +200,46 @@ describe('mixed compose request contract', () => {
         { kind: 'source-region-v1', crop: { left: -1, top: 0, width: 1, height: 1 } },
       ]),
     ).rejects.toThrow();
+  });
+});
+
+describe('prompted cutout response contract', () => {
+  const valid = {
+    promptedId: 'samp_v1_' + 'a'.repeat(64),
+    candidateId: 'samc_v1_' + 'b'.repeat(64),
+    crop: { left: 0, top: 1, width: 10, height: 20 },
+    bounds: { xBps: 0, yBps: 1, widthBps: 100, heightBps: 200 },
+    thumbnail: {
+      dataUrl: 'data:image/png;base64,AA==',
+      byteSize: 1,
+      pixelWidth: 1,
+      pixelHeight: 1,
+      sha256: 'c'.repeat(64),
+    },
+    provenance: 'Deterministic test output — NOT SAM OUTPUT' as const,
+  };
+  it('accepts strict prompted metadata and rejects extra/invalid records', () => {
+    expect(parseUploadedPromptedCutout(valid)).toEqual(valid);
+    expect(() => parseUploadedPromptedCutout({ ...valid, extra: true })).toThrow();
+    expect(() => parseUploadedPromptedCutout({ ...valid, candidateId: 'samc_v1_bad' })).toThrow();
+    expect(() =>
+      parseUploadedPromptedCutout({ ...valid, bounds: { ...valid.bounds, xBps: -1 } }),
+    ).toThrow();
+    expect(() =>
+      parseUploadedPromptedCutout({
+        ...valid,
+        thumbnail: { ...valid.thumbnail, byteSize: 524_289 },
+      }),
+    ).toThrow();
+    expect(() =>
+      parseUploadedPromptedCutout({ ...valid, thumbnail: { ...valid.thumbnail, pixelWidth: 161 } }),
+    ).toThrow();
+    expect(() =>
+      parseUploadedPromptedCutout({
+        ...valid,
+        thumbnail: { ...valid.thumbnail, pixelHeight: 161 },
+      }),
+    ).toThrow();
   });
 });
 

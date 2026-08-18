@@ -30,7 +30,9 @@ import {
   createUploadedBannerExport,
   composeUploadedBannerOperation,
   materializeUploadedSourceRegion,
+  promptUploadedBannerOperation,
 } from './uploaded-banner-operation';
+import { createDeterministicNonRectangularSamBoxPromptAdapter } from '../../../../../packages/banner-ai/src/server/sam-box-prompt-layer-extraction';
 import {
   isProviderFreeLayerIdV1,
   mutateProviderFreeBannerSceneV1,
@@ -524,5 +526,161 @@ describe('uploaded banner operation registry', () => {
         },
       }),
     ).rejects.toMatchObject({ code: 'UNSUPPORTED_SOURCE' });
+  });
+
+  it('coalesces prompted crops and materializes ordered prompted/source layers', async () => {
+    const owner = authority();
+    const fake = createDeterministicNonRectangularSamBoxPromptAdapter();
+    const created = await createUploadedBannerOperation({
+      file: new File([source], 'banner.png', { type: 'image/png' }),
+      authority: owner,
+      generator: createDeterministicUploadedBannerSamGenerator(),
+      promptedExecution: {
+        generator: fake.adapter,
+        expectedExecutionKind: 'deterministic-fake',
+        provenance: 'Deterministic test output — NOT SAM OUTPUT',
+      },
+    });
+    const crop = { left: 3, top: 4, width: 20, height: 15 };
+    const first = await promptUploadedBannerOperation({
+      operationId: created.operationId,
+      crop,
+      authority: owner,
+    });
+    const second = await promptUploadedBannerOperation({
+      operationId: created.operationId,
+      crop,
+      authority: owner,
+    });
+    expect(second.promptedId).toBe(first.promptedId);
+    expect(fake.getCallCount()).toBe(1);
+    const mixed = await composeUploadedBannerOperation({
+      operationId: created.operationId,
+      candidateIds: [],
+      layers: [
+        { kind: 'prompted-cutout-v1', promptedId: first.promptedId },
+        { kind: 'source-region-v1', crop: { left: 0, top: 0, width: 20, height: 15 } },
+      ],
+      authority: owner,
+    });
+    const opened = await openUploadedBannerProject({
+      operationId: created.operationId,
+      candidateId: mixed.subjectId,
+      authority: owner,
+    });
+    expect(opened.materialization.scene.layers.map((layer) => layer.name)).toEqual([
+      'Manual cutout 1',
+      'Source region 2 · opaque crop',
+    ]);
+  });
+
+  it('rejects unknown prompted IDs', async () => {
+    const owner = authority();
+    const created = await createUploadedBannerOperation({
+      file: new File([source], 'banner.png', { type: 'image/png' }),
+      authority: owner,
+      generator: createDeterministicUploadedBannerSamGenerator(),
+    });
+    await expect(
+      composeUploadedBannerOperation({
+        operationId: created.operationId,
+        candidateIds: [],
+        layers: [{ kind: 'prompted-cutout-v1', promptedId: 'samp_v1_' + 'f'.repeat(64) }],
+        authority: owner,
+      }),
+    ).rejects.toMatchObject({ code: 'CANDIDATE_INVALID' });
+  });
+
+  it('evicts failed prompted work and rolls back over-cap prompted results', async () => {
+    const owner = authority();
+    const fake = createDeterministicNonRectangularSamBoxPromptAdapter();
+    let calls = 0;
+    const flaky = {
+      generate: async (request: Parameters<typeof fake.adapter.generate>[0]) => {
+        calls += 1;
+        if (calls === 1) throw new Error('synthetic prompt failure');
+        return fake.adapter.generate(request);
+      },
+    };
+    const created = await createUploadedBannerOperation({
+      file: new File([source], 'banner.png', { type: 'image/png' }),
+      authority: owner,
+      generator: createDeterministicUploadedBannerSamGenerator(),
+      promptedExecution: {
+        generator: flaky,
+        expectedExecutionKind: 'deterministic-fake',
+        provenance: 'Deterministic test output — NOT SAM OUTPUT',
+      },
+    });
+    const crop = { left: 3, top: 4, width: 20, height: 15 };
+    await expect(
+      promptUploadedBannerOperation({ operationId: created.operationId, crop, authority: owner }),
+    ).rejects.toThrow();
+    const retried = await promptUploadedBannerOperation({
+      operationId: created.operationId,
+      crop,
+      authority: owner,
+    });
+    expect(calls).toBe(2);
+    retried.operation.projectBytes.set('preloaded', 64 * 1024 * 1024);
+    await expect(
+      promptUploadedBannerOperation({
+        operationId: created.operationId,
+        crop: { ...crop, left: 5 },
+        authority: owner,
+      }),
+    ).rejects.toMatchObject({ code: 'OPERATION_INVALID' });
+    retried.operation.projectBytes.delete('preloaded');
+    await expect(
+      promptUploadedBannerOperation({
+        operationId: created.operationId,
+        crop: { ...crop, left: 5 },
+        authority: owner,
+      }),
+    ).resolves.toMatchObject({ promptedId: expect.stringMatching(/^samp_v1_/u) });
+    expect(retried.promptedId).toMatch(/^samp_v1_/u);
+  });
+
+  it('caps distinct prompted crops at eight while reusing duplicates', async () => {
+    const owner = authority();
+    const fake = createDeterministicNonRectangularSamBoxPromptAdapter();
+    const created = await createUploadedBannerOperation({
+      file: new File([source], 'banner.png', { type: 'image/png' }),
+      authority: owner,
+      generator: createDeterministicUploadedBannerSamGenerator(),
+      promptedExecution: {
+        generator: fake.adapter,
+        expectedExecutionKind: 'deterministic-fake',
+        provenance: 'Deterministic test output — NOT SAM OUTPUT',
+      },
+    });
+    const crops = Array.from({ length: 8 }, (_, index) => ({
+      left: index * 2,
+      top: 0,
+      width: 10,
+      height: 10,
+    }));
+    const results = await Promise.all(
+      crops.map((crop) =>
+        promptUploadedBannerOperation({ operationId: created.operationId, crop, authority: owner }),
+      ),
+    );
+    expect(results).toHaveLength(8);
+    expect(fake.getCallCount()).toBe(8);
+    await expect(
+      promptUploadedBannerOperation({
+        operationId: created.operationId,
+        crop: crops[0]!,
+        authority: owner,
+      }),
+    ).resolves.toMatchObject({ promptedId: results[0]!.promptedId });
+    await expect(
+      promptUploadedBannerOperation({
+        operationId: created.operationId,
+        crop: { left: 20, top: 0, width: 10, height: 10 },
+        authority: owner,
+      }),
+    ).rejects.toMatchObject({ code: 'OPERATION_INVALID' });
+    expect(fake.getCallCount()).toBe(8);
   });
 });

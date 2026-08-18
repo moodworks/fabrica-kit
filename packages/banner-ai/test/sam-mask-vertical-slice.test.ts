@@ -352,6 +352,7 @@ describe('SAM mask protocol', () => {
       jobId: automaticPrepared.request.jobId,
       attemptId: automaticPrepared.request.attemptId,
       sam: adapter,
+      expectedExecutionKind: 'meta-sam2.1',
     });
     expect(extracted.layer.mediaType).toBe('image/png');
     expect(() => assertCanonicalNormalizedPng(extracted.layer.bytes)).not.toThrow();

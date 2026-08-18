@@ -29,6 +29,14 @@ import {
 import { materializeUploadedBannerOperationProjectV1 } from '@fabrica/banner-ai';
 import { SamReplayError } from '@fabrica/banner-ai/server/uploaded-banner-sam-replay-v4';
 import { materializeUploadedSourceRegionV1 } from '@fabrica/banner-ai/server/uploaded-banner-source-region-v1';
+import {
+  extractUploadedManualCutoutV1,
+  type ManualCutoutCropV1,
+} from '@fabrica/banner-ai/server/uploaded-banner-manual-cutout-v1';
+import {
+  createBoundedLayerPreview,
+  type SamBoxPromptGeneratePort,
+} from '@fabrica/banner-ai/server/sam-box-prompt-layer-extraction';
 
 const OPERATION_TTL_MS = 5 * 60_000;
 const MAX_OPERATION_BYTES = 48 * 1024 * 1024;
@@ -48,6 +56,17 @@ type MixedLayerResult = {
     };
   }[];
 };
+type PromptedResult = Awaited<ReturnType<typeof extractUploadedManualCutoutV1>> & {
+  readonly promptedId: string;
+  readonly preview: Awaited<ReturnType<typeof createBoundedLayerPreview>>;
+};
+export interface UploadedPromptedExecutionConfig {
+  readonly generator: SamBoxPromptGeneratePort;
+  readonly expectedExecutionKind: 'deterministic-fake' | 'meta-sam2.1';
+  readonly provenance:
+    | 'Deterministic test output — NOT SAM OUTPUT'
+    | 'Verified Meta SAM 2.1 cutout replay — no live call';
+}
 
 export class UploadedBannerOperationError extends Error {
   constructor(
@@ -94,6 +113,9 @@ export interface UploadedBannerOperation {
   >;
   readonly mixed: Map<string, Promise<MixedLayerResult>>;
   readonly resolvedMixed: Map<string, MixedLayerResult>;
+  readonly prompted: Map<string, Promise<PromptedResult>>;
+  readonly resolvedPrompted: Map<string, PromptedResult>;
+  readonly promptedExecution?: UploadedPromptedExecutionConfig;
   readonly resolvedSubjects: Map<
     string,
     {
@@ -127,6 +149,10 @@ const combinedDerivedBytes = (operation: UploadedBannerOperation): number =>
   [...operation.resolvedMixed.values()].reduce(
     (sum, result) =>
       sum + result.layers.reduce((bytes, layer) => bytes + layer.bytes.byteLength, 0),
+    0,
+  ) +
+  [...operation.resolvedPrompted.values()].reduce(
+    (sum, result) => sum + result.layer.bytes.byteLength + result.preview.byteSize,
     0,
   ) +
   [...operation.projectBytes.values()].reduce((sum, bytes) => sum + bytes, 0);
@@ -176,6 +202,7 @@ export const createUploadedBannerOperation = async (input: {
   readonly authority: ActorWorkspaceContext;
   readonly generator?: UploadedBannerSamGenerator;
   readonly replay?: (source: Uint8Array) => Promise<UploadedBannerSamOperationResult>;
+  readonly promptedExecution?: UploadedPromptedExecutionConfig;
 }): Promise<{
   readonly operationId: string;
   readonly catalog: ReturnType<typeof uploadedCandidateCatalog>;
@@ -242,6 +269,11 @@ export const createUploadedBannerOperation = async (input: {
     resolvedGrouped: new Map(),
     mixed: new Map(),
     resolvedMixed: new Map(),
+    prompted: new Map(),
+    resolvedPrompted: new Map(),
+    ...(input.promptedExecution === undefined
+      ? {}
+      : { promptedExecution: input.promptedExecution }),
     resolvedSubjects: new Map(),
     composedBytes: 0,
     saveLocks: new Map(),
@@ -280,6 +312,78 @@ export const uploadedCandidateCatalog = (operation: UploadedBannerOperation) =>
       }),
     ),
   );
+
+export const promptUploadedBannerOperation = async (input: {
+  readonly operationId: unknown;
+  readonly crop: ManualCutoutCropV1;
+  readonly authority: ActorWorkspaceContext;
+}) => {
+  const operation = resolve(input.operationId, input.authority);
+  const promptedExecution = operation.promptedExecution;
+  if (promptedExecution === undefined)
+    throw new UploadedBannerOperationError(
+      'AUTHORIZATION_REQUIRED',
+      'Manual cutout prompting is unavailable.',
+    );
+  const key = JSON.stringify(input.crop);
+  let pending = operation.prompted.get(key);
+  if (pending === undefined) {
+    if (operation.prompted.size >= 8)
+      throw new UploadedBannerOperationError(
+        'OPERATION_INVALID',
+        'The prompted crop limit has been reached.',
+      );
+    pending = (async () => {
+      const extracted = await extractUploadedManualCutoutV1({
+        normalizedPng: operation.sourceBytes,
+        crop: input.crop,
+        sam: promptedExecution.generator,
+        expectedExecutionKind: promptedExecution.expectedExecutionKind,
+        requestId: randomUUID(),
+        workspaceId: randomUUID(),
+        jobId: randomUUID(),
+        attemptId: randomUUID(),
+      });
+      const preview = await createBoundedLayerPreview(extracted.layer.bytes);
+      const promptedId = `samp_v1_${digest(
+        canonicalizeJson({
+          source: {
+            sha256: operation.source.sha256,
+            width: operation.source.width,
+            height: operation.source.height,
+          },
+          crop: extracted.crop,
+          promptBounds: extracted.promptBounds,
+          bounds: extracted.bounds,
+          candidateId: extracted.candidate.candidateId,
+          mask: extracted.candidate.mask.sha256,
+          geometry: {
+            bounds: extracted.candidate.bounds,
+            pixelArea: extracted.candidate.pixelArea,
+            areaRatioBps: extracted.candidate.areaRatioBps,
+          },
+          layer: extracted.layer.sha256,
+        }),
+      )}`;
+      return { ...extracted, promptedId, preview };
+    })();
+    operation.prompted.set(key, pending);
+    void pending.catch(() => {
+      if (operation.prompted.get(key) === pending) operation.prompted.delete(key);
+    });
+  }
+  const result = await pending;
+  operation.resolvedPrompted.set(result.promptedId, result);
+  if (combinedDerivedBytes(operation) > 64 * 1024 * 1024) {
+    operation.resolvedPrompted.delete(result.promptedId);
+    operation.prompted.delete(key);
+    throw new UploadedBannerOperationError(
+      'OPERATION_INVALID',
+      'The prompted cutout exceeds the cumulative byte bound.',
+    );
+  }
+  return { operation, ...result };
+};
 
 export const resolveUploadedBannerOperation = (
   operationId: unknown,
@@ -391,6 +495,18 @@ export const composeUploadedBannerOperation = async (input: {
         usedCrops.add(cropKey);
         return { kind: record.kind, crop: cropValue } as const;
       }
+      if (
+        record.kind === 'prompted-cutout-v1' &&
+        keys.join(',') === 'kind,promptedId' &&
+        typeof record.promptedId === 'string'
+      ) {
+        if (!operation.resolvedPrompted.has(record.promptedId))
+          throw new UploadedBannerOperationError(
+            'CANDIDATE_INVALID',
+            'The prompted cutout is not owned by this operation.',
+          );
+        return { kind: record.kind, promptedId: record.promptedId } as const;
+      }
       throw new UploadedBannerOperationError('CANDIDATE_INVALID', 'Layers are invalid.');
     });
     const key = JSON.stringify(layers);
@@ -430,6 +546,13 @@ export const composeUploadedBannerOperation = async (input: {
                 widthBps: Math.round((layer.crop.width * 10000) / operation.source.width),
                 heightBps: Math.round((layer.crop.height * 10000) / operation.source.height),
               },
+            });
+          } else if (layer.kind === 'prompted-cutout-v1') {
+            const prompted = operation.resolvedPrompted.get(layer.promptedId)!;
+            materialized.push({
+              subjectId: prompted.promptedId,
+              bytes: prompted.layer.bytes,
+              bounds: prompted.bounds,
             });
           } else {
             const group = samResult!.groups[samIndex++]!;

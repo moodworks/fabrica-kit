@@ -24,6 +24,10 @@
       "types": "./src/server/uploaded-banner-source-region-v1.ts",
       "default": "./src/server/uploaded-banner-source-region-v1.ts"
     },
+    "./server/uploaded-banner-manual-cutout-v1": {
+      "types": "./src/server/uploaded-banner-manual-cutout-v1.ts",
+      "default": "./src/server/uploaded-banner-manual-cutout-v1.ts"
+    },
     "./server/uploaded-banner-sam-replay-v4": {
       "types": "./src/server/uploaded-banner-sam-replay-v4.ts",
       "default": "./src/server/uploaded-banner-sam-replay-v4.ts"

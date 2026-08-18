@@ -344,9 +344,11 @@ const materializeProviderFreeFixtureProjectCoreV1 = async (input: {
           bounds: proposal.bounds,
           name: proposal.candidateId.startsWith('saml_v1_')
             ? `Uploaded layer ${index + 1}`
-            : proposal.candidateId.startsWith('srcl_v1_')
-              ? `Source region ${index + 1} · opaque crop`
-              : `Uploaded cutout ${index + 1}`,
+            : proposal.candidateId.startsWith('samp_v1_')
+              ? `Manual cutout ${index + 1}`
+              : proposal.candidateId.startsWith('srcl_v1_')
+                ? `Source region ${index + 1} · opaque crop`
+                : `Uploaded cutout ${index + 1}`,
         }
       : (input.subjectIdentity ?? layerIdentity[proposal.partKey as ForegroundPartKey]);
     const encoded = proposal.encoded;
@@ -564,7 +566,7 @@ export const materializeUploadedBannerOperationProjectV1 = async (input: {
     const ids = input.subjects.map((subject) => subject.candidateId);
     if (
       new Set(ids).size !== ids.length ||
-      ids.some((id) => !/^(?:samc|saml|srcl)_v1_[0-9a-f]{64}$/u.test(id))
+      ids.some((id) => !/^(?:samc|saml|samp|srcl)_v1_[0-9a-f]{64}$/u.test(id))
     )
       throw new TypeError('Uploaded selection subjects are invalid or duplicated.');
   }

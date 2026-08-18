@@ -13,6 +13,8 @@ import {
 import {
   requestUploadedBannerOperation,
   composeUploadedBannerMixedLayers,
+  promptUploadedBannerCutout,
+  type UploadedPromptedCutout,
   type UploadedMixedLayer,
   type UploadedBannerOperationData,
 } from './banner-ai-project-api';
@@ -51,7 +53,8 @@ type DraftLayer =
         readonly width: number;
         readonly height: number;
       };
-    };
+    }
+  | { readonly kind: 'prompted-cutout-v1'; readonly promptedId: string };
 
 export function BannerAiClient() {
   const [state, dispatch] = useReducer(bannerAiReducer, initialBannerAiState);
@@ -66,13 +69,26 @@ export function BannerAiClient() {
   >(VERIFIED_REPLAY_PROVENANCE);
   const [selectedCandidates, setSelectedCandidates] = useState<readonly string[]>([]);
   const [draftLayers, setDraftLayers] = useState<readonly DraftLayer[]>([]);
-  const [regionDraft, setRegionDraft] = useState<{
-    readonly left: number;
-    readonly top: number;
-    readonly width: number;
-    readonly height: number;
+  const [builderMode, setBuilderMode] = useState<'candidates' | 'region' | 'prompted'>(
+    'candidates',
+  );
+  const [pendingPrompt, setPendingPrompt] = useState<{
+    readonly crop: {
+      readonly left: number;
+      readonly top: number;
+      readonly width: number;
+      readonly height: number;
+    };
+    readonly token: number;
+    readonly status: 'ready' | 'generating' | 'failed';
+    readonly error?: string;
   } | null>(null);
-  const [builderMode, setBuilderMode] = useState<'candidates' | 'region'>('candidates');
+  const [redrawingPrompt, setRedrawingPrompt] = useState(false);
+  const [promptAnnouncement, setPromptAnnouncement] = useState('');
+  const [promptedCutouts, setPromptedCutouts] = useState<
+    ReadonlyMap<string, UploadedPromptedCutout>
+  >(new Map());
+  const promptGenerating = pendingPrompt?.status === 'generating';
   const [showSmallFragments, setShowSmallFragments] = useState(false);
   const [composeBusy, setComposeBusy] = useState(false);
   const [composeError, setComposeError] = useState<string | null>(null);
@@ -91,6 +107,9 @@ export function BannerAiClient() {
     dragging: boolean;
   } | null>(null);
   const suppressClickRef = useRef(false);
+  const pendingPromptTokenRef = useRef(0);
+  const promptAttemptRef = useRef(0);
+  const promptInFlightRef = useRef<number | null>(null);
   const quality = partitionUploadedCandidates(uploadedOperation?.candidates ?? []);
   const visibleCandidates = showSmallFragments
     ? (uploadedOperation?.candidates ?? [])
@@ -107,7 +126,7 @@ export function BannerAiClient() {
     );
   };
   const onStagePointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
-    if (composeBusy) return;
+    if (composeBusy || promptGenerating) return;
     if ((event.pointerType !== 'mouse' && event.pointerType !== 'pen') || event.button !== 0)
       return;
     const point = stagePoint(event);
@@ -133,7 +152,7 @@ export function BannerAiClient() {
     if (!drag.dragging && next.width < 5 && next.height < 5) return;
     drag.dragging = true;
     setMarquee(next);
-    if (builderMode === 'region') return;
+    if (builderMode !== 'candidates') return;
     const picked = selectMarqueeCandidates(
       next,
       visibleCandidates.filter(
@@ -170,7 +189,7 @@ export function BannerAiClient() {
       if (point !== null && stage !== null) {
         const rect = stage.getBoundingClientRect();
         const finalMarquee = marqueeRectFromPoints(drag.start, point);
-        if (builderMode === 'region') {
+        if (builderMode === 'region' || builderMode === 'prompted') {
           const sourceWidth = state.selection?.width ?? rect.width;
           const sourceHeight = state.selection?.height ?? rect.height;
           const crop = sourceCropFromDisplayDrag(
@@ -179,7 +198,15 @@ export function BannerAiClient() {
             { width: rect.width, height: rect.height },
             { width: sourceWidth, height: sourceHeight },
           );
-          if (crop !== null && draftLayers.length < 8) setRegionDraft(crop);
+          if (crop !== null && draftLayers.length < 8) {
+            if (builderMode === 'prompted') {
+              const token = pendingPromptTokenRef.current + 1;
+              pendingPromptTokenRef.current = token;
+              promptAttemptRef.current += 1;
+              setRedrawingPrompt(false);
+              setPendingPrompt({ crop, token, status: 'ready' });
+            } else setDraftLayers((current) => [...current, { kind: 'source-region-v1', crop }]);
+          }
           setSelectedCandidates([]);
         } else {
           const picked = selectMarqueeCandidates(
@@ -240,7 +267,12 @@ export function BannerAiClient() {
     setUploadedOperation(null);
     setSelectedCandidates([]);
     setDraftLayers([]);
-    setRegionDraft(null);
+    setPendingPrompt(null);
+    setRedrawingPrompt(false);
+    pendingPromptTokenRef.current += 1;
+    promptAttemptRef.current += 1;
+    promptInFlightRef.current = null;
+    setPromptedCutouts(new Map());
     setShowSmallFragments(false);
     setBuilderMode('candidates');
     setComposeError(null);
@@ -290,7 +322,12 @@ export function BannerAiClient() {
       setUploadedOperation(operation);
       setSelectedCandidates([]);
       setDraftLayers([]);
-      setRegionDraft(null);
+      setPendingPrompt(null);
+      setRedrawingPrompt(false);
+      pendingPromptTokenRef.current += 1;
+      promptAttemptRef.current += 1;
+      promptInFlightRef.current = null;
+      setPromptedCutouts(new Map());
       setShowSmallFragments(false);
       setBuilderMode('candidates');
       setComposeError(null);
@@ -336,6 +373,68 @@ export function BannerAiClient() {
       { kind: 'sam-candidate-group-v1', candidateIds: layer },
     ]);
     setSelectedCandidates([]);
+  };
+  const generatePendingPrompt = async (): Promise<void> => {
+    if (
+      pendingPrompt === null ||
+      pendingPrompt.status === 'generating' ||
+      uploadedOperation === null
+    )
+      return;
+    const token = pendingPrompt.token;
+    const operationId = uploadedOperation.operationId;
+    const requestRevision = requestRevisionRef.current;
+    const attempt = ++promptAttemptRef.current;
+    if (promptInFlightRef.current !== null) return;
+    promptInFlightRef.current = attempt;
+    setPendingPrompt({
+      crop: pendingPrompt.crop,
+      token: pendingPrompt.token,
+      status: 'generating',
+    });
+    try {
+      const prompted = await promptUploadedBannerCutout(operationId, pendingPrompt.crop);
+      if (
+        requestRevisionRef.current !== requestRevision ||
+        uploadedOperation.operationId !== operationId ||
+        token !== pendingPromptTokenRef.current ||
+        promptAttemptRef.current !== attempt
+      )
+        return;
+      if (draftLayers.length >= 8) {
+        setPendingPrompt({
+          crop: pendingPrompt.crop,
+          token,
+          status: 'failed',
+          error: 'There is no available layer slot for this cutout.',
+        });
+        if (promptInFlightRef.current === attempt) promptInFlightRef.current = null;
+        return;
+      }
+      setPromptedCutouts((map) => new Map(map).set(prompted.promptedId, prompted));
+      setDraftLayers((current) => [
+        ...current,
+        { kind: 'prompted-cutout-v1', promptedId: prompted.promptedId },
+      ]);
+      setPendingPrompt(null);
+      setRedrawingPrompt(false);
+      setPromptAnnouncement('Manual cutout created.');
+      if (promptInFlightRef.current === attempt) promptInFlightRef.current = null;
+    } catch (error) {
+      if (
+        requestRevisionRef.current === requestRevision &&
+        uploadedOperation.operationId === operationId &&
+        token === pendingPromptTokenRef.current &&
+        promptAttemptRef.current === attempt
+      )
+        setPendingPrompt({
+          crop: pendingPrompt.crop,
+          token,
+          status: 'failed',
+          error: messageFrom(error, 'The transparent cutout could not be generated.'),
+        });
+      if (promptInFlightRef.current === attempt) promptInFlightRef.current = null;
+    }
   };
   const uploadControlCopy = getBannerAiUploadControlCopy(state);
 
@@ -491,7 +590,7 @@ export function BannerAiClient() {
               {quality.smallFragments.length > 0 ? (
                 <button
                   type="button"
-                  disabled={composeBusy}
+                  disabled={composeBusy || promptGenerating}
                   onClick={() => {
                     if (showSmallFragments) {
                       const visibleIds = new Set(
@@ -513,7 +612,7 @@ export function BannerAiClient() {
                 <button
                   type="button"
                   aria-pressed={builderMode === 'candidates'}
-                  disabled={composeBusy}
+                  disabled={composeBusy || promptGenerating}
                   onClick={() => setBuilderMode('candidates')}
                 >
                   Select cutouts
@@ -521,16 +620,24 @@ export function BannerAiClient() {
                 <button
                   type="button"
                   aria-pressed={builderMode === 'region'}
-                  disabled={composeBusy}
+                  disabled={composeBusy || promptGenerating}
                   onClick={() => setBuilderMode('region')}
                 >
                   Draw source region
+                </button>
+                <button
+                  type="button"
+                  aria-pressed={builderMode === 'prompted'}
+                  disabled={composeBusy || promptGenerating}
+                  onClick={() => setBuilderMode('prompted')}
+                >
+                  Draw transparent cutout
                 </button>
               </div>
               <p>{uploadedOperation.provenance}</p>
               <div
                 ref={stageRef}
-                className={`candidate-composer-stage${builderMode === 'region' ? ' source-region-mode' : ''}`}
+                className={`candidate-composer-stage${builderMode !== 'candidates' ? ' source-region-mode' : ''}`}
                 onPointerDown={onStagePointerDown}
                 onPointerMove={onStagePointerMove}
                 onPointerUp={finishStagePointer}
@@ -593,7 +700,12 @@ export function BannerAiClient() {
                       }}
                       aria-label={`Candidate ${candidate.order}${assigned !== null ? ` assigned to Layer ${assigned}` : ''}`}
                       aria-pressed={checked}
-                      disabled={builderMode !== 'candidates' || assigned !== null || composeBusy}
+                      disabled={
+                        builderMode !== 'candidates' ||
+                        assigned !== null ||
+                        composeBusy ||
+                        promptGenerating
+                      }
                       onClick={() =>
                         builderMode === 'candidates' &&
                         setSelectedCandidates((current) =>
@@ -607,7 +719,7 @@ export function BannerAiClient() {
                     </button>
                   );
                 })}
-                {builderMode === 'region' && marquee !== null ? (
+                {builderMode !== 'candidates' && marquee !== null ? (
                   <div
                     className="candidate-marquee"
                     style={{
@@ -619,34 +731,26 @@ export function BannerAiClient() {
                     aria-hidden="true"
                   />
                 ) : null}
-                {regionDraft !== null ? (
-                  <div
-                    className="candidate-marquee source-region-draft"
-                    style={{
-                      left: `${(regionDraft.left / (state.selection?.width ?? 1)) * 100}%`,
-                      top: `${(regionDraft.top / (state.selection?.height ?? 1)) * 100}%`,
-                      width: `${(regionDraft.width / (state.selection?.width ?? 1)) * 100}%`,
-                      height: `${(regionDraft.height / (state.selection?.height ?? 1)) * 100}%`,
-                    }}
-                    aria-label="Pending source region"
-                  />
-                ) : null}
               </div>
               <div className="candidate-selection-summary" aria-live="polite">
                 <strong>
                   {builderMode === 'region'
-                    ? 'Drag a source region, then create it as a layer'
-                    : `${selectedCandidates.length} cutouts selected for the next layer`}
+                    ? 'Drag a source region to add an opaque layer immediately'
+                    : builderMode === 'prompted'
+                      ? 'Draw a box, then generate a transparent cutout'
+                      : `${selectedCandidates.length} cutouts selected for the next layer`}
                 </strong>
                 <span>
                   {builderMode === 'region'
-                    ? 'The crop stays visible until you confirm or clear it.'
-                    : 'Click a marker to toggle it, or use the checkboxes below.'}
+                    ? 'The opaque source-region layer is added on pointer release.'
+                    : builderMode === 'prompted'
+                      ? 'The crop remains pending until you generate it.'
+                      : 'Click a marker to toggle it, or use the checkboxes below.'}
                 </span>
                 {selectedCandidates.length > 0 ? (
                   <button
                     type="button"
-                    disabled={composeBusy}
+                    disabled={composeBusy || promptGenerating}
                     onClick={() => setSelectedCandidates([])}
                   >
                     Clear selection
@@ -664,7 +768,12 @@ export function BannerAiClient() {
                       <input
                         type="checkbox"
                         checked={checked}
-                        disabled={builderMode !== 'candidates' || assigned !== null || composeBusy}
+                        disabled={
+                          builderMode !== 'candidates' ||
+                          assigned !== null ||
+                          composeBusy ||
+                          promptGenerating
+                        }
                         onChange={() =>
                           builderMode === 'candidates' &&
                           setSelectedCandidates((current) =>
@@ -683,34 +792,113 @@ export function BannerAiClient() {
               <button
                 type="button"
                 disabled={
-                  builderMode !== 'candidates' || selectedCandidates.length === 0 || composeBusy
+                  builderMode !== 'candidates' ||
+                  selectedCandidates.length === 0 ||
+                  composeBusy ||
+                  promptGenerating
                 }
                 onClick={createLayer}
               >
                 Create layer from {selectedCandidates.length} cutouts
               </button>
-              {draftLayers.length > 0 || regionDraft !== null ? (
+              {draftLayers.length > 0 || pendingPrompt !== null ? (
                 <div className="created-layer-list" aria-label="Created layers">
+                  {pendingPrompt !== null ? (
+                    <div
+                      className="created-layer-card"
+                      role={pendingPrompt.status === 'failed' ? 'alert' : undefined}
+                    >
+                      <strong>
+                        {redrawingPrompt
+                          ? 'Redraw transparent cutout'
+                          : 'Pending transparent cutout'}
+                      </strong>
+                      <span>
+                        {pendingPrompt.crop.left},{pendingPrompt.crop.top} ·{' '}
+                        {pendingPrompt.crop.width}×{pendingPrompt.crop.height}
+                      </span>
+                      {pendingPrompt.error ? <span>{pendingPrompt.error}</span> : null}
+                      <button
+                        aria-label={
+                          pendingPrompt.status === 'failed'
+                            ? 'Retry transparent cutout'
+                            : 'Generate transparent cutout'
+                        }
+                        type="button"
+                        disabled={
+                          pendingPrompt.status === 'generating' || composeBusy || promptGenerating
+                        }
+                        onClick={() => void generatePendingPrompt()}
+                      >
+                        {pendingPrompt.status === 'failed'
+                          ? 'Retry'
+                          : 'Generate transparent cutout'}
+                      </button>
+                      <button
+                        aria-label="Redraw transparent cutout"
+                        type="button"
+                        disabled={
+                          pendingPrompt.status === 'generating' || composeBusy || promptGenerating
+                        }
+                        onClick={() => {
+                          promptAttemptRef.current += 1;
+                          promptInFlightRef.current = null;
+                          setRedrawingPrompt(true);
+                          setBuilderMode('prompted');
+                        }}
+                      >
+                        Redraw
+                      </button>
+                      <button
+                        aria-label="Remove pending transparent cutout"
+                        type="button"
+                        disabled={
+                          pendingPrompt.status === 'generating' || composeBusy || promptGenerating
+                        }
+                        onClick={() => {
+                          promptAttemptRef.current += 1;
+                          pendingPromptTokenRef.current += 1;
+                          promptInFlightRef.current = null;
+                          setPendingPrompt(null);
+                          setRedrawingPrompt(false);
+                        }}
+                      >
+                        Remove
+                      </button>
+                    </div>
+                  ) : null}
                   {draftLayers.map((layer, index) => (
                     <div className="created-layer-card" key={`${layer.kind}-${index}`}>
                       <strong>
                         {layer.kind === 'source-region-v1'
                           ? `Source region ${index + 1} · opaque crop`
-                          : `Layer ${index + 1}`}
+                          : layer.kind === 'prompted-cutout-v1'
+                            ? `Manual cutout ${index + 1}`
+                            : `Layer ${index + 1}`}
                       </strong>
+                      {layer.kind === 'prompted-cutout-v1' &&
+                      promptedCutouts.get(layer.promptedId) ? (
+                        // eslint-disable-next-line @next/next/no-img-element
+                        <img
+                          src={promptedCutouts.get(layer.promptedId)!.thumbnail.dataUrl}
+                          alt={`Manual cutout ${index + 1}`}
+                        />
+                      ) : null}
                       <span>
                         {layer.kind === 'source-region-v1'
                           ? `${layer.crop.left},${layer.crop.top} · ${layer.crop.width}×${layer.crop.height}`
-                          : layer.candidateIds
-                              .map(
-                                (id) =>
-                                  `Candidate ${uploadedOperation.candidates.find((candidate) => candidate.candidateId === id)?.order ?? '?'}`,
-                              )
-                              .join(', ')}
+                          : layer.kind === 'prompted-cutout-v1'
+                            ? `Manual cutout ${index + 1}`
+                            : layer.candidateIds
+                                .map(
+                                  (id) =>
+                                    `Candidate ${uploadedOperation.candidates.find((candidate) => candidate.candidateId === id)?.order ?? '?'}`,
+                                )
+                                .join(', ')}
                       </span>
                       <button
                         type="button"
-                        disabled={composeBusy}
+                        disabled={composeBusy || promptGenerating}
                         aria-label={`Remove Layer ${index + 1}`}
                         onClick={() =>
                           setDraftLayers((current) => current.filter((_, i) => i !== index))
@@ -720,7 +908,7 @@ export function BannerAiClient() {
                       </button>
                       <button
                         type="button"
-                        disabled={composeBusy || index === 0}
+                        disabled={composeBusy || promptGenerating || index === 0}
                         aria-label={`Move Layer ${index + 1} up`}
                         onClick={() =>
                           setDraftLayers((current) => {
@@ -734,7 +922,9 @@ export function BannerAiClient() {
                       </button>
                       <button
                         type="button"
-                        disabled={composeBusy || index === draftLayers.length - 1}
+                        disabled={
+                          composeBusy || promptGenerating || index === draftLayers.length - 1
+                        }
                         aria-label={`Move Layer ${index + 1} down`}
                         onClick={() =>
                           setDraftLayers((current) => {
@@ -748,45 +938,20 @@ export function BannerAiClient() {
                       </button>
                     </div>
                   ))}
-                  {regionDraft !== null ? (
-                    <div className="created-layer-card">
-                      <strong>Pending source region</strong>
-                      <span>
-                        {regionDraft.left},{regionDraft.top} · {regionDraft.width}×
-                        {regionDraft.height}
-                      </span>
-                      <button
-                        type="button"
-                        disabled={composeBusy}
-                        onClick={() => {
-                          setDraftLayers((current) => [
-                            ...current,
-                            { kind: 'source-region-v1', crop: regionDraft },
-                          ]);
-                          setRegionDraft(null);
-                        }}
-                      >
-                        Create source region layer
-                      </button>
-                      <button
-                        type="button"
-                        disabled={composeBusy}
-                        onClick={() => setRegionDraft(null)}
-                      >
-                        Clear
-                      </button>
-                    </div>
-                  ) : null}
                 </div>
               ) : null}
+              <div aria-live="polite" className="sr-only">
+                {promptAnnouncement}
+              </div>
               {composeError !== null ? <p role="alert">{composeError}</p> : null}
               <button
                 type="button"
                 disabled={
                   draftLayers.length === 0 ||
-                  regionDraft !== null ||
+                  pendingPrompt !== null ||
                   selectedCandidates.length > 0 ||
-                  composeBusy
+                  composeBusy ||
+                  promptGenerating
                 }
                 onClick={async () => {
                   const composeRevision = requestRevisionRef.current;

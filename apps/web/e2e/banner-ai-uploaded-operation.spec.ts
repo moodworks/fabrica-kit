@@ -12,7 +12,29 @@ test('uploads, marquee-selects two layers, edits, previews, and exports without 
   page,
 }) => {
   const externalRequests: string[] = [];
+  let promptPutCount = 0;
+  let promptBody: unknown;
   await page.route('**/api/banner-ai/uploaded-operation', async (route) => {
+    if (route.request().method() === 'PUT') {
+      const body = JSON.parse(route.request().postData() ?? '{}') as Record<string, unknown>;
+      if (body.action === 'prompt-cutout') {
+        promptPutCount += 1;
+        promptBody = body;
+        if (promptPutCount === 1) {
+          await route.fulfill({
+            status: 500,
+            contentType: 'application/json',
+            body: JSON.stringify({
+              ok: false,
+              error: { code: 'PROMPT_FAILED', message: 'Synthetic prompt failure' },
+            }),
+          });
+          return;
+        }
+      }
+      await route.continue();
+      return;
+    }
     if (route.request().method() !== 'POST') return route.continue();
     const headers = route.request().headers();
     delete headers['content-type'];
@@ -110,26 +132,67 @@ test('uploads, marquee-selects two layers, edits, previews, and exports without 
   await page.mouse.move(regionBox.x + regionBox.width * 0.55, regionBox.y + regionBox.height * 0.7);
   await expect(stage.locator('.candidate-marquee')).toBeVisible();
   await page.mouse.up();
-  await expect(page.getByLabel('Pending source region')).toBeVisible();
-  await page.getByRole('button', { name: 'Create source region layer' }).click();
+  await expect(
+    page.locator('.created-layer-card').filter({ hasText: 'Source region' }),
+  ).toBeVisible();
+  await page.getByRole('button', { name: 'Draw transparent cutout' }).click();
+  const promptBox = await stage.boundingBox();
+  if (promptBox === null) throw new Error('candidate stage is not visible');
+  await page.mouse.move(promptBox.x + promptBox.width * 0.3, promptBox.y + promptBox.height * 0.25);
+  await page.mouse.down();
+  await page.mouse.move(promptBox.x + promptBox.width * 0.6, promptBox.y + promptBox.height * 0.65);
+  await expect(stage.locator('.candidate-marquee')).toBeVisible();
+  await page.mouse.up();
+  await expect(page.getByText('Pending transparent cutout')).toBeVisible();
+  await expect(page.getByRole('button', { name: /Continue with 2 created layers/ })).toBeDisabled();
+  expect(promptPutCount).toBe(0);
+  await page.getByRole('button', { name: 'Generate transparent cutout' }).click();
+  await expect(page.locator('.created-layer-card[role="alert"]')).toContainText(
+    'The prompted cutout could not be created.',
+  );
+  await page.getByRole('button', { name: 'Retry transparent cutout' }).click();
+  const manualCard = page.locator('.created-layer-card').filter({ hasText: 'Manual cutout 3' });
+  await expect(manualCard).toBeVisible();
+  await expect(manualCard.locator('img[alt="Manual cutout 3"]')).toBeVisible();
+  expect(promptPutCount).toBe(2);
+  expect(promptBody).toMatchObject({
+    action: 'prompt-cutout',
+    crop: {
+      left: expect.any(Number),
+      top: expect.any(Number),
+      width: expect.any(Number),
+      height: expect.any(Number),
+    },
+  });
+  expect(Object.keys(promptBody as Record<string, unknown>).sort()).toEqual([
+    'action',
+    'crop',
+    'operationId',
+  ]);
   await page.getByRole('button', { name: 'Move Layer 2 up' }).click();
   await expect(page.locator('.created-layer-card').nth(0)).toContainText('Source region');
   await expect(page.locator('.created-layer-card').nth(1)).toContainText('Candidate 1');
-  await page.getByRole('button', { name: 'Continue with 2 created layers' }).click();
+  await page.getByRole('button', { name: 'Continue with 3 created layers' }).click();
 
   await expect(page.getByRole('heading', { name: 'Uploaded layer selection' })).toBeVisible();
-  await expect(page.locator('.editor-layer-name')).toHaveCount(3);
+  await expect(page.locator('.editor-layer-name')).toHaveCount(4);
   await expect(
-    page.locator('.editor-layer-name').filter({ hasText: /Uploaded layer|Source region/u }),
-  ).toHaveCount(2);
+    page
+      .locator('.editor-layer-name')
+      .filter({ hasText: /Uploaded layer|Source region|Manual cutout/u }),
+  ).toHaveCount(3);
   await expect(page.getByText(/Created uploaded layers/)).toBeVisible();
   expect(await page.evaluate((key) => localStorage.getItem(key), storageKey)).toBeNull();
 
-  const layerRows = page.getByRole('radio', { name: /Uploaded layer|Source region/u });
-  await expect(layerRows).toHaveCount(2);
+  const layerRows = page.getByRole('radio', {
+    name: /Uploaded layer|Source region|Manual cutout/u,
+  });
+  await expect(layerRows).toHaveCount(3);
   await layerRows.nth(0).check();
   await page.getByRole('button', { name: 'Apply Gentle float' }).click();
   await layerRows.nth(1).check();
+  await page.getByRole('button', { name: 'Apply Gentle float' }).click();
+  await layerRows.nth(2).check();
   await page.getByRole('button', { name: 'Apply Gentle float' }).click();
   await page.getByRole('button', { name: 'Save animation changes' }).click();
   await expect(page.getByText('Accepted in this temporary operation.')).toBeVisible();

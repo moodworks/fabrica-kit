@@ -432,6 +432,58 @@ export const createDeterministicSamBoxPromptAdapter = () => {
   });
 };
 
+/** Provider-free E2E fake: a deterministic non-rectangular silhouette clipped to the box. */
+export const createDeterministicNonRectangularSamBoxPromptAdapter = () => {
+  let callCount = 0;
+  const adapter = {
+    async generate(request: SamMaskRequest): Promise<SamMaskResponse> {
+      const parsed = parseAndVerifySamMaskRequest(request).request;
+      if (request.segmentation.mode !== 'box-prompt')
+        throw new TypeError('Deterministic box adapter requires a box prompt.');
+      const box = boxBasisToPixel(
+        request.segmentation.prompt.box,
+        parsed.source.width,
+        parsed.source.height,
+      );
+      const mask = new Uint8Array(parsed.source.width * parsed.source.height);
+      for (let y = box.top; y <= box.bottomInclusive; y += 1)
+        for (let x = box.left; x <= box.rightInclusive; x += 1) {
+          const corner =
+            (x - box.left < 2 && y - box.top < 2) ||
+            (box.rightInclusive - x < 2 && box.bottomInclusive - y < 2);
+          if (!corner) mask[y * parsed.source.width + x] = 1;
+        }
+      const result = postprocessSamMasks(parsed, [{ mask, predictedIou: 1, stabilityScore: 1 }]);
+      callCount += 1;
+      const unsigned = {
+        contractVersion: SAM_MASK_CONTRACT_VERSION,
+        requestId: request.requestId,
+        workspaceId: request.workspaceId,
+        jobId: request.jobId,
+        attemptId: request.attemptId,
+        sourceSha256: request.source.sha256,
+        executionIdentity: SAM_DETERMINISTIC_DIRECT_FAKE_IDENTITY,
+        timing: { inferenceMs: 0, totalMs: 0 },
+        filterSummary: result.filterSummary,
+        candidateCount: result.candidates.length,
+        candidates: result.candidates,
+      } satisfies Omit<SamMaskResponse, 'responseSha256'>;
+      const response = { ...unsigned, responseSha256: canonicalResponseSha256(unsigned) };
+      return parseAndVerifySamMaskResponse({
+        response,
+        request,
+        expectedExecutionKind: 'deterministic-fake',
+      });
+    },
+  };
+  return Object.freeze({
+    adapter,
+    getCallCount: () => callCount,
+    networkCalls: 0 as const,
+    executionIdentity: SAM_DETERMINISTIC_DIRECT_FAKE_IDENTITY,
+  });
+};
+
 export const createBoundedLayerPreview = async (bytes: Uint8Array) => {
   const png = await sharp(bytes)
     .ensureAlpha()
@@ -473,6 +525,8 @@ export const extractLayerWithSamBoxPrompt = async (input: {
   readonly jobId: string;
   readonly attemptId: string;
   readonly sam: SamBoxPromptGeneratePort;
+  readonly promptAuthority?: 'server-validated-detector' | 'user-interaction';
+  readonly expectedExecutionKind: 'deterministic-fake' | 'meta-sam2.1';
 }): Promise<SamBoxPromptLayerExtractionResult> => {
   const request = LayerExtractionRequestV1Schema.parse(input.request);
   if (request.sourceAsset.mediaType !== 'image/png') {
@@ -509,7 +563,11 @@ export const extractLayerWithSamBoxPrompt = async (input: {
     },
     segmentation: {
       mode: 'box-prompt',
-      prompt: { kind: 'box', authority: 'server-validated-detector', box: request.part.bounds },
+      prompt: {
+        kind: 'box',
+        authority: input.promptAuthority ?? 'server-validated-detector',
+        box: request.part.bounds,
+      },
     },
     limits: { minMaskAreaPixels: 1, maxCandidates: 1 },
     output: { maskEncoding: SAM_MASK_ENCODING },
@@ -519,7 +577,7 @@ export const extractLayerWithSamBoxPrompt = async (input: {
   assertSamMaskResponseWasStrictlyValidated({
     response,
     request: trustedRequest,
-    expectedExecutionKind: response.executionIdentity.kind,
+    expectedExecutionKind: input.expectedExecutionKind,
   });
   const candidate = response.candidates[0];
   if (!candidate) throw new TypeError('SAM returned no canonical mask candidates.');

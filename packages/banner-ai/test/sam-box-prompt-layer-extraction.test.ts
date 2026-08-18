@@ -58,6 +58,7 @@ const createInput = async (source = png, trimTransparentPixels = true) => {
       trimTransparentPixels,
     },
     normalizedPng: Uint8Array.from(source),
+    expectedExecutionKind: 'deterministic-fake',
     ...ids,
   } as const;
 };

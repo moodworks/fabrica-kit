@@ -133,7 +133,115 @@ export type UploadedMixedLayer =
         readonly width: number;
         readonly height: number;
       };
-    };
+    }
+  | { readonly kind: 'prompted-cutout-v1'; readonly promptedId: string };
+export interface UploadedPromptedCutout {
+  readonly promptedId: string;
+  readonly candidateId: string;
+  readonly crop: {
+    readonly left: number;
+    readonly top: number;
+    readonly width: number;
+    readonly height: number;
+  };
+  readonly bounds: {
+    readonly xBps: number;
+    readonly yBps: number;
+    readonly widthBps: number;
+    readonly heightBps: number;
+  };
+  readonly thumbnail: {
+    readonly dataUrl: string;
+    readonly byteSize: number;
+    readonly pixelWidth: number;
+    readonly pixelHeight: number;
+    readonly sha256: string;
+  };
+  readonly provenance: 'Deterministic test output — NOT SAM OUTPUT';
+}
+export const parseUploadedPromptedCutout = (input: unknown): UploadedPromptedCutout => {
+  if (
+    !isRecord(input) ||
+    !hasExactKeys(input, [
+      'bounds',
+      'candidateId',
+      'crop',
+      'promptedId',
+      'provenance',
+      'thumbnail',
+    ]) ||
+    typeof input.promptedId !== 'string' ||
+    !/^samp_v1_[0-9a-f]{64}$/u.test(input.promptedId) ||
+    typeof input.candidateId !== 'string' ||
+    !/^samc_v1_[0-9a-f]{64}$/u.test(input.candidateId) ||
+    input.provenance !== 'Deterministic test output — NOT SAM OUTPUT'
+  )
+    throw new TypeError('Invalid prompted cutout.');
+  const crop = input.crop;
+  const bounds = input.bounds;
+  const thumbnail = input.thumbnail;
+  if (
+    !isRecord(crop) ||
+    !hasExactKeys(crop, ['height', 'left', 'top', 'width']) ||
+    !isRecord(bounds) ||
+    !hasExactKeys(bounds, ['heightBps', 'widthBps', 'xBps', 'yBps']) ||
+    !isRecord(thumbnail) ||
+    !hasExactKeys(thumbnail, ['byteSize', 'dataUrl', 'pixelHeight', 'pixelWidth', 'sha256']) ||
+    !Object.values(crop).every(Number.isSafeInteger) ||
+    Number(crop.left) < 0 ||
+    Number(crop.top) < 0 ||
+    Number(crop.width) < 1 ||
+    Number(crop.height) < 1 ||
+    !Object.values(bounds).every(Number.isSafeInteger) ||
+    Number(bounds.xBps) < 0 ||
+    Number(bounds.yBps) < 0 ||
+    Number(bounds.widthBps) < 1 ||
+    Number(bounds.heightBps) < 1 ||
+    Number(bounds.xBps) + Number(bounds.widthBps) > 10_000 ||
+    Number(bounds.yBps) + Number(bounds.heightBps) > 10_000 ||
+    typeof thumbnail.dataUrl !== 'string' ||
+    !/^data:image\/png;base64,[A-Za-z0-9+/=]+$/u.test(thumbnail.dataUrl) ||
+    thumbnail.dataUrl.length > 524_288 ||
+    typeof thumbnail.sha256 !== 'string' ||
+    !/^[0-9a-f]{64}$/u.test(thumbnail.sha256) ||
+    !Number.isSafeInteger(thumbnail.byteSize) ||
+    Number(thumbnail.byteSize) < 1 ||
+    Number(thumbnail.byteSize) > 524_288 ||
+    !Number.isSafeInteger(thumbnail.pixelWidth) ||
+    Number(thumbnail.pixelWidth) < 1 ||
+    !Number.isSafeInteger(thumbnail.pixelHeight) ||
+    Number(thumbnail.pixelHeight) < 1 ||
+    Number(thumbnail.pixelWidth) > 160 ||
+    Number(thumbnail.pixelHeight) > 160
+  )
+    throw new TypeError('Invalid prompted cutout.');
+  return input as unknown as UploadedPromptedCutout;
+};
+export const promptUploadedBannerCutout = async (
+  operationId: string,
+  crop: {
+    readonly left: number;
+    readonly top: number;
+    readonly width: number;
+    readonly height: number;
+  },
+  fetchImplementation: BannerProjectFetch = fetch,
+): Promise<UploadedPromptedCutout> => {
+  const response = await fetchImplementation('/api/banner-ai/uploaded-operation', {
+    method: 'PUT',
+    cache: 'no-store',
+    credentials: 'same-origin',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ action: 'prompt-cutout', operationId, crop }),
+  });
+  const payload = await parseJsonResponse(response);
+  if (!isRecord(payload) || payload.ok !== true || !isRecord(payload.data))
+    throw new BannerProjectRequestError(
+      'UPLOADED_COMPOSE_FAILED',
+      'The prompted cutout could not be created.',
+    );
+  return parseUploadedPromptedCutout(payload.data);
+};
 export const parseUploadedMixedLayers = (input: unknown): readonly UploadedMixedLayer[] => {
   if (!Array.isArray(input) || input.length < 1 || input.length > 8)
     throw new TypeError('Mixed layers must contain one to eight entries.');
@@ -164,6 +272,13 @@ export const parseUploadedMixedLayers = (input: unknown): readonly UploadedMixed
       (entry.crop.top as number) >= 0 &&
       (entry.crop.width as number) > 0 &&
       (entry.crop.height as number) > 0
+    )
+      return entry as UploadedMixedLayer;
+    if (
+      entry.kind === 'prompted-cutout-v1' &&
+      hasExactKeys(entry, ['kind', 'promptedId']) &&
+      typeof entry.promptedId === 'string' &&
+      /^samp_v1_[0-9a-f]{64}$/u.test(entry.promptedId)
     )
       return entry as UploadedMixedLayer;
     throw new TypeError('Invalid mixed layer.');
