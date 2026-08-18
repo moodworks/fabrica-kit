@@ -4,7 +4,144 @@ import { requestLocalFixtureAnalysis } from './banner-ai-api';
 import { sampleBannerAnalysisData } from './banner-ai.test-fixtures';
 import { parseBannerAnalysisEnvelope } from './banner-ai-contract';
 
+/* eslint-disable @typescript-eslint/no-explicit-any -- compact immutable mutation table */
+
 describe('Banner AI browser transport', () => {
+  it.each([
+    [
+      'source',
+      (data: any) => {
+        data.source.extra = true;
+      },
+    ],
+    [
+      'part',
+      (data: any) => {
+        data.proposal.parts[0].extra = true;
+      },
+    ],
+    [
+      'bounds',
+      (data: any) => {
+        data.proposal.parts[0].bounds.extra = true;
+      },
+    ],
+    [
+      'provenance',
+      (data: any) => {
+        data.provenance.extra = true;
+      },
+    ],
+    [
+      'fixture',
+      (data: any) => {
+        data.provenance.fixture.extra = true;
+      },
+    ],
+    [
+      'workflow',
+      (data: any) => {
+        data.provenance.workflow.extra = true;
+      },
+    ],
+    [
+      'ownership',
+      (data: any) => {
+        data.provenance.ownership.extra = true;
+      },
+    ],
+    [
+      'success envelope',
+      (data: any) => {
+        data.extra = true;
+      },
+    ],
+  ])('rejects nested extra %s key', (_label, mutate) => {
+    const data = structuredClone(sampleBannerAnalysisData) as any;
+    mutate(data);
+    expect(() => parseBannerAnalysisEnvelope({ ok: true, data })).toThrow();
+  });
+
+  it('rejects extra error-envelope keys', () => {
+    expect(() =>
+      parseBannerAnalysisEnvelope({ ok: false, error: { code: 'X', message: 'x', extra: true } }),
+    ).toThrow();
+    expect(() =>
+      parseBannerAnalysisEnvelope({ ok: false, error: { code: 'X', message: 'x' }, extra: true }),
+    ).toThrow();
+  });
+  it.each([
+    [
+      'extra data key',
+      (data: any) => {
+        data.extra = true;
+      },
+    ],
+    [
+      'extra extraction key',
+      (data: any) => {
+        data.extraction.extra = true;
+      },
+    ],
+    [
+      'extra preview key',
+      (data: any) => {
+        data.extraction.previews[0].extra = true;
+      },
+    ],
+    [
+      'duplicate proposal key',
+      (data: any) => {
+        data.proposal.parts[1].partKey = data.proposal.parts[0].partKey;
+      },
+    ],
+    [
+      'duplicate preview key',
+      (data: any) => {
+        data.extraction.previews[1].partKey = data.extraction.previews[0].partKey;
+      },
+    ],
+    [
+      'foreign preview key',
+      (data: any) => {
+        data.extraction.previews[0].partKey = 'foreign';
+      },
+    ],
+    [
+      'background preview key',
+      (data: any) => {
+        data.extraction.previews[0].partKey = 'background';
+      },
+    ],
+    [
+      'mismatched byte size',
+      (data: any) => {
+        data.extraction.previews[0].byteSize = 1;
+      },
+    ],
+    [
+      'oversized dimensions',
+      (data: any) => {
+        data.extraction.previews[0].pixelWidth = 161;
+      },
+    ],
+    [
+      'malformed signature',
+      (data: any) => {
+        data.extraction.previews[0].dataUrl = 'data:image/png;base64,AA==';
+      },
+    ],
+    [
+      'IHDR mismatch',
+      (data: any) => {
+        data.extraction.previews[0].pixelWidth = 2;
+      },
+    ],
+  ])('rejects %s', (_label, mutate) => {
+    const data = structuredClone(sampleBannerAnalysisData) as any;
+    mutate(data);
+    expect(() => parseBannerAnalysisEnvelope({ ok: true, data })).toThrow();
+  });
   it('sends only one file field and parses the browser-safe response', async () => {
     const selected = new File([new Uint8Array([1, 2, 3])], 'banner.png', {
       type: 'image/png',

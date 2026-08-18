@@ -13,7 +13,6 @@ import {
   createProviderFreeBannerExporterV1,
   createProviderFreeInternalValidatorV1,
   createProviderFreeSceneReferenceResolver,
-  materializeProviderFreeFixtureProjectV1,
   parseBannerSceneV1,
   validateBannerExportResult,
   validateInternalGdnValidationResult,
@@ -22,6 +21,11 @@ import {
   type ProviderFreeBannerProjectV1,
   type ProviderFreeFixtureMaterializationV1,
 } from '@fabrica/banner-ai';
+import { materializeProviderFreePersonSamReplayProjectV1 } from '@fabrica/banner-ai/server/sam-box-prompt-layer-extraction';
+import {
+  materializeProviderFreePersonSamCandidateProjectV1,
+  PROVIDER_FREE_PERSON_SAM_CANDIDATES_V1,
+} from '@fabrica/banner-ai/server/sam-box-prompt-layer-extraction';
 
 import type {
   ProviderFreeExportData,
@@ -35,10 +39,64 @@ const MAX_PREVIEW_DOCUMENT_BYTES = 1_048_576;
 const MAX_EXPORT_RESPONSE_BYTES = 2_097_152;
 
 let materializationPromise: Promise<ProviderFreeFixtureMaterializationV1> | null = null;
+const candidateMaterializations = new Map<string, Promise<ProviderFreeFixtureMaterializationV1>>();
 
 const materialization = (): Promise<ProviderFreeFixtureMaterializationV1> => {
-  materializationPromise ??= materializeProviderFreeFixtureProjectV1();
+  materializationPromise ??= materializeProviderFreePersonSamReplayProjectV1();
   return materializationPromise;
+};
+const materializationForCandidate = (candidateId: string) => {
+  let promise = candidateMaterializations.get(candidateId);
+  if (!promise) {
+    promise = materializeProviderFreePersonSamCandidateProjectV1(candidateId);
+    candidateMaterializations.set(candidateId, promise);
+  }
+  return promise;
+};
+export const providerFreeCandidateCatalog = async () => {
+  const entries = await Promise.all(
+    PROVIDER_FREE_PERSON_SAM_CANDIDATES_V1.map(async (candidate, index) => {
+      const fixed = await materializationForCandidate(candidate.candidateId);
+      const subject = fixed.presentationParts.find((part) => part.role === 'subject');
+      if (!subject) throw new TypeError('Candidate subject materialization is missing.');
+      return Object.freeze({
+        candidateId: candidate.candidateId,
+        order: index + 1,
+        bounds: subject.bounds,
+        thumbnail: subject.thumbnail,
+        asset: fixed.scene.layers[0]!.asset,
+      });
+    }),
+  );
+  return Object.freeze(entries.toSorted((a, b) => a.order - b.order));
+};
+const materializationForProject = async (input: unknown) => {
+  if (input && typeof input === 'object' && !Array.isArray(input)) {
+    const revisions = (input as Record<string, unknown>)['revisions'];
+    const first = Array.isArray(revisions) ? revisions[0] : null;
+    const scene =
+      first && typeof first === 'object' ? (first as Record<string, unknown>)['scene'] : null;
+    const layers =
+      scene && typeof scene === 'object' ? (scene as Record<string, unknown>)['layers'] : null;
+    const asset =
+      Array.isArray(layers) && layers[0] && typeof layers[0] === 'object'
+        ? (layers[0] as Record<string, unknown>)['asset']
+        : null;
+    const sha =
+      asset && typeof asset === 'object' ? (asset as Record<string, unknown>)['sha256'] : null;
+    if (typeof sha === 'string') {
+      for (const candidate of PROVIDER_FREE_PERSON_SAM_CANDIDATES_V1) {
+        const fixed = await materializationForCandidate(candidate.candidateId);
+        if (fixed.scene.layers[0]?.asset.sha256 === sha) return fixed;
+      }
+      throw new DemoProjectHttpError(
+        400,
+        'PROJECT_REFERENCE_INVALID',
+        'Saved candidate is not an approved preserved replay.',
+      );
+    }
+  }
+  return materialization();
 };
 
 const scopeFor = (fixed: ProviderFreeFixtureMaterializationV1) => {
@@ -76,7 +134,7 @@ export const validateDemoProject = async (
   readonly fixed: ProviderFreeFixtureMaterializationV1;
   readonly project: ProviderFreeBannerProjectV1;
 }> => {
-  const fixed = await materialization();
+  const fixed = await materializationForProject(input);
   let project: ProviderFreeBannerProjectV1;
   try {
     project = validateProviderFreeBannerProjectAgainstFixtureV1({
@@ -102,13 +160,37 @@ export const projectOpenData = (
   canonicalProjectJson: canonicalizeJson(project),
   presentation: {
     canvas: { width: 300, height: 200 },
-    fixtureLabel: PROVIDER_FREE_FIXTURE_VISUALIZATION_LABEL_V1,
+    fixtureLabel:
+      fixed.candidateId ===
+      'samc_v1_478780b81c47a3b064a5398bbf275ddd137a4e21d746b5aeb0623a7a546f99cf'
+        ? PROVIDER_FREE_FIXTURE_VISUALIZATION_LABEL_V1
+        : `Development-only verified Meta SAM replay; automatic candidate ${PROVIDER_FREE_PERSON_SAM_CANDIDATES_V1.findIndex((candidate) => candidate.candidateId === fixed.candidateId) + 1}, manually selected.`,
+    candidateId: fixed.candidateId,
+    source: fixed.sourceReference,
     parts: fixed.presentationParts,
   },
 });
 
 export const openInitialDemoProject = async (): Promise<ProviderFreeProjectOpenData> => {
   const fixed = await materialization();
+  await validateEverySceneReference(fixed.project, fixed);
+  return projectOpenData(fixed, fixed.project);
+};
+export const openCandidateDemoProject = async (
+  candidateId: unknown,
+): Promise<ProviderFreeProjectOpenData> => {
+  if (
+    typeof candidateId !== 'string' ||
+    !PROVIDER_FREE_PERSON_SAM_CANDIDATES_V1.some(
+      (candidate) => candidate.candidateId === candidateId,
+    )
+  )
+    throw new DemoProjectHttpError(
+      400,
+      'CANDIDATE_ID_INVALID',
+      'The candidate ID is not one of the preserved automatic SAM candidates.',
+    );
+  const fixed = await materializationForCandidate(candidateId);
   await validateEverySceneReference(fixed.project, fixed);
   return projectOpenData(fixed, fixed.project);
 };
@@ -259,7 +341,7 @@ export const createDemoExport = async (
     artifact: {
       bytesBase64,
       byteSize: validated.artifact.byteSize,
-      filename: `angel-provider-free-r${String(revision.revision)}-${validated.artifact.sha256.slice(0, 12)}.zip`,
+      filename: `verified-meta-sam-replay-r${String(revision.revision)}-${validated.artifact.sha256.slice(0, 12)}.zip`,
       mediaType: validated.artifact.mediaType,
       sha256: validated.artifact.sha256,
       validationLabel: validated.artifact.validationLabel,

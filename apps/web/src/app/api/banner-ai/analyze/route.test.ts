@@ -32,6 +32,20 @@ describe('POST /api/banner-ai/analyze', () => {
         'Left wing',
         'Right wing',
       ]);
+      expect(envelope.data.extraction.previews.map((preview) => preview.partKey)).toEqual([
+        'angel.body',
+        'wing.left',
+        'wing.right',
+      ]);
+      expect(envelope.data.extraction).toMatchObject({
+        provenance: 'deterministic fake / NOT_SAM_OUTPUT',
+        outboundNetwork: false,
+        dispatches: 3,
+      });
+      for (const preview of envelope.data.extraction.previews) {
+        expect(preview.dataUrl).toMatch(/^data:image\/png;base64,/);
+        expect(preview.byteSize).toBeLessThanOrEqual(524_288);
+      }
       expect(envelope.data.provenance).toMatchObject({
         external: false,
         outboundNetworkEnabled: false,

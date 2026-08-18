@@ -50,6 +50,7 @@ export type BannerAiEvent =
       readonly requestRevision: number;
       readonly result: BannerAnalysisData;
     }
+  | { readonly type: 'uploaded_succeeded'; readonly requestRevision: number }
   | { readonly type: 'analysis_failed'; readonly requestRevision: number; readonly message: string }
   | { readonly type: 'layer_selected'; readonly partKey: string }
   | { readonly type: 'layer_inclusion_set'; readonly partKey: string; readonly included: boolean }
@@ -172,6 +173,17 @@ export const bannerAiReducer = (state: BannerAiState, event: BannerAiEvent): Ban
         };
       }
     }
+    case 'uploaded_succeeded':
+      if (state.phase !== 'running' || state.activeRequestRevision !== event.requestRevision)
+        return state;
+      return {
+        ...state,
+        phase: 'succeeded',
+        result: null,
+        layerReview: null,
+        error: null,
+        activeRequestRevision: null,
+      };
     case 'analysis_failed':
       if (
         state.selection === null ||

@@ -4,7 +4,8 @@ import { BannerAiProjectEditor } from '../../../features/banner-ai/banner-ai-pro
 
 export const metadata: Metadata = {
   title: 'Provider-free Banner editor',
-  description: 'Edit, preview, export, and internally validate the approved local Angel fixture.',
+  description:
+    'Edit the development-only preserved and replayed validated real Meta SAM automatic candidate 05; manually selected, with deterministic internal validation.',
 };
 
 export default function BannerAiEditorPage() {

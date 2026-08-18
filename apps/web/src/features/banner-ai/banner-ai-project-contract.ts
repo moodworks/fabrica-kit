@@ -151,6 +151,20 @@ export interface ProviderFreeProjectPresentationPart {
 export interface ProviderFreeProjectPresentation {
   readonly canvas: { readonly width: 300; readonly height: 200 };
   readonly fixtureLabel: string;
+  readonly candidateId: string;
+  readonly source: {
+    readonly name: string;
+    readonly asset: {
+      readonly assetId: string;
+      readonly assetVersionId: string;
+      readonly sha256: string;
+      readonly mediaType: 'image/jpeg' | 'image/png';
+      readonly byteSize: number;
+      readonly pixelWidth: number;
+      readonly pixelHeight: number;
+    };
+    readonly thumbnail: ProviderFreeProjectPresentationPart['thumbnail'];
+  };
   readonly parts: readonly ProviderFreeProjectPresentationPart[];
 }
 
@@ -159,6 +173,66 @@ export interface ProviderFreeProjectOpenData {
   readonly presentation: ProviderFreeProjectPresentation;
   readonly project: ProviderFreeBannerProjectV1;
 }
+
+export interface ProviderFreeCandidateChoice {
+  readonly candidateId: string;
+  readonly order: number;
+  readonly bounds: {
+    readonly x: number;
+    readonly y: number;
+    readonly width: number;
+    readonly height: number;
+  };
+  readonly thumbnail: ProviderFreeProjectPresentationPart['thumbnail'];
+  readonly asset: BannerSceneV1['layers'][number]['asset'];
+}
+
+export const parseProviderFreeCandidateCatalogEnvelope = (
+  input: unknown,
+): readonly ProviderFreeCandidateChoice[] => {
+  if (
+    !isRecord(input) ||
+    input['ok'] !== true ||
+    !isRecord(input['data']) ||
+    !hasExactKeys(input['data'], ['candidates']) ||
+    !Array.isArray(input['data']['candidates']) ||
+    input['data']['candidates'].length !== 8
+  )
+    throw new TypeError('The demo API returned an invalid candidate catalog.');
+  const candidates = input['data']['candidates'].map((candidate, index) => {
+    if (
+      !isRecord(candidate) ||
+      !hasExactKeys(candidate, ['asset', 'bounds', 'candidateId', 'order', 'thumbnail']) ||
+      typeof candidate['candidateId'] !== 'string' ||
+      !/^samc_v1_[0-9a-f]{64}$/u.test(candidate['candidateId']) ||
+      candidate['order'] !== index + 1 ||
+      !isRecord(candidate['bounds']) ||
+      !hasExactKeys(candidate['bounds'], ['height', 'width', 'x', 'y']) ||
+      Object.values(candidate['bounds']).some(
+        (value) => typeof value !== 'number' || !Number.isFinite(value),
+      ) ||
+      !isRecord(candidate['asset']) ||
+      !hasExactKeys(candidate['asset'], [
+        'assetId',
+        'assetVersionId',
+        'byteSize',
+        'mediaType',
+        'pixelHeight',
+        'pixelWidth',
+        'sha256',
+      ]) ||
+      candidate['asset']['mediaType'] !== 'image/png' ||
+      typeof candidate['asset']['sha256'] !== 'string' ||
+      !sha256Pattern.test(candidate['asset']['sha256'])
+    )
+      throw new TypeError('The demo API returned an invalid candidate choice.');
+    parseThumbnail(candidate['thumbnail']);
+    return candidate as unknown as ProviderFreeCandidateChoice;
+  });
+  if (new Set(candidates.map((candidate) => candidate.candidateId)).size !== 8)
+    throw new TypeError('The demo API returned duplicate candidates.');
+  return candidates;
+};
 
 export interface BannerProjectApiError {
   readonly code: string;
@@ -190,21 +264,59 @@ const parseThumbnail = (input: unknown): ProviderFreeProjectPresentationPart['th
   return input as unknown as ProviderFreeProjectPresentationPart['thumbnail'];
 };
 
-const parsePresentation = (input: unknown): ProviderFreeProjectPresentation => {
+export const parseProviderFreeProjectPresentation = (
+  input: unknown,
+  scene: BannerSceneV1,
+): ProviderFreeProjectPresentation => {
   if (
     !isRecord(input) ||
-    !hasExactKeys(input, ['canvas', 'fixtureLabel', 'parts']) ||
+    !hasExactKeys(input, ['candidateId', 'canvas', 'fixtureLabel', 'parts', 'source']) ||
     !isRecord(input['canvas']) ||
     !hasExactKeys(input['canvas'], ['height', 'width']) ||
     input['canvas']['width'] !== 300 ||
     input['canvas']['height'] !== 200 ||
     !isSafeText(input['fixtureLabel'], 120) ||
+    typeof input['candidateId'] !== 'string' ||
+    !/^(?:samc|sams)_v1_[0-9a-f]{64}$/u.test(input['candidateId']) ||
     !Array.isArray(input['parts']) ||
-    input['parts'].length !== 4
+    input['parts'].length !== scene.layers.length + 1 ||
+    scene.layers.length < 1 ||
+    scene.layers.length > 8
   ) {
     throw new TypeError('The demo API returned an invalid project presentation.');
   }
-  for (const part of input['parts']) {
+  const source = input['source'];
+  if (
+    !isRecord(source) ||
+    !hasExactKeys(source, ['asset', 'name', 'thumbnail']) ||
+    !isSafeText(source['name'], 80) ||
+    !isRecord(source['asset']) ||
+    !hasExactKeys(source['asset'], [
+      'assetId',
+      'assetVersionId',
+      'byteSize',
+      'mediaType',
+      'pixelHeight',
+      'pixelWidth',
+      'sha256',
+    ]) ||
+    !isSafeText(source['asset']['assetId'], 120) ||
+    !isSafeText(source['asset']['assetVersionId'], 120) ||
+    source['asset']['mediaType'] !== 'image/png' ||
+    typeof source['asset']['sha256'] !== 'string' ||
+    !sha256Pattern.test(source['asset']['sha256']) ||
+    !Number.isInteger(source['asset']['byteSize']) ||
+    Number(source['asset']['byteSize']) < 1 ||
+    !Number.isInteger(source['asset']['pixelWidth']) ||
+    Number(source['asset']['pixelWidth']) < 1 ||
+    !Number.isInteger(source['asset']['pixelHeight']) ||
+    Number(source['asset']['pixelHeight']) < 1 ||
+    JSON.stringify(source['asset']) !== JSON.stringify(scene.sourceAsset)
+  )
+    throw new TypeError('The demo API returned an invalid source reference.');
+  parseThumbnail(source['thumbnail']);
+  const targets = new Set<string>();
+  for (const [index, part] of input['parts'].entries()) {
     if (
       !isRecord(part) ||
       !hasExactKeys(part, ['bounds', 'name', 'partKey', 'role', 'targetId', 'thumbnail']) ||
@@ -226,6 +338,28 @@ const parsePresentation = (input: unknown): ProviderFreeProjectPresentation => {
       throw new TypeError('The demo API returned invalid presentation part metadata.');
     }
     parseThumbnail(part['thumbnail']);
+    if (targets.has(String(part['targetId'])))
+      throw new TypeError('The demo API returned duplicate presentation targets.');
+    targets.add(String(part['targetId']));
+    const expected = index === 0 ? null : scene.layers[index - 1];
+    if (index === 0) {
+      if (part['targetId'] !== 'background' || part['role'] !== 'background')
+        throw new TypeError('The background presentation part is invalid.');
+    } else if (
+      expected === null ||
+      expected === undefined ||
+      part['targetId'] !== expected.id ||
+      part['name'] !== expected.name ||
+      JSON.stringify(part['bounds']) !==
+        JSON.stringify({
+          x: expected.frame.x,
+          y: expected.frame.y,
+          width: expected.frame.width,
+          height: expected.frame.height,
+        })
+    ) {
+      throw new TypeError('Presentation parts do not match scene layers.');
+    }
   }
   return input as unknown as ProviderFreeProjectPresentation;
 };
@@ -254,12 +388,14 @@ export const parseProviderFreeProjectEnvelope = (
   ) {
     throw new TypeError('The demo API returned an invalid project payload.');
   }
+  const project = parseProviderFreeProjectForClient(data['project']);
+  const scene = getAcceptedRevision(project).scene;
   return {
     ok: true,
     data: {
       canonicalProjectJson: data['canonicalProjectJson'],
-      presentation: parsePresentation(data['presentation']),
-      project: parseProviderFreeProjectForClient(data['project']),
+      presentation: parseProviderFreeProjectPresentation(data['presentation'], scene),
+      project,
     },
   };
 };

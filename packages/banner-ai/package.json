@@ -11,6 +11,34 @@
     "./browser": {
       "types": "./src/browser.ts",
       "default": "./src/browser.ts"
+    },
+    "./server/sam-box-prompt-layer-extraction": {
+      "types": "./src/server/sam-box-prompt-layer-extraction.ts",
+      "default": "./src/server/sam-box-prompt-layer-extraction.ts"
+    },
+    "./server/uploaded-banner-sam-operation-v1": {
+      "types": "./src/server/uploaded-banner-sam-operation-v1.ts",
+      "default": "./src/server/uploaded-banner-sam-operation-v1.ts"
+    },
+    "./server/uploaded-banner-source-region-v1": {
+      "types": "./src/server/uploaded-banner-source-region-v1.ts",
+      "default": "./src/server/uploaded-banner-source-region-v1.ts"
+    },
+    "./server/uploaded-banner-manual-cutout-v1": {
+      "types": "./src/server/uploaded-banner-manual-cutout-v1.ts",
+      "default": "./src/server/uploaded-banner-manual-cutout-v1.ts"
+    },
+    "./server/uploaded-banner-sam-replay-v4": {
+      "types": "./src/server/uploaded-banner-sam-replay-v4.ts",
+      "default": "./src/server/uploaded-banner-sam-replay-v4.ts"
+    },
+    "./server/uploaded-banner-sam-samsung-replay-v1": {
+      "types": "./src/server/uploaded-banner-sam-samsung-replay-v1.ts",
+      "default": "./src/server/uploaded-banner-sam-samsung-replay-v1.ts"
+    },
+    "./server/sam-samsung-manual-box-control-v1": {
+      "types": "./src/server/sam-samsung-manual-box-control-v1.ts",
+      "default": "./src/server/sam-samsung-manual-box-control-v1.ts"
     }
   },
   "scripts": {
@@ -19,9 +47,12 @@
     "benchmark:qwen:dry-run": "node --import tsx src/server/qwen-four-fixture-benchmark-cli.ts --dry-run",
     "benchmark:qwen:live": "node --import tsx src/server/qwen-four-fixture-benchmark-cli.ts --live",
     "benchmark:qwen:replay": "node --import tsx src/server/qwen-response-replay-cli.ts",
+    "qwen:sam-candidate-selector": "node --import tsx src/server/qwen-sam-candidate-selector-cli.ts",
     "demo:sam-fake": "node --import tsx src/server/sam-fake-vertical-slice-cli.ts",
     "demo:sam-visual-evaluation:fake": "node --import tsx src/server/sam-visual-evaluation-fake-cli.ts",
-    "preflight:sam-first-inference:fake": "node --import tsx src/server/sam-first-inference-phase-a-cli.ts"
+    "preflight:sam-first-inference:fake": "node --import tsx src/server/sam-first-inference-phase-a-cli.ts",
+    "preflight:sam-samsung-manual-box": "node --import tsx src/server/sam-samsung-manual-box-control-v1.ts --preflight",
+    "live:sam-samsung-manual-box": "node --import tsx src/server/sam-samsung-manual-box-control-v1.ts --live"
   },
   "dependencies": {
     "sharp": "0.35.3",

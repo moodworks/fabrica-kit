@@ -1,4 +1,5 @@
 import { performance } from 'node:perf_hooks';
+import { randomUUID } from 'node:crypto';
 
 import {
   AssetVersionRefV1Schema,
@@ -18,6 +19,11 @@ import {
   type ActorWorkspaceContext,
   type NormalizedRasterUpload,
 } from '@fabrica/banner-ai';
+import {
+  createBoundedLayerPreview,
+  createDeterministicSamBoxPromptAdapter,
+  extractLayerWithSamBoxPrompt,
+} from '@fabrica/banner-ai/server/sam-box-prompt-layer-extraction';
 
 import type { BannerAnalysisData } from '../../features/banner-ai/banner-ai-contract';
 
@@ -133,6 +139,31 @@ export const analyzeBannerWithLocalFixture = async (
   if (result.kind !== 'composition_proposal') {
     throw new TypeError('The local fixture did not return a composition proposal.');
   }
+  const fake = createDeterministicSamBoxPromptAdapter();
+  const previews = [];
+  for (const part of result.parts.filter((candidate) => candidate.role !== 'background')) {
+    const extracted = await extractLayerWithSamBoxPrompt({
+      request: { sourceAsset, part, trimTransparentPixels: true },
+      normalizedPng: normalized.bytes,
+      requestId: randomUUID(),
+      workspaceId: randomUUID(),
+      jobId: randomUUID(),
+      attemptId: randomUUID(),
+      sam: fake.adapter,
+      expectedExecutionKind: 'deterministic-fake',
+    });
+    const preview = await createBoundedLayerPreview(extracted.layer.bytes);
+    const { bytes: _previewBytes, ...boundedPreview } = preview;
+    void _previewBytes;
+    previews.push({ partKey: part.partKey, ...boundedPreview });
+  }
+  if (fake.getCallCount() !== 3 || fake.networkCalls !== 0)
+    throw new TypeError('Deterministic SAM dispatch accounting drifted.');
+  if (
+    fake.executionIdentity.kind !== 'deterministic-fake' ||
+    fake.executionIdentity.notice !== 'NOT_SAM_OUTPUT'
+  )
+    throw new TypeError('Deterministic SAM provenance identity drifted.');
 
   return {
     source: {
@@ -148,6 +179,12 @@ export const analyzeBannerWithLocalFixture = async (
       kind: result.kind,
       proposalVersion: result.proposalVersion,
       parts: result.parts,
+    },
+    extraction: {
+      previews,
+      provenance: 'deterministic fake / NOT_SAM_OUTPUT',
+      outboundNetwork: false,
+      dispatches: 3,
     },
     provenance: {
       fixture: {

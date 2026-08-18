@@ -9,11 +9,11 @@ import {
   createBannerSceneV1RenderPlan,
   evaluateBannerEasingV1,
   evaluateBannerSceneV1RenderPlan,
-  materializeProviderFreeFixtureProjectV1,
   type AnimationTrackV1,
   type BannerSceneV1,
   type BannerSceneV1RenderPlan,
 } from '../src/index.js';
+import { materializeProviderFreePersonSamReplayProjectV1 } from '../src/server/sam-box-prompt-layer-extraction.js';
 
 const track = (
   scene: BannerSceneV1,
@@ -44,7 +44,7 @@ const runtimePayload = (source: string): Record<string, unknown> => {
 
 describe('shared BannerSceneV1 render and evaluation plan', () => {
   it('evaluates the exact Gentle float boundaries, alternate direction, and exclusive end', async () => {
-    const materialization = await materializeProviderFreeFixtureProjectV1();
+    const materialization = await materializeProviderFreePersonSamReplayProjectV1();
     const scene = withTrack(
       materialization.scene,
       track(
@@ -124,7 +124,7 @@ describe('shared BannerSceneV1 render and evaluation plan', () => {
   ] as const)(
     'evaluates the closed $kind preset against neutral base channels',
     async ({ preset, read, expectedStart, expectedMiddle, expectedEnd }) => {
-      const materialization = await materializeProviderFreeFixtureProjectV1();
+      const materialization = await materializeProviderFreePersonSamReplayProjectV1();
       const scene = withTrack(
         materialization.scene,
         track(materialization.scene, preset as AnimationTrackV1['preset']),
@@ -143,7 +143,7 @@ describe('shared BannerSceneV1 render and evaluation plan', () => {
   });
 
   it('ignores animation channels and duration for an excluded target layer', async () => {
-    const materialization = await materializeProviderFreeFixtureProjectV1();
+    const materialization = await materializeProviderFreePersonSamReplayProjectV1();
     const animated = withTrack(
       materialization.scene,
       track(materialization.scene, {
@@ -166,7 +166,7 @@ describe('shared BannerSceneV1 render and evaluation plan', () => {
   });
 
   it('generates preview and export from one canonical plan without executable user text or preview exit URL', async () => {
-    const materialization = await materializeProviderFreeFixtureProjectV1();
+    const materialization = await materializeProviderFreePersonSamReplayProjectV1();
     const maliciousLookingName = '</script><img src=x onerror=alert(1)>';
     const scene = BannerSceneV1Schema.parse({
       ...materialization.scene,
@@ -205,12 +205,12 @@ describe('shared BannerSceneV1 render and evaluation plan', () => {
       expect.arrayContaining([expect.stringMatching(/^data:image\/png;base64,/u)]),
     );
     expect(Object.values(exportPayload['sources'] as Record<string, string>)).toContain(
-      'assets/asset_version_angel_body_visual_v1.png',
+      'assets/asset_version_banner_person_v1.png',
     );
   });
 
   it('deep-freezes trusted plans and rejects forged or copied plan structures', async () => {
-    const materialization = await materializeProviderFreeFixtureProjectV1();
+    const materialization = await materializeProviderFreePersonSamReplayProjectV1();
     const plan = createBannerSceneV1RenderPlan(materialization.scene);
 
     expect(Object.isFrozen(plan)).toBe(true);
@@ -236,10 +236,10 @@ describe('shared BannerSceneV1 render and evaluation plan', () => {
   });
 
   it('rejects an unresolved or byte-mismatched asset before generating executable content', async () => {
-    const materialization = await materializeProviderFreeFixtureProjectV1();
+    const materialization = await materializeProviderFreePersonSamReplayProjectV1();
     const plan = createBannerSceneV1RenderPlan(materialization.scene);
     const required = materialization.assets.filter(
-      (asset) => asset.reference.assetVersionId !== 'asset_version_angel_body_visual_v1',
+      (asset) => asset.reference.assetVersionId !== 'asset_version_banner_person_v1',
     );
     expect(() =>
       createBannerSceneV1PreviewDocument({
@@ -248,8 +248,10 @@ describe('shared BannerSceneV1 render and evaluation plan', () => {
         nonce: '0123456789abcdef0123456789abcdef',
       }),
     ).toThrow(/required render asset/);
-    const corrupt = materialization.assets.map((asset, index) =>
-      index === 1 ? { ...asset, bytes: Buffer.from('corrupt') } : asset,
+    const corrupt = materialization.assets.map((asset) =>
+      asset.reference.assetVersionId === 'asset_version_banner_person_v1'
+        ? { ...asset, bytes: Buffer.from('corrupt') }
+        : asset,
     );
     expect(() => createBannerSceneV1ExportDocumentParts({ plan, assets: corrupt })).toThrow(
       /exact immutable identities/,

@@ -1,5 +1,7 @@
 import {
   openInitialDemoProject,
+  openCandidateDemoProject,
+  providerFreeCandidateCatalog,
   projectOpenData,
   saveDemoProject,
   validateDemoProject,
@@ -43,6 +45,14 @@ export async function POST(request: Request): Promise<Response> {
       );
     }
     const action = (body as Record<string, unknown>)['action'];
+    if (action === 'open-candidate') {
+      const exact = requireExactObjectKeys(body, ['action', 'candidateId']);
+      return success(await openCandidateDemoProject(exact.candidateId));
+    }
+    if (action === 'catalog') {
+      requireExactObjectKeys(body, ['action']);
+      return success({ candidates: await providerFreeCandidateCatalog() });
+    }
     if (action === 'reopen') {
       const exact = requireExactObjectKeys(body, ['action', 'project']);
       const { fixed, project } = await validateDemoProject(exact.project);

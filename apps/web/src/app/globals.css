@@ -618,6 +618,17 @@ summary:focus-visible {
   transition: background-color 120ms ease;
 }
 
+.layer-cutout-preview {
+  grid-row: 2;
+  grid-column: 2;
+  width: 80px;
+  max-width: 100%;
+  height: 80px;
+  object-fit: contain;
+  border: 1px solid var(--line);
+  background: repeating-conic-gradient(#eef1f0 0 25%, #fff 0 50%) 50% / 12px 12px;
+}
+
 .layer-row-selected {
   background: rgb(11 113 107 / 6%);
 }
@@ -920,7 +931,8 @@ summary:focus-visible {
 }
 
 .editor-open-card,
-.editor-preset-card {
+.editor-preset-card,
+.editor-source-reference {
   min-width: 0;
   padding: clamp(1rem, 4vw, 1.75rem);
   border: 1px solid var(--line);
@@ -929,9 +941,193 @@ summary:focus-visible {
   box-shadow: var(--shadow);
 }
 
+.editor-source-reference {
+  display: flex;
+  gap: 1rem;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.editor-source-reference h2 {
+  margin: 0.2rem 0 0;
+}
+.editor-source-reference p {
+  margin: 0.45rem 0 0;
+  color: var(--muted);
+}
+.editor-source-reference-meta {
+  overflow-wrap: anywhere;
+  font:
+    0.72rem/1.4 ui-monospace,
+    monospace;
+}
+.editor-source-reference img {
+  width: min(30rem, 48%);
+  height: auto;
+  border: 1px solid var(--line);
+  border-radius: 0.7rem;
+  background: #222;
+}
+
 .editor-open-card {
   width: min(42rem, 100%);
   margin: clamp(2rem, 8vw, 6rem) auto;
+}
+
+.editor-candidate-picker {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 0.6rem;
+  margin: 1rem 0;
+  padding: 0.75rem;
+  border: 1px solid var(--line);
+  border-radius: 0.75rem;
+}
+.editor-candidate-picker legend {
+  padding: 0 0.35rem;
+  font-weight: 800;
+}
+.editor-candidate-choice {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(7rem, 1fr));
+  gap: 0.3rem;
+  padding: 0.4rem;
+  border: 1px solid var(--line);
+  border-radius: 0.55rem;
+  cursor: pointer;
+}
+.editor-candidate-choice img {
+  width: 100%;
+  height: 4.5rem;
+  object-fit: contain;
+  background: #222;
+  border-radius: 0.35rem;
+}
+.editor-candidate-choice input {
+  accent-color: var(--teal);
+}
+.candidate-composer-stage {
+  position: relative;
+  width: 100%;
+  max-width: 60rem;
+  overflow: hidden;
+  margin: 1rem 0;
+  border: 1px solid var(--line);
+  border-radius: 0.7rem;
+  background: #222;
+  touch-action: pan-y pinch-zoom;
+  user-select: none;
+}
+.candidate-composer-stage > img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+.candidate-hotspot {
+  position: absolute;
+  display: grid;
+  min-width: 2rem;
+  min-height: 2rem;
+  place-items: center;
+  padding: 0;
+  border: 2px solid transparent;
+  border-radius: 0.3rem;
+  background: color-mix(in srgb, var(--teal) 18%, transparent);
+  color: white;
+  cursor: pointer;
+}
+.source-region-mode .candidate-hotspot {
+  pointer-events: none;
+}
+.candidate-marquee {
+  position: absolute;
+  z-index: 100;
+  border: 1px dashed #fff;
+  background: rgb(11 113 107 / 24%);
+  pointer-events: none;
+}
+.candidate-selection-summary {
+  display: flex;
+  gap: 0.65rem;
+  align-items: center;
+  flex-wrap: wrap;
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+.candidate-selection-summary strong {
+  color: var(--ink);
+}
+.candidate-selection-summary button {
+  padding: 0.25rem 0.55rem;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+.candidate-hotspot span {
+  display: grid;
+  place-items: center;
+  width: 1.35rem;
+  height: 1.35rem;
+  border-radius: 50%;
+  background: var(--teal);
+  font-weight: 800;
+}
+.candidate-hotspot.selected {
+  border-color: transparent;
+  background: transparent;
+}
+.candidate-silhouette {
+  position: absolute;
+  z-index: 1;
+  pointer-events: none;
+  background: rgb(34 211 197 / 48%);
+  mask-position: center;
+  -webkit-mask-position: center;
+  mask-size: 100% 100%;
+  -webkit-mask-size: 100% 100%;
+  mask-repeat: no-repeat;
+  -webkit-mask-repeat: no-repeat;
+}
+.candidate-hotspot.assigned {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+.created-layer-list {
+  display: grid;
+  gap: 0.5rem;
+  margin: 0.75rem 0;
+}
+.created-layer-card {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+  flex-wrap: wrap;
+  padding: 0.55rem;
+  border: 1px solid var(--teal);
+  border-radius: 0.55rem;
+  background: rgb(11 113 107 / 6%);
+}
+.created-layer-card span {
+  color: var(--muted);
+}
+.candidate-hotspot:focus-visible {
+  outline: 3px solid #fff;
+  outline-offset: 2px;
+}
+.editor-candidate-choice label {
+  display: grid;
+  gap: 0.35rem;
+  padding: 0.4rem;
+  border: 1px solid var(--line);
+  border-radius: 0.55rem;
+  cursor: pointer;
+}
+.editor-candidate-choice label.selected {
+  border-color: var(--teal);
+  background: color-mix(in srgb, var(--teal) 16%, transparent);
 }
 
 .editor-open-card h1,
@@ -1516,6 +1712,18 @@ summary:focus-visible {
 }
 
 @media (max-width: 420px) {
+  .editor-candidate-picker {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .editor-source-reference {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .editor-source-reference img {
+    width: 100%;
+  }
+
   .editor-project-header,
   .editor-revision-strip {
     align-items: stretch;

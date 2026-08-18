@@ -1758,12 +1758,17 @@ describe('provider-free dependency boundary', () => {
         return entry.isFile() && entry.name.endsWith('.ts') ? [path] : [];
       });
     const nativeQwenTransportPath = join(sourceRoot, 'server/qwen3-vl-native-fetch-transport.ts');
+    const nativeSamTransportPath = join(
+      sourceRoot,
+      'server/qwen-sam-candidate-selector-native-fetch-v1.ts',
+    );
     const source = collectTypeScript(sourceRoot)
-      .filter((path) => path !== nativeQwenTransportPath)
+      .filter((path) => path !== nativeQwenTransportPath && path !== nativeSamTransportPath)
       .toSorted()
       .map((path) => readFileSync(path, 'utf8'))
       .join('\n');
     const nativeQwenTransportSource = readFileSync(nativeQwenTransportPath, 'utf8');
+    const nativeSamTransportSource = readFileSync(nativeSamTransportPath, 'utf8');
     const packageJson = JSON.parse(readFileSync(join(packageRoot, 'package.json'), 'utf8')) as {
       readonly dependencies?: Readonly<Record<string, string>>;
       readonly devDependencies?: Readonly<Record<string, string>>;
@@ -1800,6 +1805,11 @@ describe('provider-free dependency boundary', () => {
     );
     expect(nativeQwenTransportSource).toContain('globalThis.fetch');
     expect(nativeQwenTransportSource).toContain('fetchImplementation(request.endpoint');
+    expect(nativeSamTransportSource).toContain('globalThis.fetch');
+    expect(nativeSamTransportSource).toContain('globalThis.fetch(request.endpoint');
+    expect(nativeSamTransportSource).not.toMatch(
+      /from\s+['"](?:node:)?(?:http|https|http2|net|dns|dgram|tls)(?:\/[^'"]*)?['"]/u,
+    );
     expect(nativeQwenTransportSource).not.toMatch(
       /from\s+['"](?:node:)?(?:http|https|http2|net|dns|dgram|tls)(?:\/[^'"]*)?['"]/u,
     );

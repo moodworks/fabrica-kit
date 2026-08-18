@@ -14,18 +14,31 @@ const statusLabel = Object.freeze({
   failed: 'Failed',
 } satisfies Record<BannerAiPhase, string>);
 
-const statusCopy = (phase: BannerAiPhase, ready: boolean): string => {
+export const bannerAiStatusCopy = (
+  phase: BannerAiPhase,
+  ready: boolean,
+  provenance:
+    | 'Deterministic test output — NOT SAM OUTPUT'
+    | 'Verified Meta SAM 2.1 cutout replay — no live call' = 'Deterministic test output — NOT SAM OUTPUT',
+): string => {
+  const replay = provenance === 'Verified Meta SAM 2.1 cutout replay — no live call';
   switch (phase) {
     case 'idle':
       return ready
-        ? 'The image is ready for the local fixture.'
+        ? replay
+          ? 'The exact Samsung fixture is ready for stored verified Meta SAM 2.1 cutouts.'
+          : 'The image is ready for bounded deterministic automatic candidates.'
         : 'Select one JPG or PNG to begin.';
     case 'validating':
       return 'Validating the selected image and decoding its dimensions in this browser.';
     case 'running':
-      return 'Running the trusted provider-free composition fixture.';
+      return replay
+        ? 'Generating stored verified Meta SAM 2.1 cutouts — no live provider call.'
+        : 'Generating bounded deterministic automatic candidates — NOT SAM OUTPUT.';
     case 'succeeded':
-      return 'The provider-free fixture returned a validated composition proposal.';
+      return replay
+        ? 'Stored verified Meta SAM 2.1 cutouts are ready — no live provider call.'
+        : 'Deterministic automatic candidates are ready — NOT SAM OUTPUT.';
     case 'failed':
       return 'The current operation could not be completed.';
   }
@@ -56,6 +69,9 @@ export interface BannerAiStatusPanelProps {
   readonly error: string | null;
   readonly result: BannerAnalysisData | null;
   readonly review: BannerLayerReviewState | null;
+  readonly uploadProvenance?:
+    | 'Deterministic test output — NOT SAM OUTPUT'
+    | 'Verified Meta SAM 2.1 cutout replay — no live call';
   readonly onSelectPart: (partKey: string) => void;
   readonly onSetPartIncluded: (partKey: string, included: boolean) => void;
   readonly onSetPartVisible: (partKey: string, visible: boolean) => void;
@@ -67,6 +83,7 @@ export function BannerAiStatusPanel({
   error,
   result,
   review,
+  uploadProvenance,
   onSelectPart,
   onSetPartIncluded,
   onSetPartVisible,
@@ -83,7 +100,7 @@ export function BannerAiStatusPanel({
         <span className={`status-dot status-dot-${phase}`} aria-hidden="true" />
       </div>
       <p className="status-copy" role="status" aria-live="polite" aria-atomic="true">
-        {statusCopy(phase, ready)}
+        {bannerAiStatusCopy(phase, ready, uploadProvenance)}
       </p>
 
       {phase === 'validating' || phase === 'running' ? (
@@ -103,8 +120,8 @@ export function BannerAiStatusPanel({
         <div className="result-panel">
           <div className="result-heading">
             <div>
-              <p className="section-kicker">Provider-free fixture proposal</p>
-              <h3>Fixture-proposed parts</h3>
+              <p className="section-kicker">Deterministic test output — NOT SAM OUTPUT</p>
+              <h3>Candidate layer controls</h3>
             </div>
             <span>{result.proposal.parts.length} parts</span>
           </div>
@@ -112,8 +129,8 @@ export function BannerAiStatusPanel({
           <fieldset className="layer-review" aria-describedby="fixture-layer-review-description">
             <legend>Provider-free fixture layer controls</legend>
             <p className="layer-review-description" id="fixture-layer-review-description">
-              Temporary, in-memory intent for a future scene only. These replayed parts are not a
-              BannerScene, extracted assets, masks, or cutouts.
+              Temporary deterministic integration previews exist for these proposed boxes; no
+              BannerScene or persisted layer asset has been created.
             </p>
             <ol className="layer-list">
               {result.proposal.parts.map((part, index) => {
@@ -148,6 +165,22 @@ export function BannerAiStatusPanel({
                         <span className="layer-bounds">
                           {percent(part.bounds.widthBps)} × {percent(part.bounds.heightBps)}
                         </span>
+                        {part.role !== 'background' ? (
+                          <>
+                            {/* eslint-disable-next-line @next/next/no-img-element -- bounded deterministic data URL preview */}
+                            <img
+                              className="layer-cutout-preview"
+                              src={
+                                result.extraction.previews.find(
+                                  (preview) => preview.partKey === part.partKey,
+                                )?.dataUrl
+                              }
+                              alt={`${part.label} deterministic fake integration preview`}
+                              width={80}
+                              height={80}
+                            />
+                          </>
+                        ) : null}
                       </label>
                     </div>
                     <div className="layer-control-set">
@@ -242,7 +275,9 @@ export function BannerAiStatusPanel({
                 </div>
               </dl>
               <p className="future-scene-effect">
-                {futureSceneEffect(selected)} No BannerScene or layer asset has been created.
+                {futureSceneEffect(selected)} Integration preview generated from the proposed box
+                using a deterministic fake mask; not real SAM output or segmentation-quality
+                evidence. No BannerScene or persisted layer asset has been created.
               </p>
             </section>
           )}

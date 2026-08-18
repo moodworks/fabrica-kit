@@ -9,7 +9,7 @@ import {
   createBannerLayerReviewState,
   type BannerLayerReviewState,
 } from './banner-ai-layer-state';
-import { BannerAiStatusPanel } from './banner-ai-status-panel';
+import { BannerAiStatusPanel, bannerAiStatusCopy } from './banner-ai-status-panel';
 
 const noOp = () => {};
 
@@ -33,6 +33,14 @@ const renderStatus = (
   );
 
 describe('Banner AI status rendering', () => {
+  it('describes the verified replay while running and after success', () => {
+    expect(
+      bannerAiStatusCopy('running', true, 'Verified Meta SAM 2.1 cutout replay — no live call'),
+    ).toContain('no live provider call');
+    expect(
+      bannerAiStatusCopy('succeeded', true, 'Verified Meta SAM 2.1 cutout replay — no live call'),
+    ).toContain('Stored verified Meta SAM 2.1 cutouts');
+  });
   it.each([
     ['idle', 'Idle'],
     ['validating', 'Validating'],
@@ -41,16 +49,18 @@ describe('Banner AI status rendering', () => {
     expect(renderStatus(phase)).toContain(`>${label}</h2>`);
   });
 
-  it('renders all successful fixture parts without claiming extraction', () => {
+  it('renders all successful fixture parts with deterministic previews', () => {
     const markup = renderStatus('succeeded');
     expect(markup).toContain('>Succeeded</h2>');
     for (const label of ['Background', 'Angel body', 'Left wing', 'Right wing']) {
       expect(markup).toContain(label);
     }
-    expect(markup).toContain('Provider-free fixture proposal');
-    expect(markup).toContain('Temporary, in-memory intent for a future scene only.');
-    expect(markup).toContain('not a BannerScene, extracted assets, masks, or cutouts');
-    expect(markup).toContain('No BannerScene or layer asset has been created.');
+    expect(markup).toContain('Deterministic test output — NOT SAM OUTPUT');
+    expect(markup).toContain('Deterministic automatic candidates are ready — NOT SAM OUTPUT.');
+    expect(markup).toContain('Temporary deterministic integration previews exist');
+    expect(markup).toContain('not real SAM output or segmentation-quality evidence');
+    expect(markup.match(/<img /g)).toHaveLength(3);
+    expect(markup).toContain('No BannerScene or persisted layer asset has been created.');
     expect(markup).toContain('No / disabled');
     expect(markup).toContain('0 micros USD');
     expect(markup).toContain('<details class="technical-details">');

@@ -18,6 +18,8 @@ import {
   parseProviderFreeExportEnvelope,
   parseProviderFreePreviewEnvelope,
   parseProviderFreeProjectEnvelope,
+  parseProviderFreeCandidateCatalogEnvelope,
+  type ProviderFreeCandidateChoice,
   type ProviderFreeExportData,
   type ProviderFreePreviewData,
   type ProviderFreeProjectOpenData,
@@ -27,6 +29,498 @@ export type BannerProjectFetch = (
   input: RequestInfo | URL,
   init?: RequestInit,
 ) => Promise<Response>;
+
+export interface UploadedBannerCandidate {
+  readonly candidateId: string;
+  readonly order: number;
+  readonly bounds: {
+    readonly x: number;
+    readonly y: number;
+    readonly width: number;
+    readonly height: number;
+  };
+  readonly crop: {
+    readonly left: number;
+    readonly top: number;
+    readonly width: number;
+    readonly height: number;
+  };
+  readonly source: { readonly width: number; readonly height: number };
+  readonly pixelArea: number;
+  readonly areaRatioBps: number;
+  readonly thumbnail: {
+    readonly dataUrl: string;
+    readonly byteSize: number;
+    readonly pixelWidth: number;
+    readonly pixelHeight: number;
+    readonly sha256: string;
+  };
+  readonly provenance:
+    | 'Deterministic test output — NOT SAM OUTPUT'
+    | 'Verified Meta SAM 2.1 cutout replay — no live call';
+}
+
+export interface UploadedBannerOperationData {
+  readonly operationId: string;
+  readonly candidates: readonly UploadedBannerCandidate[];
+  readonly provenance: UploadedBannerCandidate['provenance'];
+}
+export interface UploadedBannerBinding {
+  readonly operationId: string;
+  readonly candidateId: string;
+}
+export const composeUploadedBannerCandidates = async (
+  operationId: string,
+  candidateIds: readonly string[],
+  fetchImplementation: BannerProjectFetch = fetch,
+): Promise<{ readonly subjectId: string }> => {
+  const response = await fetchImplementation('/api/banner-ai/uploaded-operation', {
+    method: 'PUT',
+    cache: 'no-store',
+    credentials: 'same-origin',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ action: 'compose', operationId, candidateIds }),
+  });
+  const payload = await parseJsonResponse(response);
+  if (
+    !isRecord(payload) ||
+    !hasExactKeys(payload, ['data', 'ok']) ||
+    payload.ok !== true ||
+    !isRecord(payload.data) ||
+    !hasExactKeys(payload.data, ['subjectId']) ||
+    typeof payload.data.subjectId !== 'string' ||
+    !/^sams_v1_[0-9a-f]{64}$/u.test(payload.data.subjectId)
+  )
+    throw new BannerProjectRequestError(
+      'UPLOADED_COMPOSE_FAILED',
+      'The combined subject could not be created.',
+    );
+  return { subjectId: payload.data.subjectId };
+};
+export const composeUploadedBannerCandidateGroups = async (
+  operationId: string,
+  candidateGroups: readonly (readonly string[])[],
+  fetchImplementation: BannerProjectFetch = fetch,
+): Promise<{ readonly subjectId: string }> => {
+  const response = await fetchImplementation('/api/banner-ai/uploaded-operation', {
+    method: 'PUT',
+    cache: 'no-store',
+    credentials: 'same-origin',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ action: 'compose', operationId, candidateGroups }),
+  });
+  const payload = await parseJsonResponse(response);
+  if (
+    !isRecord(payload) ||
+    payload.ok !== true ||
+    !isRecord(payload.data) ||
+    typeof payload.data.subjectId !== 'string' ||
+    !/^sams_v1_[0-9a-f]{64}$/u.test(payload.data.subjectId)
+  )
+    throw new BannerProjectRequestError(
+      'UPLOADED_COMPOSE_FAILED',
+      'The grouped layers could not be created.',
+    );
+  return { subjectId: payload.data.subjectId };
+};
+export type UploadedMixedLayer =
+  | { readonly kind: 'sam-candidate-group-v1'; readonly candidateIds: readonly string[] }
+  | {
+      readonly kind: 'source-region-v1';
+      readonly crop: {
+        readonly left: number;
+        readonly top: number;
+        readonly width: number;
+        readonly height: number;
+      };
+    }
+  | { readonly kind: 'prompted-cutout-v1'; readonly promptedId: string };
+export interface UploadedPromptedCutout {
+  readonly promptedId: string;
+  readonly candidateId: string;
+  readonly crop: {
+    readonly left: number;
+    readonly top: number;
+    readonly width: number;
+    readonly height: number;
+  };
+  readonly bounds: {
+    readonly xBps: number;
+    readonly yBps: number;
+    readonly widthBps: number;
+    readonly heightBps: number;
+  };
+  readonly thumbnail: {
+    readonly dataUrl: string;
+    readonly byteSize: number;
+    readonly pixelWidth: number;
+    readonly pixelHeight: number;
+    readonly sha256: string;
+  };
+  readonly provenance:
+    | 'Deterministic test output — NOT SAM OUTPUT'
+    | 'Verified Meta SAM 2.1 user box-prompt replay — no live call';
+}
+export const parseUploadedPromptedCutout = (input: unknown): UploadedPromptedCutout => {
+  if (
+    !isRecord(input) ||
+    !hasExactKeys(input, [
+      'bounds',
+      'candidateId',
+      'crop',
+      'promptedId',
+      'provenance',
+      'thumbnail',
+    ]) ||
+    typeof input.promptedId !== 'string' ||
+    !/^samp_v1_[0-9a-f]{64}$/u.test(input.promptedId) ||
+    typeof input.candidateId !== 'string' ||
+    !/^samc_v1_[0-9a-f]{64}$/u.test(input.candidateId) ||
+    (input.provenance !== 'Deterministic test output — NOT SAM OUTPUT' &&
+      input.provenance !== 'Verified Meta SAM 2.1 user box-prompt replay — no live call')
+  )
+    throw new TypeError('Invalid prompted cutout.');
+  const crop = input.crop;
+  const bounds = input.bounds;
+  const thumbnail = input.thumbnail;
+  if (
+    !isRecord(crop) ||
+    !hasExactKeys(crop, ['height', 'left', 'top', 'width']) ||
+    !isRecord(bounds) ||
+    !hasExactKeys(bounds, ['heightBps', 'widthBps', 'xBps', 'yBps']) ||
+    !isRecord(thumbnail) ||
+    !hasExactKeys(thumbnail, ['byteSize', 'dataUrl', 'pixelHeight', 'pixelWidth', 'sha256']) ||
+    !Object.values(crop).every(Number.isSafeInteger) ||
+    Number(crop.left) < 0 ||
+    Number(crop.top) < 0 ||
+    Number(crop.width) < 1 ||
+    Number(crop.height) < 1 ||
+    !Object.values(bounds).every(Number.isSafeInteger) ||
+    Number(bounds.xBps) < 0 ||
+    Number(bounds.yBps) < 0 ||
+    Number(bounds.widthBps) < 1 ||
+    Number(bounds.heightBps) < 1 ||
+    Number(bounds.xBps) + Number(bounds.widthBps) > 10_000 ||
+    Number(bounds.yBps) + Number(bounds.heightBps) > 10_000 ||
+    typeof thumbnail.dataUrl !== 'string' ||
+    !/^data:image\/png;base64,[A-Za-z0-9+/=]+$/u.test(thumbnail.dataUrl) ||
+    thumbnail.dataUrl.length > 524_288 ||
+    typeof thumbnail.sha256 !== 'string' ||
+    !/^[0-9a-f]{64}$/u.test(thumbnail.sha256) ||
+    !Number.isSafeInteger(thumbnail.byteSize) ||
+    Number(thumbnail.byteSize) < 1 ||
+    Number(thumbnail.byteSize) > 524_288 ||
+    !Number.isSafeInteger(thumbnail.pixelWidth) ||
+    Number(thumbnail.pixelWidth) < 1 ||
+    !Number.isSafeInteger(thumbnail.pixelHeight) ||
+    Number(thumbnail.pixelHeight) < 1 ||
+    Number(thumbnail.pixelWidth) > 160 ||
+    Number(thumbnail.pixelHeight) > 160
+  )
+    throw new TypeError('Invalid prompted cutout.');
+  return input as unknown as UploadedPromptedCutout;
+};
+export const promptUploadedBannerCutout = async (
+  operationId: string,
+  crop: {
+    readonly left: number;
+    readonly top: number;
+    readonly width: number;
+    readonly height: number;
+  },
+  fetchImplementation: BannerProjectFetch = fetch,
+): Promise<UploadedPromptedCutout> => {
+  const response = await fetchImplementation('/api/banner-ai/uploaded-operation', {
+    method: 'PUT',
+    cache: 'no-store',
+    credentials: 'same-origin',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ action: 'prompt-cutout', operationId, crop }),
+  });
+  const payload = await parseJsonResponse(response);
+  if (!isRecord(payload) || payload.ok !== true || !isRecord(payload.data))
+    throw new BannerProjectRequestError(
+      'UPLOADED_COMPOSE_FAILED',
+      'The prompted cutout could not be created.',
+    );
+  return parseUploadedPromptedCutout(payload.data);
+};
+export const parseUploadedMixedLayers = (input: unknown): readonly UploadedMixedLayer[] => {
+  if (!Array.isArray(input) || input.length < 1 || input.length > 8)
+    throw new TypeError('Mixed layers must contain one to eight entries.');
+  const ids = new Set<string>();
+  return input.map((entry) => {
+    if (!isRecord(entry) || typeof entry.kind !== 'string')
+      throw new TypeError('Invalid mixed layer.');
+    if (
+      entry.kind === 'sam-candidate-group-v1' &&
+      hasExactKeys(entry, ['kind', 'candidateIds']) &&
+      Array.isArray(entry.candidateIds) &&
+      entry.candidateIds.length > 0 &&
+      entry.candidateIds.every((id) => typeof id === 'string' && !ids.has(id))
+    ) {
+      entry.candidateIds.forEach((id) => ids.add(id as string));
+      return entry as UploadedMixedLayer;
+    }
+    if (
+      entry.kind === 'source-region-v1' &&
+      hasExactKeys(entry, ['kind', 'crop']) &&
+      isRecord(entry.crop) &&
+      hasExactKeys(entry.crop, ['height', 'left', 'top', 'width']) &&
+      Number.isSafeInteger(entry.crop.left) &&
+      Number.isSafeInteger(entry.crop.top) &&
+      Number.isSafeInteger(entry.crop.width) &&
+      Number.isSafeInteger(entry.crop.height) &&
+      (entry.crop.left as number) >= 0 &&
+      (entry.crop.top as number) >= 0 &&
+      (entry.crop.width as number) > 0 &&
+      (entry.crop.height as number) > 0
+    )
+      return entry as UploadedMixedLayer;
+    if (
+      entry.kind === 'prompted-cutout-v1' &&
+      hasExactKeys(entry, ['kind', 'promptedId']) &&
+      typeof entry.promptedId === 'string' &&
+      /^samp_v1_[0-9a-f]{64}$/u.test(entry.promptedId)
+    )
+      return entry as UploadedMixedLayer;
+    throw new TypeError('Invalid mixed layer.');
+  });
+};
+export const composeUploadedBannerMixedLayers = async (
+  operationId: string,
+  layers: readonly UploadedMixedLayer[],
+  fetchImplementation: BannerProjectFetch = fetch,
+): Promise<{ readonly subjectId: string }> => {
+  parseUploadedMixedLayers(layers);
+  const response = await fetchImplementation('/api/banner-ai/uploaded-operation', {
+    method: 'PUT',
+    cache: 'no-store',
+    credentials: 'same-origin',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ action: 'compose', operationId, layers }),
+  });
+  const payload = await parseJsonResponse(response);
+  if (
+    !isRecord(payload) ||
+    payload.ok !== true ||
+    !isRecord(payload.data) ||
+    typeof payload.data.subjectId !== 'string' ||
+    !/^sams_v1_[0-9a-f]{64}$/u.test(payload.data.subjectId)
+  )
+    throw new BannerProjectRequestError(
+      'UPLOADED_COMPOSE_FAILED',
+      'The mixed layers could not be created.',
+    );
+  return { subjectId: payload.data.subjectId };
+};
+const uploadedBody = (binding: UploadedBannerBinding, body: Record<string, unknown>) => ({
+  ...body,
+  operationId: binding.operationId,
+  candidateId: binding.candidateId,
+});
+export const openUploadedBannerCandidate = async (
+  binding: UploadedBannerBinding,
+  fetchImplementation: BannerProjectFetch = fetch,
+): Promise<ProviderFreeProjectOpenData> => {
+  const response = await fetchImplementation('/api/banner-ai/uploaded-operation', {
+    method: 'PUT',
+    cache: 'no-store',
+    credentials: 'same-origin',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ action: 'select', ...binding }),
+  });
+  return resolveEnvelope(parseProviderFreeProjectEnvelope(await parseJsonResponse(response)));
+};
+export const saveUploadedBannerProject = async (
+  binding: UploadedBannerBinding,
+  input: {
+    readonly project: ProviderFreeBannerProjectV1;
+    readonly scene: BannerSceneV1;
+    readonly selectedPartId: string;
+  },
+  fetchImplementation: BannerProjectFetch = fetch,
+): Promise<ProviderFreeProjectOpenData> => {
+  const response = await fetchImplementation('/api/banner-ai/uploaded-operation', {
+    method: 'PUT',
+    cache: 'no-store',
+    credentials: 'same-origin',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(
+      uploadedBody(binding, {
+        action: 'save',
+        project: input.project,
+        scene: input.scene,
+        selectedPartId: input.selectedPartId,
+      }),
+    ),
+  });
+  return resolveEnvelope(parseProviderFreeProjectEnvelope(await parseJsonResponse(response)));
+};
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === 'object' && value !== null && !Array.isArray(value);
+
+const hasExactKeys = (record: Record<string, unknown>, expected: readonly string[]): boolean => {
+  const actual = Object.keys(record).sort();
+  const sortedExpected = [...expected].sort();
+  return (
+    actual.length === sortedExpected.length &&
+    actual.every((key, index) => key === sortedExpected[index])
+  );
+};
+
+const parseUploadedThumbnail = (input: unknown): void => {
+  if (
+    !isRecord(input) ||
+    !hasExactKeys(input, ['byteSize', 'dataUrl', 'pixelHeight', 'pixelWidth', 'sha256']) ||
+    typeof input['dataUrl'] !== 'string' ||
+    !/^data:image\/png;base64,[A-Za-z0-9+/]+={0,2}$/u.test(input['dataUrl']) ||
+    input['dataUrl'].length > 524_288 ||
+    !Number.isSafeInteger(input['byteSize']) ||
+    Number(input['byteSize']) < 1 ||
+    !Number.isSafeInteger(input['pixelWidth']) ||
+    Number(input['pixelWidth']) < 1 ||
+    !Number.isSafeInteger(input['pixelHeight']) ||
+    Number(input['pixelHeight']) < 1 ||
+    typeof input['sha256'] !== 'string' ||
+    !/^[0-9a-f]{64}$/u.test(input['sha256'])
+  ) {
+    throw new BannerProjectRequestError(
+      'INVALID_UPLOADED_OPERATION',
+      'The uploaded operation response contained an invalid thumbnail.',
+    );
+  }
+};
+
+export const requestUploadedBannerOperation = async (
+  file: File,
+  fetchImplementation: BannerProjectFetch = fetch,
+): Promise<UploadedBannerOperationData> => {
+  const formData = new FormData();
+  formData.append('file', file);
+  const response = await fetchImplementation('/api/banner-ai/uploaded-operation', {
+    method: 'POST',
+    body: formData,
+    cache: 'no-store',
+    credentials: 'same-origin',
+  });
+  const payload = await parseJsonResponse(response);
+  if (!isRecord(payload) || payload['ok'] !== true || !isRecord(payload['data'])) {
+    const error =
+      isRecord(payload) && isRecord(payload['error']) ? payload['error']['message'] : null;
+    throw new BannerProjectRequestError(
+      'UPLOADED_OPERATION_FAILED',
+      typeof error === 'string' ? error : 'The uploaded operation could not be created.',
+    );
+  }
+  return parseUploadedBannerOperationPayload(payload);
+};
+
+export const parseUploadedBannerOperationPayload = (
+  payload: unknown,
+): UploadedBannerOperationData => {
+  if (!isRecord(payload) || payload['ok'] !== true || !isRecord(payload['data'])) {
+    throw new BannerProjectRequestError(
+      'UPLOADED_OPERATION_FAILED',
+      'The uploaded operation could not be created.',
+    );
+  }
+  const data = payload['data'];
+  if (
+    !hasExactKeys(data, ['candidates', 'operationId', 'provenance']) ||
+    typeof data['operationId'] !== 'string' ||
+    !/^[0-9a-f]{64}$/u.test(data['operationId']) ||
+    !Array.isArray(data['candidates']) ||
+    data['candidates'].length < 1 ||
+    data['candidates'].length > 8 ||
+    (data['provenance'] !== 'Deterministic test output — NOT SAM OUTPUT' &&
+      data['provenance'] !== 'Verified Meta SAM 2.1 cutout replay — no live call')
+  ) {
+    throw new BannerProjectRequestError(
+      'INVALID_UPLOADED_OPERATION',
+      'The uploaded operation response was invalid.',
+    );
+  }
+  const candidates = data['candidates'].map((candidate, index) => {
+    if (
+      !isRecord(candidate) ||
+      !hasExactKeys(candidate, [
+        'areaRatioBps',
+        'bounds',
+        'candidateId',
+        'order',
+        'pixelArea',
+        'provenance',
+        'thumbnail',
+        'crop',
+        'source',
+      ]) ||
+      typeof candidate['candidateId'] !== 'string' ||
+      !/^samc_v1_[0-9a-f]{64}$/u.test(candidate['candidateId']) ||
+      candidate['order'] !== index + 1 ||
+      candidate['provenance'] !== data['provenance'] ||
+      !Number.isSafeInteger(candidate['pixelArea']) ||
+      Number(candidate['pixelArea']) < 64 ||
+      !Number.isSafeInteger(candidate['areaRatioBps']) ||
+      Number(candidate['areaRatioBps']) < 0 ||
+      Number(candidate['areaRatioBps']) > 10_000 ||
+      !isRecord(candidate['bounds']) ||
+      !hasExactKeys(candidate['bounds'], ['height', 'width', 'x', 'y']) ||
+      Object.values(candidate['bounds']).some(
+        (value) => typeof value !== 'number' || !Number.isInteger(value) || value < 0,
+      ) ||
+      Number(candidate['bounds']['width']) < 1 ||
+      Number(candidate['bounds']['height']) < 1 ||
+      Number(candidate['bounds']['x']) + Number(candidate['bounds']['width']) > 10_000 ||
+      Number(candidate['bounds']['y']) + Number(candidate['bounds']['height']) > 10_000 ||
+      !isRecord(candidate['crop']) ||
+      !hasExactKeys(candidate['crop'], ['height', 'left', 'top', 'width']) ||
+      Object.values(candidate['crop']).some(
+        (value) => typeof value !== 'number' || !Number.isInteger(value) || value < 0,
+      ) ||
+      !isRecord(candidate['source']) ||
+      !hasExactKeys(candidate['source'], ['height', 'width']) ||
+      Object.values(candidate['source']).some(
+        (value) => typeof value !== 'number' || !Number.isInteger(value) || value < 1,
+      ) ||
+      Number(candidate['crop']['width']) < 1 ||
+      Number(candidate['crop']['height']) < 1 ||
+      Number(candidate['crop']['left']) + Number(candidate['crop']['width']) >
+        Number(candidate['source']['width']) ||
+      Number(candidate['crop']['top']) + Number(candidate['crop']['height']) >
+        Number(candidate['source']['height'])
+    ) {
+      throw new BannerProjectRequestError(
+        'INVALID_UPLOADED_OPERATION',
+        'The uploaded operation response contained an invalid candidate.',
+      );
+    }
+    parseUploadedThumbnail(candidate['thumbnail']);
+    return candidate as unknown as UploadedBannerCandidate;
+  });
+  if (new Set(candidates.map((candidate) => candidate.candidateId)).size !== candidates.length) {
+    throw new BannerProjectRequestError(
+      'INVALID_UPLOADED_OPERATION',
+      'The uploaded operation response contained duplicate candidates.',
+    );
+  }
+  const sourceKey = `${candidates[0]!.source.width}x${candidates[0]!.source.height}`;
+  if (
+    candidates.some(
+      (candidate) => `${candidate.source.width}x${candidate.source.height}` !== sourceKey,
+    )
+  )
+    throw new BannerProjectRequestError(
+      'INVALID_UPLOADED_OPERATION',
+      'Candidates reference different source dimensions.',
+    );
+  return {
+    operationId: data['operationId'],
+    candidates,
+    provenance: data['provenance'],
+  };
+};
 
 export class BannerProjectRequestError extends Error {
   readonly code: string;
@@ -78,6 +572,26 @@ export const requestProviderFreeProject = async (
     method: 'GET',
     cache: 'no-store',
     credentials: 'same-origin',
+  });
+  return resolveEnvelope(parseProviderFreeProjectEnvelope(await parseJsonResponse(response)));
+};
+
+export const requestProviderFreeCandidateCatalog = async (
+  fetchImplementation: BannerProjectFetch = fetch,
+): Promise<readonly ProviderFreeCandidateChoice[]> => {
+  const response = await postJson(fetchImplementation, '/api/banner-ai/demo-project', {
+    action: 'catalog',
+  });
+  return parseProviderFreeCandidateCatalogEnvelope(await parseJsonResponse(response));
+};
+
+export const openProviderFreeCandidate = async (
+  candidateId: string,
+  fetchImplementation: BannerProjectFetch = fetch,
+): Promise<ProviderFreeProjectOpenData> => {
+  const response = await postJson(fetchImplementation, '/api/banner-ai/demo-project', {
+    action: 'open-candidate',
+    candidateId,
   });
   return resolveEnvelope(parseProviderFreeProjectEnvelope(await parseJsonResponse(response)));
 };
@@ -152,6 +666,25 @@ export const requestProviderFreePreview = async (
   });
   return resolveEnvelope(parseProviderFreePreviewEnvelope(await parseJsonResponse(response)));
 };
+export const requestUploadedBannerPreview = async (
+  binding: UploadedBannerBinding,
+  capture: ProviderFreeOperationCapture,
+  nonce: string,
+  fetchImplementation: BannerProjectFetch = fetch,
+): Promise<ProviderFreePreviewData> => {
+  const response = await postJson(
+    fetchImplementation,
+    '/api/banner-ai/uploaded-operation/preview',
+    uploadedBody(binding, {
+      nonce,
+      project: capture.project,
+      revision: capture.revision,
+      sceneSha256: capture.sceneSha256,
+      sceneVersionId: capture.sceneVersionId,
+    }),
+  );
+  return resolveEnvelope(parseProviderFreePreviewEnvelope(await parseJsonResponse(response)));
+};
 
 export type ProviderFreeAcceptedExportData = ProviderFreeExportData;
 
@@ -218,6 +751,7 @@ const browserSha256Hex = async (bytes: Uint8Array): Promise<string> => {
 export const acceptProviderFreeExportForCapture = async (
   data: ProviderFreeExportData,
   capture: ProviderFreeOperationCapture,
+  filenamePrefix = 'verified-meta-sam-replay',
 ): Promise<ProviderFreeAcceptedExportData> => {
   const revision = getAcceptedRevision(capture.project);
   if (
@@ -238,7 +772,7 @@ export const acceptProviderFreeExportForCapture = async (
     data.artifact.mediaType !== 'application/zip' ||
     data.artifact.validationLabel !== PROVIDER_FREE_EXPORT_VALIDATION_LABEL_V1 ||
     data.artifact.filename !==
-      `angel-provider-free-r${String(capture.revision)}-${data.artifact.sha256.slice(0, 12)}.zip`
+      `${filenamePrefix}-r${String(capture.revision)}-${data.artifact.sha256.slice(0, 12)}.zip`
   ) {
     return rejectExportIdentity();
   }
@@ -309,4 +843,27 @@ export const requestProviderFreeExport = async (
   });
   const data = resolveEnvelope(parseProviderFreeExportEnvelope(await parseJsonResponse(response)));
   return acceptProviderFreeExportForCapture(data, capture);
+};
+export const requestUploadedBannerExport = async (
+  binding: UploadedBannerBinding,
+  capture: ProviderFreeOperationCapture,
+  fetchImplementation: BannerProjectFetch = fetch,
+): Promise<ProviderFreeAcceptedExportData> => {
+  const response = await postJson(
+    fetchImplementation,
+    '/api/banner-ai/uploaded-operation/export',
+    uploadedBody(binding, {
+      project: capture.project,
+      revision: capture.revision,
+      sceneSha256: capture.sceneSha256,
+      sceneVersionId: capture.sceneVersionId,
+    }),
+  );
+  const data = resolveEnvelope(parseProviderFreeExportEnvelope(await parseJsonResponse(response)));
+  const prefixes = ['uploaded-verified-meta-sam-replay', 'uploaded-deterministic-test'] as const;
+  const prefix = prefixes.find((candidate) =>
+    data.artifact.filename.startsWith(`${candidate}-r${String(capture.revision)}-`),
+  );
+  if (prefix === undefined) return rejectExportIdentity();
+  return acceptProviderFreeExportForCapture(data, capture, prefix);
 };

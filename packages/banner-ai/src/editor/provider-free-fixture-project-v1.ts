@@ -19,6 +19,7 @@ import {
   PROVIDER_FREE_SOLID_BACKGROUND_V1,
   createGentleFloatTrackV1,
   isProviderFreeLayerIdV1,
+  type ProviderFreeLayerIdV1,
   type ProviderFreeSelectedPartIdV1,
 } from './provider-free-banner-scene-v1.js';
 import {
@@ -66,9 +67,9 @@ export const PROVIDER_FREE_INITIAL_SCENE_WORKFLOW_REF_V1 = WorkflowManifestRefV1
   definitionSha256: INITIAL_BANNER_ANALYZE_WORKFLOW_V1.definitionSha256,
 });
 
-const ProviderFreeSelectedPartIdV1Schema = z.enum([
-  PROVIDER_FREE_BACKGROUND_PART_ID_V1,
-  ...PROVIDER_FREE_LAYER_IDS_V1,
+const ProviderFreeSelectedPartIdV1Schema = z.union([
+  z.literal(PROVIDER_FREE_BACKGROUND_PART_ID_V1),
+  z.string().refine(isProviderFreeLayerIdV1),
 ]);
 
 const ProviderFreeBannerProjectRevisionV1Schema = z.strictObject({
@@ -146,12 +147,17 @@ const hasAllowedBackground = (scene: BannerSceneV1): boolean =>
 
 const hasAllowedTimeline = (scene: BannerSceneV1): boolean => {
   if (scene.timeline.length === 0) return true;
-  const track = scene.timeline[0];
+  const targets = scene.timeline.map((track) => track.targetLayerId);
   return (
-    scene.timeline.length === 1 &&
-    track !== undefined &&
-    isProviderFreeLayerIdV1(track.targetLayerId) &&
-    sameCanonicalValue(track, createGentleFloatTrackV1(track.targetLayerId))
+    new Set(targets).size === targets.length &&
+    targets.toSorted().every(
+      (target) =>
+        isProviderFreeLayerIdV1(target) &&
+        sameCanonicalValue(
+          scene.timeline.find((track) => track.targetLayerId === target),
+          createGentleFloatTrackV1(target as ProviderFreeLayerIdV1),
+        ),
+    )
   );
 };
 
@@ -247,16 +253,37 @@ export const ProviderFreeBannerProjectV1Schema =
           message: 'Immutable scene material drifted across revisions.',
         });
       }
+      if (
+        project.selectedPartId !== PROVIDER_FREE_BACKGROUND_PART_ID_V1 &&
+        !revision.scene.layers.some((layer) => layer.id === project.selectedPartId)
+      ) {
+        context.addIssue({
+          code: 'custom',
+          path: ['selectedPartId'],
+          message: 'Selected part is not a member of the immutable scene.',
+        });
+      }
     }
 
     if (
       firstScene === undefined ||
       !sameCanonicalValue(firstScene.canvas.background, PROVIDER_FREE_SOLID_BACKGROUND_V1) ||
       firstScene.timeline.length !== 0 ||
-      firstScene.layers.length !== PROVIDER_FREE_LAYER_IDS_V1.length ||
+      firstScene.layers.length < 1 ||
+      firstScene.layers.length > 8 ||
       firstScene.layers.some(
         (layer, index) =>
-          layer.id !== PROVIDER_FREE_LAYER_IDS_V1[index] || !layer.included || !layer.visible,
+          !isProviderFreeLayerIdV1(layer.id) ||
+          layer.order !== index ||
+          !layer.included ||
+          !layer.visible,
+      ) ||
+      !(
+        (firstScene.layers.length === PROVIDER_FREE_LAYER_IDS_V1.length &&
+          firstScene.layers.every(
+            (layer, index) => layer.id === PROVIDER_FREE_LAYER_IDS_V1[index],
+          )) ||
+        firstScene.layers.every((layer) => /^layer_uploaded_cutout_[0-9a-f]{24}$/u.test(layer.id))
       )
     ) {
       context.addIssue({

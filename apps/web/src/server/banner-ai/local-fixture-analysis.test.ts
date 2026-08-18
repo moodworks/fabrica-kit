@@ -29,6 +29,23 @@ describe('trusted local Banner AI fixture', () => {
       expect(result.source.normalizedByteSize).toBeGreaterThan(0);
       expect(result.source.sha256).toMatch(/^[0-9a-f]{64}$/);
       expect(result.proposal.parts).toHaveLength(4);
+      expect(result.extraction.previews).toHaveLength(3);
+      expect(result.extraction.previews.map((preview) => preview.partKey)).toEqual([
+        'angel.body',
+        'wing.left',
+        'wing.right',
+      ]);
+      for (const preview of result.extraction.previews) {
+        expect(preview.byteSize).toBeLessThanOrEqual(524_288);
+        expect(preview.pixelWidth).toBeLessThanOrEqual(160);
+        expect(preview.pixelHeight).toBeLessThanOrEqual(160);
+        expect(preview.dataUrl).toMatch(/^data:image\/png;base64,/);
+      }
+      expect(result.extraction).toMatchObject({
+        provenance: 'deterministic fake / NOT_SAM_OUTPUT',
+        outboundNetwork: false,
+        dispatches: 3,
+      });
       expect(result.proposal.parts.map((part) => [part.label, part.role])).toEqual([
         ['Background', 'background'],
         ['Angel body', 'subject'],
